@@ -393,8 +393,8 @@ def test_export_zip_contents_and_scopes(client):
     assert md.startswith("---\n") and 'name: "GPT-6.2"' in md and "sensitivity: public" in md and "[[GPT-6.1]]" in md and "SecretProj" not in md
     assert "https://" in md and "メモ: 要確認" in md and "確かさ 0.9" in md and "6.2 を公開" in md
     sel = client.post("/api/v1/kg/export", json={"ids": [nid], "min_articles": 0}, headers=H)
-    assert zipfile.ZipFile(io.BytesIO(sel.content)).namelist() == ["model/GPT-6.2.md"]
-    assert zipfile.ZipFile(io.BytesIO(client.post("/api/v1/kg/export", json={"types": ["org"], "min_articles": 0}, headers=H).content)).namelist() == []
+    assert [n for n in zipfile.ZipFile(io.BytesIO(sel.content)).namelist() if n != "README.md"] == ["model/GPT-6.2.md"]      # README.md は vault の使い方（常に入る）
+    assert zipfile.ZipFile(io.BytesIO(client.post("/api/v1/kg/export", json={"types": ["org"], "min_articles": 0}, headers=H).content)).namelist() == ["README.md"]
     full = zipfile.ZipFile(io.BytesIO(client.post("/api/v1/kg/export", json={"confidential": True, "min_articles": 0}, headers=H).content))
     assert "other/SecretProj.md" in full.namelist() and "[[SecretProj]]" in full.read("model/GPT-6.2.md").decode()
     assert "sensitivity: confidential" in full.read("other/SecretProj.md").decode()

@@ -223,5 +223,10 @@ def detail(db: Session, entity_id: int, *, limit: int = 100, scopes: list[str] |
 
 def summary(db: Session) -> dict:
     """診断用: 物・fact の数と、取り出し待ちの記事の数。"""
+    from qnapnewshub.db import Community, EntityCard, MentionCandidate
+
     return {"entities": int(db.scalar(select(func.count(Entity.id))) or 0), "claims": int(db.scalar(select(func.count(Claim.id))) or 0),
-            "extracted_articles": int(db.scalar(select(func.count(NewsItem.id)).where(NewsItem.extract_v > 0)) or 0)}
+            "extracted_articles": int(db.scalar(select(func.count(NewsItem.id)).where(NewsItem.extract_v > 0)) or 0),
+            # Things の脳（2026-11-25）: 定義を持つカード・主題のまとまり・つなぐ候補（夜の計算が動いているかを見る）
+            "cards": int(db.scalar(select(func.count(EntityCard.entity_id)).where(EntityCard.definition != "")) or 0), "communities": int(db.scalar(select(func.count(Community.id))) or 0),
+            "mention_candidates": int(db.scalar(select(func.count(MentionCandidate.id)).where(MentionCandidate.status == "candidate")) or 0)}

@@ -372,6 +372,45 @@ class EntityCard(Base):
     tried_sig: Mapped[str] = mapped_column(String(40), default="")
     tries: Mapped[int] = mapped_column(Integer, default=0)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Things の脳（2026-11-25）: 1 行の定義・今の状態（official・experimental・deprecated・unknown）・未解決の問い・反対の見方（JSON の文字列の配列）。材料に無い事実は検査で捨てる
+    definition: Mapped[str] = mapped_column(Text, default="", server_default="")
+    state: Mapped[str] = mapped_column(String(12), default="", server_default="")
+    questions: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    opposing: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+
+
+class Community(Base):
+    """主題のまとまり（夜に関係から計算。things_graph.communities）。public の物だけで計算する（機密の物は入れない）。top_ids は代表の物の id（JSON の配列・次数の多い順）。"""
+
+    __tablename__ = "communities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    rep_id: Mapped[int] = mapped_column(Integer, default=0)
+    top_ids: Mapped[str] = mapped_column(Text, default="[]")
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EntityCommunity(Base):
+    __tablename__ = "entity_communities"
+
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True)
+    community_id: Mapped[int] = mapped_column(Integer, index=True)
+
+
+class MentionCandidate(Base):
+    """リンクされていない言及: 物の名前・別名が記事の題・抜粋に出ているのに article_entities に無い記事（夜に計算）。status: candidate・confirmed（押して確定）・dismissed（違う）。"""
+
+    __tablename__ = "mention_candidates"
+    __table_args__ = (UniqueConstraint("entity_id", "article_id", name="uq_mention"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), index=True)
+    article_id: Mapped[int] = mapped_column(ForeignKey("news_items.id", ondelete="CASCADE"), index=True)
+    matched: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(10), default="candidate")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class NewsFetchLog(Base):
@@ -625,7 +664,9 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("documents", "tier", "INTEGER NOT NULL DEFAULT 1"), ("documents", "tier_reason", "VARCHAR(160) NOT NULL DEFAULT ''"),
                                         ("documents", "tier_at", "DATETIME"), ("documents", "abstract", "TEXT NOT NULL DEFAULT ''"),
                                         ("documents", "meta", "TEXT NOT NULL DEFAULT ''"), ("documents", "connector", "VARCHAR(40) NOT NULL DEFAULT ''"),
-                                        ("research_records", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'")]
+                                        ("research_records", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"),
+                                        ("entity_cards", "definition", "TEXT NOT NULL DEFAULT ''"), ("entity_cards", "state", "VARCHAR(12) NOT NULL DEFAULT ''"),
+                                        ("entity_cards", "questions", "TEXT NOT NULL DEFAULT '[]'"), ("entity_cards", "opposing", "TEXT NOT NULL DEFAULT '[]'")]
 # 後から足した索引（既にあるファイルにも足す）
 _LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id"), ("documents", "tier"), ("research_records", "theme")]
 # 複数の列の索引で、あとから足したもの（既にあるファイルにも足す）
