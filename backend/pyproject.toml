@@ -46,3 +46,5 @@ qnapnewshub = ["catalog.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Python 3.12 の sqlite3 の「datetime の既定の変換」は非推奨。datetime を束縛に直接渡す書き方が混ざったら試験が落ちる（v0.6 で 111 件を 0 にした）
+filterwarnings = ["error:The default datetime adapter:DeprecationWarning"]

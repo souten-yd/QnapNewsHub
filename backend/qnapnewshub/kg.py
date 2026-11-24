@@ -59,6 +59,11 @@ def _now() -> datetime:
     return datetime.now(_UTC).replace(tzinfo=None)
 
 
+def _sql_dt(value: datetime) -> str:
+    """text() の束縛に datetime をそのまま渡さない（Python 3.12 の sqlite3 の既定の変換は非推奨）。SQLAlchemy の DateTime 列と同じ書式の文字列で渡す（動作は同じ）。"""
+    return _naive(value).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
 # ---- 機密の区分 ----
 
 def inherit(pairs) -> tuple[str, str]:
@@ -149,7 +154,7 @@ def sync_documents(db: Session, ids: list[int] | None = None, *, full: bool = Fa
         for i in range(0, len(ids), 400):
             part = [int(x) for x in ids[i:i + 400]]
             cond = f"n.id IN ({','.join(str(x) for x in part)})"
-            db.execute(text(ins_doc.format(cond=cond)), {"now": now})
+            db.execute(text(ins_doc.format(cond=cond)), {"now": _sql_dt(now)})
             done += db.execute(text(ins_map.format(cond=cond))).rowcount or 0
         if done:      # 新しく対応づけた記事の文書を、いまの状態の段（L1〜L3）へ
             from qnapnewshub import docstore
@@ -162,7 +167,7 @@ def sync_documents(db: Session, ids: list[int] | None = None, *, full: bool = Fa
     if top <= hi and not full:
         return 0
     cond = f"n.id > {hi}"
-    db.execute(text(ins_doc.format(cond=cond)), {"now": now})
+    db.execute(text(ins_doc.format(cond=cond)), {"now": _sql_dt(now)})
     done = db.execute(text(ins_map.format(cond=cond))).rowcount or 0
     if hi_row is None:
         db.add(NewsMeta(key=_DOC_HI, value=str(top)))
@@ -352,7 +357,7 @@ def rebuild_cooccur(db: Session, now: datetime | None = None, *, days: int = COO
     since = (now or _now()) - timedelta(days=days)
     units: dict[tuple, list] = {}      # 単位 -> [物の集合, 最初の日時, 最後の日時]
     rows = db.execute(text("SELECT ae.article_id, ae.entity_id, n.published_at, ea.event_id FROM article_entities ae JOIN news_items n ON n.id = ae.article_id "
-                           "LEFT JOIN event_articles ea ON ea.article_id = ae.article_id WHERE n.published_at >= :since AND n.dup_of IS NULL AND n.kind <> 'event'"), {"since": since})
+                           "LEFT JOIN event_articles ea ON ea.article_id = ae.article_id WHERE n.published_at >= :since AND n.dup_of IS NULL AND n.kind <> 'event'"), {"since": _sql_dt(since)})
     for aid, eid, published, event_id in rows:
         key = ("e", event_id) if event_id else ("a", aid)
         when = published if isinstance(published, datetime) else datetime.fromisoformat(str(published))

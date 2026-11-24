@@ -166,11 +166,11 @@ def _like(text: str) -> str:
     return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
-def list_entities(db: Session, *, q: str = "", kind: str = "", days: int = 0, sort: str = "count", limit: int = 50, offset: int = 0) -> dict:
+def list_entities(db: Session, *, q: str = "", kind: str = "", days: int = 0, sort: str = "count", limit: int = 50, offset: int = 0, scopes: list[str] | None = None) -> dict:
     """物の一覧。q は名前・別名・正規化のキーの部分一致。days は「その日数のうちに記事が出た物」だけにして、その期間の記事の数（period_count）で並べる。"""
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
-    conds = []
+    conds = [Entity.sensitivity.in_(scopes or ["public"])]      # 機密の区分の物は、区分の範囲に入れたときだけ（既定は public だけ。v0.6）
     if kind in ENTITY_TYPES:
         conds.append(Entity.type == kind)
     needle = q.strip()
@@ -196,10 +196,10 @@ def list_entities(db: Session, *, q: str = "", kind: str = "", days: int = 0, so
     return {"items": items, "total": int(total), "types": list(ENTITY_TYPES)}
 
 
-def detail(db: Session, entity_id: int, *, limit: int = 100) -> dict | None:
+def detail(db: Session, entity_id: int, *, limit: int = 100, scopes: list[str] | None = None) -> dict | None:
     """物のページ: 記事の年表（新しい順）・facts（AI の取り出しの印つき）・一緒に出る物の上位。"""
     ent = db.get(Entity, entity_id)
-    if ent is None:
+    if ent is None or ent.sensitivity not in (scopes or ["public"]):
         return None
     aliases = list(db.scalars(select(EntityAlias.alias).where(EntityAlias.entity_id == ent.id).order_by(EntityAlias.id)))
     arts = db.execute(select(NewsItem).join(ArticleEntity, ArticleEntity.article_id == NewsItem.id).where(ArticleEntity.entity_id == ent.id)

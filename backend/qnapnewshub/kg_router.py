@@ -15,21 +15,30 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from qnapnewshub import auth as auth_mod
+from qnapnewshub import rcache
 from qnapnewshub import kg, kg_job, kg_view, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.auth import AuthUser as User
 from qnapnewshub.auth import current_user as get_current_user
-from qnapnewshub.auth import require_admin
+from qnapnewshub.auth import read_user, require_admin
 from qnapnewshub.db import Claim, Document, Entity, Relationship, get_news_db
 
 router = APIRouter(prefix="/kg", tags=["kg"])
 graph = APIRouter(prefix="/graph", tags=["graph"])
 
 
-def scopes_for(user: User, confidential: bool) -> list[str]:
-    if confidential and user.via != "session":
-        raise HTTPException(status_code=403, detail="機密の区分を読めるのはログインした管理者だけです")
-    return kg.scope_list(confidential)
+def scopes_for(user: User, confidential: bool, sensitivity: list[str] | None = None) -> list[str]:
+    """読んでよい機密の区分の一覧（読む API はみな、ここを通す）。既定は public だけ。
+    - confidential=true は public ＋ confidential。sensitivity=[...] を渡せば、その区分だけ（例 ["confidential"] は機密だけ）。
+    - 許される範囲: ログインした管理者（session）は全部。トークンは、つないだときに許された区分だけ（auth.allowed_sensitivities。既定 public）。範囲の外は 403（黙って落とさない）。
+    - 区分の名前が正しくなければ 422。"""
+    want = set(sensitivity) if sensitivity else ({"public", "confidential"} if confidential else {"public"})
+    if want - set(kg.SENSITIVITY):
+        raise HTTPException(status_code=422, detail="区分は public・confidential のどちらかです")
+    if want - auth_mod.allowed_sensitivities(user):
+        raise HTTPException(status_code=403, detail="機密の区分を読めるのはログインした管理者か、機密を許してつないだ相手だけです")
+    return [s for s in kg.SENSITIVITY if s in want]
 
 
 class DocIn(BaseModel):
@@ -76,6 +85,13 @@ class NoteIn(BaseModel):
 class NeighborsIn(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=kg_view.NEIGHBOR_IDS_MAX)
     types: list[str] = Field(default_factory=list, max_length=12)
+    direction: str = Field("both", pattern="^(both|out|in)$")      # 入り口の物から見た向き（out＝出る・in＝入る＝逆向きにたどる）
+    type_directions: dict[str, str] = Field(default_factory=dict, max_length=12)      # 型ごとの向き（例 {"uses": "out", "part_of": "in"}）
+    order: str = Field("weight", pattern="^(weight|recent|evidence)$")      # weight＝確かさの順・recent＝最後の日時が新しい順（時系列）・evidence＝根拠の数の順
+    only_contradicts: bool = False      # 矛盾（contradicts）の辺だけ
+    hub_k: int | None = Field(None, ge=1, le=kg_view.HUB_K_MAX)      # ハブの抑制: 物 1 つにつき重みの高い順に k 本まで
+    budget_ms: int = Field(rcache.BUDGET_DEFAULT_MS, ge=10, le=rcache.BUDGET_MAX_MS)
+    sensitivity: list[str] | None = Field(None, max_length=2)
     depth: int = Field(1, ge=1, le=kg_view.NEIGHBOR_DEPTH_MAX)
     limit: int = Field(kg_view.NEIGHBOR_LIMIT_DEFAULT, ge=1, le=kg_view.NEIGHBOR_LIMIT_MAX)
     min_confidence: float = Field(0.0, ge=0, le=1)
@@ -222,10 +238,22 @@ async def export(body: ExportIn, user: User = Depends(get_current_user)):
 
 
 @graph.post("/neighbors")
-def neighbors(body: NeighborsIn, user: User = Depends(get_current_user), db: Session = Depends(get_news_db)):
-    """物の id の一覧から、辺の型・確かさ・期間・種類で絞った周りを段ごとにまとめて返す（読むだけ）。"""
-    return kg_view.neighbors(db, body.ids, types=body.types, depth=body.depth, limit=body.limit, scopes=scopes_for(user, body.confidential), min_confidence=body.min_confidence,
-                             kinds=body.kinds, since=body.since, until=body.until)
+def neighbors(body: NeighborsIn, user: User = Depends(read_user), db: Session = Depends(get_news_db)):
+    """物の id の一覧から、辺の型（と向き）・確かさ・期間・種類で絞った周りを段ごとにまとめて返す（読むだけ。トークンも POST できる）。
+    辺の向き（逆向きも）・時系列（order=recent）・矛盾だけ・ハブの抑制（hub_k）・点の次数と最後の辺の日時つき。応答はキャッシュされる（DB の版つき）。"""
+    scopes = scopes_for(user, body.confidential, body.sensitivity)
+    td = {k: v for k, v in body.type_directions.items() if k in kg.REL_TYPES and v in kg_view.DIRECTIONS}
+
+    def compute() -> dict:
+        budget = rcache.Budget(body.budget_ms)
+        with rcache.hard_limit(db, budget):
+            out = kg_view.neighbors(db, body.ids, types=body.types, depth=body.depth, limit=body.limit, scopes=scopes, min_confidence=body.min_confidence, kinds=body.kinds,
+                                    since=body.since, until=body.until, direction=body.direction, type_directions=td, order=body.order, only_contradicts=body.only_contradicts,
+                                    hub_k=body.hub_k, deadline=budget.deadline)
+        out["meta"] = {"elapsed_ms": budget.elapsed_ms(), "budget_ms": budget.ms}
+        return rcache.fit(out, [(lv, "edges") for lv in out["levels"]])
+
+    return rcache.cached("neighbors", scopes, body.model_dump(mode="json", exclude={"budget_ms"}), compute)
 
 
 @graph.get("/seeds")
