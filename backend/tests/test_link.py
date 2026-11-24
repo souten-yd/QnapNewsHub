@@ -418,6 +418,23 @@ def test_finished_jobs_are_trimmed_after_30_days(client, fast):
         assert db.get(Job, a) is None and db.get(Job, b) is not None
 
 
+def test_cold_compression_does_not_show_up_as_a_change(client, cd, fast):
+    """目的: 保存の圧縮（cold=1・抜粋が空になる）は /changes に更新として出ない。ほかの列の変更は従来どおり出る。
+    根拠: 抜粋が空の「更新」を ControlDeck が受け取ると、1 年より古い記事の内容が消えたように見える（#17 との統合で見つけた）。"""
+    ids = save_items(2)
+    cursor = cd.get("/changes").json()["cursor"]
+    with news_db.session() as db:
+        row = db.get(NewsItem, ids[0])
+        row.summary, row.cold = "", 1      # 圧縮して news_cold へ移した状態
+        db.commit()
+    assert cd.get(f"/changes?cursor={cursor}").json()["changes"] == []
+    with news_db.session() as db:
+        db.get(NewsItem, ids[1]).title = "題が変わった"
+        db.commit()
+    got = cd.get(f"/changes?cursor={cursor}").json()["changes"]
+    assert [c["id"] for c in got] == [ids[1]] and got[0]["data"]["title"] == "題が変わった"
+
+
 def test_existing_database_is_backfilled_into_the_change_log(client, fast):
     """目的: 前の版（change_log が無い）の DB を開いても、いまある記事が最初の同期で全部取れる。根拠: 更新で入れ替えた直後の ControlDeck の最初の同期。"""
     save_items(3)
