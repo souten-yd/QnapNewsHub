@@ -101,6 +101,9 @@
 .card-media { position: relative; aspect-ratio: 16 / 9; background: #000; flex: 0 0 auto; }
 .card-media img, .card-media .nw-fallback { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .card-media .nw-badge { position: absolute; left: 8px; top: 8px; z-index: 1; }
+/* ControlDeck が生成した画像の印（AI 生成のイメージ）。小さな画像でははみ出さない */
+.nw-ai { position: absolute; right: 6px; bottom: 6px; z-index: 1; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border-radius: 4px; background: rgba(0, 0, 0, .66); color: #fff; font-size: .62rem; font-weight: 600; }
+.nwd-thumb .nw-ai, .nw-screen-inner .nw-ai { font-size: .5rem; padding: 0 3px; right: 3px; bottom: 3px; }
 .card-body { display: flex; flex-direction: column; gap: 8px; padding: 12px; min-width: 0; flex: 1 1 auto; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: .72rem; color: var(--nw-muted); align-items: center; min-width: 0; }
 .card-meta .src { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }

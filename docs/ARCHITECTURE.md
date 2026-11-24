@@ -122,6 +122,15 @@
 - **保存**: `entities`（key は NFKC・小文字・文字と数字だけ。1 つの key は 1 行。種類は最初のもの、`other` だけ後で具体的な種類へ）・`entity_aliases`・`article_entities`・`claims`（`ai_extracted`・モデル名・`prompt_version`）。`news_items.extract_v` を追加。**設計と違う点**: 種類が違っても key が同じなら同じ物（LLM が Qwen を model と org で揺らしても割れない代わりに、同名の別物は 1 つになる）。`source_article_id` はいまは取り出した記事と同じ（重複の代表へ寄せるのは後の段）。`article_count` は取り出しのたびに数え直すが、古い記事の削除（prune）では数え直さない（次にその物が出たとき直る）。まとめ書きに乗せた（`writer.stage_extraction`。同じ 1 トランザクション）。未保存の取り出しは API に出ない（保存のあとに出る）。
 - **API**: `GET /entities`（q・type・days・sort・limit・offset）・`GET /entities/{id}`（年表 100 件・facts 200 件・一緒に出る物の上位 10）。ニュースの一覧の各記事に `entities`（最大 4 の札）。
 
+### 5 の実装と、設計と違った点（v0.3 のニュースハブ側・2026-11-24）
+`jobs.py`・`changes.py`・`artifacts.py`・`link.py`・`link_router.py`。ControlDeck 側（係）は別の PR。
+- **表 jobs**: 種類 `embed`・`event_merge`・`summarize_hq`・`extract_retry`・`image`（設計の「本文・まとめ・詳細・統合」は、作り手のある 3 つ＋取り込み口だけの 2 つにした）・入力の版（`input_v`）・重複を防ぐ ID（`dedup_key = 種類:対象:入力の版`・UNIQUE）・lease_until・試行（借りるたび +1。上限 3 で dead）・状態（queued・leased・done・dead）・使ったモデル。
+- **API**: `POST /jobs/claim`（種類・件数〔最大 50〕・lease 秒〔30〜3600、既定 300〕）・`POST /jobs/complete`（`results` の配列。1 回 50 件まで。各件 done／failed）。complete の状態は done・duplicate（2 回目。何も変えない）・rejected（検査に落ちた。列に戻る）・failed・dead・unknown・lease_conflict（別の係の生きた借り）。**期限切れは claim のとき（と診断の読みで「期限切れ」として数える）列に戻る**＝ControlDeck が来ない間は何も書かない。期限が切れた後の遅れた結果も、誰も終えていなければ受け取る。
+- **仕事の作り手は claim のときに作る**（設計の「作り手」を常駐の処理にしなかった。書き込みを増やさず、ControlDeck が要る種類だけ）: `extract_retry` = 下ごしらえが済んだ（または 3 回で諦めた）のに取り出しが空の記事（14 日以内）・`summarize_hq` = 出どころ 3 以上のイベント・`image` = 出どころ 3 以上のイベントの代表の記事で画像が無いもの。1 回の claim で種類ごとに最大 100 件を作る。`embed`・`event_merge` の作り手は v0.6 以降（取り込み口だけ）。
+- **結果の取り込み（検査してから）**: `extract_retry` は `extract.clean`（JSON Schema の部分集合＋数字が原文にあること）→ `stage_extraction`（まとめ書き）→ 保存してから done。`summarize_hq` は 20〜1500 文字・`stage_event_summary`。`embed` は model・dim（8〜8192）・scale・dim バイトの INT8（表 `embeddings`。本体は jobs.result に残さない。使う検索は v0.6）。`image` は `PUT /artifacts` で送った画像が記事に付いていること（sha256 の一致）を確かめるだけ。`event_merge` は groups の形だけ検査して残す（イベントのまとめ直しへの取り込みは v0.5 以降）。結果の大きさは 200,000 文字まで。
+- **生成物**: `PUT /artifacts/items/{id}/image`（本文は画像。webp・png・jpeg・512KB まで・申告より多く送られても上限で止める）。構造を最後まで見る（PNG は chunk の長さ・CRC・IDAT・IEND、JPEG は SOI/EOI と SOF の寸法、WebP は RIFF の長さと寸法）・幅と高さ 64〜4096。デコードはしない（依存を増やさない）。sha256 が名前（`data_dir/artifacts/images/<sha256>.<ext>`・表 `artifacts`）で、同じ中身は 1 つ。記事の `image_url` を内部の道（`/api/v1/artifacts/images/…`・認証つき）に、`news_items.image_ai=1`（画面に「AI 生成のイメージ」）。元の画像（AI 生成でない）があれば 409（`replace=true` で上書き）。**差し替えは保存（flush）してから返す**。`POST /research`（テーマ・出典〔http(s)〕・確かめた事実・結論。大きさを制限・内容の sha256 で二重に入れない。保存だけ）。
+- **設計との違い**: `/knowledge/batch`・`POST /artifacts`（報告の保管）・`GET /storage/status` は未実装（v0.5・v0.8）。ControlDeck の中の係（本文・要約・取り出し・イベントの実行）は ControlDeck の PR。画像の「重要」の基準は出どころ 3 以上のイベントの代表だけ（利用者の好み・ホットトピックとの組み合わせは後で）。
+
 ## 6. 知識（Obsidian を発展させたもの）
 - **知識カード**: 概要・技術の要素・用途・制約・関連の実装・条件別のベンチマーク・変化の履歴・根拠の論文と記事・**自分のメモ**（AI の部分と分けて、再分析で上書きしない）。
 - **地図**: 点を押すと、関係する記事・性能の測定・関連の技術・過去の変化・公式の情報・未解決の問題・利用者のメモ。バックリンク。自動の関係は確かさと根拠つき（根拠の無い関係は確定として入れない）。

@@ -70,12 +70,13 @@ def test_image_gained_later_is_counted(client):
 
 
 def test_near_duplicates_are_not_independent(client):
-    first = mk(1, src="a", title="Same story about a new GPU driver release today")
+    # 記事は「今」公開にする（既定の 1 時間前だと、0 時〜1 時に流すと「昨日」に数えられて落ちた。2026-11-25 0:03）
+    first = mk(1, hours=0, src="a", title="Same story about a new GPU driver release today")
     store.stage_items([first])
     writer.flush("t")
     with news_db.session() as db:
         rep = db.scalar(select(NewsItem.id))
-    dup = mk(2, src="b", title="Same story about a new GPU driver release today")
+    dup = mk(2, hours=0, src="b", title="Same story about a new GPU driver release today")
     dup["dup_of"] = rep
     store.stage_items([dup])
     writer.flush("t")

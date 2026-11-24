@@ -171,6 +171,20 @@ export default function DiagnosticsPage() {
         </dl>
       </Card>
 
+      {d.link && (
+        <Card id="diag-link" title="つないだ ControlDeck" hint="つないだ相手が最後に来た時刻と、仕事の列の状態です。期限切れの仕事は、次に借りるときに列へ戻ります。">
+          <dl data-testid="diag-link">
+            <Row k="つないでいる相手" v={d.link.peers.length ? d.link.peers.map((p) => p.name).join("・") : "なし"} />
+            <Row k="最後に来た時刻" v={clock(d.link.last_seen_at)} id="link-last-seen" />
+            <Row k="借りている仕事" v={`${d.link.jobs.leased} 件`} id="link-leased" />
+            <Row k="期限切れの仕事" v={`${d.link.jobs.expired} 件`} id="link-expired" />
+            <Row k="待ち・終わらなかった・24 時間の完了" v={`${d.link.jobs.queued} · ${d.link.jobs.dead} · ${d.link.jobs.done_24h}`} />
+            <Row k="受け取った鍵" v={d.link.secrets.length ? d.link.secrets.map((k) => `${k.name}（${clock(k.received_at)}）`).join("・") : "なし"} />
+            <Row k="受け取った画像・調査の記録" v={`${d.link.artifacts} 枚 · ${d.link.research} 件`} />
+          </dl>
+        </Card>
+      )}
+
       <SelfCheckCard />
     </div>
   );

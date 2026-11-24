@@ -194,6 +194,18 @@ def search_section(db) -> dict:
             "body": info, "compress_years": settings.load()["storage"]["compress_years"]}
 
 
+def link_section(db) -> dict:
+    """つないだ ControlDeck（DESIGN 3 章）: 相手・最後に来た時刻・借りている仕事・期限切れ・受け取った鍵の名前（値は出さない）。読むだけ。"""
+    from qnapnewshub import changes, jobs, link
+    from qnapnewshub.db import Artifact, ResearchRecord
+
+    peers = [p for p in link.list_peers() if not p["revoked"]]
+    seen = max((p["last_seen_at"] for p in peers), default="")
+    return {"peers": [{"id": p["id"], "name": p["name"], "last_seen_at": p["last_seen_at"]} for p in peers], "last_seen_at": seen, "jobs": jobs.summary(db),
+            "secrets": [{"name": x["name"], "received_at": x["received_at"]} for x in link.list_secrets()], "change_seq": changes.latest_seq(db),
+            "artifacts": int(db.scalar(select(func.count()).select_from(Artifact)) or 0), "research": int(db.scalar(select(func.count()).select_from(ResearchRecord)) or 0)}
+
+
 def problems(section: dict) -> list[dict]:
     """自動の判定（level: error / warn）。ホームの一行の知らせもここから。"""
     out: list[dict] = []
@@ -215,6 +227,11 @@ def problems(section: dict) -> list[dict]:
         out.append({"area": "storage", "level": "error", "text": f"お休み中にアプリが原因の書き込みがありました（{s['rest_app_writes']} 回）"})
     if s["disk"]["free"] < MIN_FREE_BYTES:
         out.append({"area": "storage", "level": "error", "text": "ディスクの空きが 1GB を切りました"})
+    lk = section.get("link") or {}
+    if lk.get("jobs", {}).get("expired"):
+        out.append({"area": "link", "level": "warn", "text": f"ControlDeck が借りた仕事の期限が切れています（{lk['jobs']['expired']} 件。次に借りるとき列に戻ります）"})
+    if lk.get("jobs", {}).get("dead"):
+        out.append({"area": "link", "level": "warn", "text": f"終わらなかった仕事が {lk['jobs']['dead']} 件あります（試行の上限）"})
     if s["flush_failures"]:
         out.append({"area": "storage", "level": "error", "text": "まとめ書きに失敗しています（メモリに残しています）"})
     se = section.get("search") or {}
@@ -232,7 +249,7 @@ def problems(section: dict) -> list[dict]:
 
 
 def build(db) -> dict:
-    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary(), "search": search_section(db)}
+    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary(), "search": search_section(db), "link": link_section(db)}
     section["problems"] = problems(section)
     return section
 

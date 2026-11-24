@@ -2,6 +2,7 @@
  *  模擬に無い API が呼ばれたら 404 を返して unhandled に記録する（試験の終わりに空であることを確かめる）。 */
 import type { Page, Route } from "@playwright/test";
 import type { UpdateStatus, UpdateRelease } from "../src/api/update";
+import type { LinkStatus } from "../src/api/link";
 import type { AnalyticsFilters, Compare, HotTopics, Overview, Series, SourcesAnalysis, TrendStats } from "../src/api/analytics";
 import type { EventDetail, EventRow } from "../src/api/events";
 import type { Digest, EntityDetail, EntityRow, NewsHome, NewsItem, NewsPrefs, NewsRuntimeSettings } from "../src/api/news";
@@ -188,17 +189,28 @@ const EVENT_DETAIL: EventDetail = { ...EVENTS[0], hours_since_first: 4, origins:
     { id: 14, title: "Qwen 3.5 の量子化を試した", url: null, source: "見本のフォーラム", source_key: "f1", kind: "forum", origin: "community", origin_label: "コミュニティ", published_at: ago(1), summary: "", is_rep: false, is_dup: false },
   ] };
 
+export const LINK_BASE: LinkStatus = {
+  fingerprint: "1a2b-3c4d-5e6f-7a8b-9c0d", peers: [], secrets: [], pairing: null, allowed_secrets: ["openrouter"],
+  jobs: { queued: 0, leased: 0, expired: 0, dead: 0, done_24h: 0, queued_by_kind: {} },
+};
+export const LINK_PEERS: LinkStatus["peers"] = [
+  { id: 2, name: "見本の ControlDeck（書斎の PC。とても長い名前でも折り返して 320px に収まること）", fingerprint: "aaaa-bbbb-cccc-dddd-eeee", created_at: ago(30), last_seen_at: ago(0.1), revoked: false },
+  { id: 1, name: "古い ControlDeck", fingerprint: "1111-2222-3333-4444-5555", created_at: ago(900), last_seen_at: "", revoked: false },
+];
+
 export interface MockState {
   authenticated: boolean; setupNeeded: boolean; setupTokenRequired?: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
   hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
   /** 画像の無い記事だけの一覧にしたいとき等、一覧を差し替える */
   items: NewsItem[];
   restActive: boolean; diagProblems: boolean; update: UpdateStatus; analyticsEmpty?: boolean; gatewayKeySet: boolean; gatewayDown: boolean;
+  /** ControlDeck との連携（つなぐ画面） */
+  link: LinkStatus;
 }
 
 export function newState(over: Partial<MockState> = {}): MockState {
   return { authenticated: true, setupNeeded: false, username: "admin", keySet: false, prefs: structuredClone(PREFS), settings: structuredClone(SETTINGS),
-    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, update: structuredClone(UPDATE_BASE), gatewayKeySet: false, gatewayDown: false, ...over };
+    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, update: structuredClone(UPDATE_BASE), gatewayKeySet: false, gatewayDown: false, link: structuredClone(LINK_BASE), ...over };
 }
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -235,6 +247,8 @@ const diagnostics = (state: MockState) => ({
     body: { enabled: true, per_day: 200, per_minute: 6, today: 38, ok: 120, failed: 31, reasons: { robots: 12, paywall: 8, short: 7, blocked: 4 },
       reason_labels: { robots: "robots.txt が許していません", paywall: "有料の記事です", short: "本文を取り出せませんでした（短い・空）", blocked: "アクセスが制限されています（ログイン・有料・拒否）" },
       raw_bytes: 1_800_000, packed_bytes: 520_000, cold: { items: 900, raw_bytes: 400_000, packed_bytes: 230_000 } }, compress_years: 1 },
+  link: { peers: state.link.peers.filter((p) => !p.revoked).map((p) => ({ id: p.id, name: p.name, last_seen_at: p.last_seen_at })), last_seen_at: state.link.peers[0]?.last_seen_at ?? "", jobs: state.link.jobs,
+    secrets: state.link.secrets.map((k) => ({ name: k.name, received_at: k.received_at })), change_seq: 120, artifacts: 3, research: 1 },
   problems: state.diagProblems ? [{ area: "fetch", level: "warn", text: "取得が止まった可能性のある取得先が 1 件あります" }] : [],
 });
 
@@ -357,6 +371,14 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
       state.update.job = { phase: "downloading", kind, target: (body as { version: string }).version, message: "取得しています", percent: 40, started_at: new Date().toISOString() };
       return json(route, state.update);
     }
+    if (is("GET", "/link")) return json(route, state.link);
+    if (is("POST", "/link/pairing")) {
+      const expires_at = new Date(Date.now() + 600_000).toISOString();
+      state.link.pairing = { expires_at, wrong: 0 };
+      return json(route, { code: "482913", expires_at, expires_in: 600, fingerprint: state.link.fingerprint, public_key: "AAAA" });
+    }
+    if (is("DELETE", "/link/pairing")) { state.link.pairing = null; return json(route, { ok: true }); }
+    if (is("DELETE", /^\/link\/peers\/\d+$/)) { const id = Number(path.split("/").pop()); state.link.peers = state.link.peers.map((p) => (p.id === id ? { ...p, revoked: true } : p)); return json(route, { ok: true }); }
     if (is("GET", "/diagnostics")) return json(route, diagnostics(state));
     if (is("GET", "/diagnostics/notice")) return json(route, state.diagProblems ? { message: "取得が止まった可能性のある取得先が 1 件あります", level: "warn", count: 1 } : { message: null, level: null, count: 0 });
     if (is("POST", "/diagnostics/selfcheck")) return json(route, { at: ago(0), ok: false, checks: [

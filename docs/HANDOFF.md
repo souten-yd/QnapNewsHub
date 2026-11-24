@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-24（#9 の後）
+最終更新: 2026-11-24（v0.3 のニュースハブ側〔feat/link-controldeck〕の後）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -31,13 +31,14 @@
 | v0.1.1 | **Release 済み**（GitHub の Release、署名つき） |
 | v0.2 前半（feat/llm-worker） | 無料の外部 LLM の係（予算 1 日 800 回・1 分 15 回・用途ごとの割り当て・夜の後回し・モデルの順番と切り替え）・**ControlDeck のゲートウェイ**（OpenAI 互換。先に使い、つながらなければ OpenRouter へ）・概要と要素の取り出しを 1 回の呼び出しで・物（entities）と fact（claims）の保存・`/api/v1/entities`・画面「物」・カードの札・`./hub.sh llm-try`。ARCHITECTURE 5.1 の「実装と違った点」・DESIGN 10 章 |
 | v0.2 後半の一部（feat/events-trends） | イベントへの粗いまとめ（`events.py`・表 events／event_articles・まとめ書きで増分）・イベントの画面・ニュースの「ほか N 件」・イベントの要約（用途 event・既定 100）・新着の傾向（分析の節）と「今日の傾向」の解説（用途 trend）・物のホットトピック。ARCHITECTURE 4・7.5 の「実装と違った点」・DESIGN 11 章 |
+| v0.3 ニュースハブ側（feat/link-controldeck） | **ControlDeck とつなぐ**: ペアリング（6 桁・10 分・総当たり制限・`link.py`）・scope=link のトークン（管理 API 不可。試験が全ルートを調べる）・封じた鍵の受け取り（ECIES・許可は openrouter だけ）・`GET /changes`（trigger の `change_log`・`changes.py`）・仕事の列（`jobs.py`。lease・冪等・期限切れは claim で列へ。作り手は claim のとき）・画像の受け取り（`artifacts.py`。形の検査・hash の重複・AI 生成の印）・調査の記録・つなぐ画面（`LinkCard.tsx`）・診断の「つないだ ControlDeck」。ControlDeck 側は別の PR。DESIGN 3 章・ARCHITECTURE 5 章の「実装と違った点」 |
 | v0.2 後半（feat/search-storage） | **日本語の全文検索**（trigram＋英語 porter の 2 つの索引・BM25・短い語は LIKE・古い DB はバッチで作り直し）・**本文の取り出し**（Trafilatura・robots・Zstandard の BLOB・1 日 200 件・1 分 6 件・取れない記事は二度と試さない・下ごしらえは本文の頭 1,500 文字）・**保存の圧縮**（1 年より古い記事の抜粋を圧縮・索引から外す）・性能の実測（`backend/tools/bench_search.py`）・画面（「本文あり」の印・設定・診断）。ARCHITECTURE 8・9 章の「実装と違った点」・DESIGN 12 章 |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
 - 試験: backend 245 件・E2E 135 件（分析の第 1 版の時点）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
 - 実測（開発の PC）: 待機中の書き込み 0 バイト／10 分、お休み中も 0、常駐 114〜190MB、待機 CPU 0.1〜0.4%。
 - **作業中**: なし（#9 の時点）。
-- まだ無いもの: QNAP 実機での確認・長時間の連続運転・QNAP 実機・**本物の LLM での取り出しの質の評価**・本物の LLM でのイベントの要約・解説の質・イベントのしきい値の実データでの調整・一緒に出る分析・ControlDeck との連携（ペアリング・仕事の列・同期）・知識グラフ（分析の画面の「知識の地図」「物のノート」は空き枠だけ）。
+- まだ無いもの: **本物の ControlDeck とのつなぎ（ControlDeck 側の PR のあと）**・QNAP 実機での確認・長時間の連続運転・QNAP 実機・**本物の LLM での取り出しの質の評価**・本物の LLM でのイベントの要約・解説の質・イベントのしきい値の実データでの調整・一緒に出る分析・知識グラフ（分析の画面の「知識の地図」「物のノート」は空き枠だけ）。
 - 既知の小さなずれ: 古い設定ファイルに保存済みの 1 日 300 回は、そのまま残る（既定の 800 回は新しい設定だけ）。まとめ・一言要約はモデルの順番に乗っていない（固定のモデル）。試験で StarletteDeprecationWarning が 1 件出る（動作に影響なし）。
 
 ## 4. 次にやること（順番）
@@ -48,7 +49,8 @@
 3. （済）分析の第 1 版（集計の表・API・画面）。続き: 実データを 1 週間ためてホットトピックの上位が一般語にならないか見る（ストップワードの調整）・集計の表の作り直しが長い（100 万件で約 34 秒）ので、必要なら分割する。
 4. v0.2 の後半: （前半の無料 LLM の係・要素の取り出し・物の画面は済。**検索（trigram＋英語）・本文の取り出し（Trafilatura）・zstd・保存の圧縮・性能の実測は済〔10 万件・100 万件の温まった P95 は 1 秒以内。DESIGN 12〕**〔feat/search-storage〕）残り: **本物のゲートウェイ・OpenRouter での取り出しの評価**（`./hub.sh llm-try`。20 件のままでよいか・名寄せの精度）・粗いイベント・新着の傾向（7.5）。
 5. （済）v0.1.1 は Release 済み。残り: 実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
-6. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
+6. v0.3 の続き: **ControlDeck 側**（ControlDeck のリポジトリ・その決まりの関門と PR）。つなぐ画面・`/changes` の取り込み・仕事を借りる係（埋め込み・要約・取り出し・画像）・鍵を封じて渡す（`link.seal()` が見本）・画像を PUT する。つないだら本物同士で「止めていた間の記事が後でまとめて分析される」を確かめる。
+7. v0.4 以降は PLAN.md の順。
 
 
 ## 5. 開発の仕方
@@ -88,6 +90,14 @@
   - 取り出しは必ず `writer.get().stage_extraction`（まとめ書きに乗る）。DB へ直接 Entity を入れない。
   - ゲートウェイの URL は設定の値だけ。LAN の私的な IP を許すので、**記事の中の URL・取得先の URL から決して呼ばない**。診断の束には URL を出さない。
   - 古い DB の列・表は `db._LATE_COLUMNS`・`create_all` で足す（`news_items.extract_v`・entities 系の 4 表）。
+
+- **ControlDeck との連携（v0.3 のニュースハブ側）**:
+  - トークンの権限は `api_tokens.scope`（read／link）。書き込める link の API は `auth.link_user` を付けたものだけ。**新しい API を足すとき**: 管理は `require_admin`、ControlDeck が書くものは `link_user`、読むだけは `current_user`。`test_link_token_cannot_call_any_management_api` が全ルートを調べるので、許可の一覧（試験の `allowed_writes`）も直す。FastAPI は include したルーターを `_IncludedRouter` に包むので、試験は `effective_route_contexts()` で開く。
+  - 差分の番号は **trigger**（`changes.install`・`_WATCH`）。記事・物・イベントの列を足して同期に出したい変化があれば `_WATCH` の列に足す（足さないと変化が差分に出ない）。列を DROP する移行の試験は先に trigger を落とす（SQLite は trigger が参照する列を落とせない）。`image_ai` のように記事の列を足したら `db._LATE_COLUMNS` にも。
+  - 仕事の書き込みは `writer.run("news.jobs.*", user=False)` の中だけ。結果の取り込みで「まとめ書きに積む」ものは、done にする前に `_flush("action")` で保存する（途中で止まっても列に戻って同じ結果をもう一度入れるだけ）。仕事の種類を足すときは `jobs.KINDS`・`INPUT_V`・`_payload`・`_apply`（検査）と、作り手が要るなら `_CREATORS`。
+  - つなぐ番号はメモリだけ（`link._pairing`）。試験は `link.reset_for_tests()`。ECIES の形は `link.py` の docstring が正。ControlDeck 側は `link.seal()` と同じ手順で実装する。
+  - 画像は `artifacts.inspect_image` が唯一の関門。PNG の試験データは zlib で組み立てる（試験の `png()`・`jpeg()`・`webp()`）。差し替えは保存してから返す。
+  - 仕事の列に対象が無い（記事・イベントが消えた）仕事は、claim のとき done で閉じる。イベントは作り直しで id が変わることがある。
 
 ## 7. 守ること（要点。全文は AGENTS.md）
 - **公開のリポジトリ**: 鍵・パスワード・トークン・利用者の名前・メール・ホスト名・私的な IP・手元の絶対パスを入れない。push の前に差分を grep で確かめる。試験の見本の値は実行時に組み立てる。

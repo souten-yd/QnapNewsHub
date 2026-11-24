@@ -9,7 +9,7 @@ export type NewsView = "recommended" | "latest" | "starred";
 
 export interface NewsItem {
   id: number; kind: NewsKind; source: string; source_key: string; title: string; url: string | null;
-  summary: string; image_url: string | null; published_at: string; topics: string[]; state: NewsState; score?: number;
+  summary: string; image_url: string | null; image_ai?: boolean; published_at: string; topics: string[]; state: NewsState; score?: number;
   /** チャンネルの id（どのチャンネルに属するか。無ければ null） */
   channel?: string | null;
   /** 英語の抜粋を日本語に訳したもの（summary がその訳になり、元の抜粋は summary_original） */

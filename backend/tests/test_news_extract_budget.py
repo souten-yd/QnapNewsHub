@@ -467,6 +467,8 @@ def test_old_database_is_migrated_with_columns_and_tables(tmp_path, monkeypatch)
         con.execute(f"DROP TRIGGER {trig}")
     for table in ("claims", "article_entities", "entity_aliases", "entities"):
         con.execute(f"DROP TABLE {table}")
+    for trg in ("ins", "upd", "del"):      # 古い版の DB には、差分の同期（v0.3）の trigger がまだ無い
+        con.execute(f"DROP TRIGGER IF EXISTS trg_chg_news_items_{trg}")
     con.execute("ALTER TABLE news_items DROP COLUMN extract_v")
     con.commit()
     cols = [r[1] for r in con.execute("PRAGMA table_info(news_items)")]
