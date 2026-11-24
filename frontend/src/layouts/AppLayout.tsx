@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useLogout } from "../api/auth";
+import { useUpdateNotice } from "../api/update";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useTheme, type Theme } from "../stores";
 
@@ -26,6 +27,7 @@ const THEMES: [Theme, string][] = [["system", "自動"], ["light", "ライト"],
 function NavPanel({ compact, onNavigate, username }: { compact: boolean; onNavigate?: () => void; username: string }) {
   const logout = useLogout();
   const theme = useTheme((s) => s.theme);
+  const update = useUpdateNotice();
   const setTheme = useTheme((s) => s.setTheme);
   return (
     <div className="flex h-full flex-col">
@@ -34,6 +36,7 @@ function NavPanel({ compact, onNavigate, username }: { compact: boolean; onNavig
           <NavLink key={n.to} to={n.to} end={n.end} onClick={onNavigate} title={n.label}
             className={({ isActive }) => `flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium ${isActive ? "bg-accent-600/10 text-accent-700 dark:text-accent-300" : "text-zinc-700 hover:bg-zinc-200/60 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
             {n.icon}<span className={compact ? "sr-only" : ""}>{n.label}</span>
+            {n.to === "/settings" && update.data?.available && <span data-testid="update-mark" role="img" aria-label="新しい版があります" title={update.data.message ?? ""} className="ml-auto h-2.5 w-2.5 rounded-full bg-accent-600" />}
           </NavLink>
         ))}
       </nav>
@@ -56,6 +59,7 @@ function NavPanel({ compact, onNavigate, username }: { compact: boolean; onNavig
 }
 
 export function AppLayout({ username }: { username: string }) {
+  const updateNotice = useUpdateNotice();
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [drawer, setDrawer] = useState(false);
   const location = useLocation();
@@ -99,7 +103,7 @@ export function AppLayout({ username }: { username: string }) {
         {/* 携帯の上の行: ☰ とニュースハブの名前。PC ではサイドバーが担うので出さない */}
         <header data-shell-topbar className="safe-top sticky top-0 z-30 shrink-0 border-b border-zinc-200/80 bg-zinc-50 dark:border-zinc-800/80 dark:bg-zinc-950 md:hidden">
           <div className="flex h-14 items-center gap-1 px-3">
-            <button ref={menuButton} type="button" onClick={() => setDrawer(true)} aria-label="メニューを開く" aria-haspopup="dialog" aria-expanded={drawer} className={`${iconBtn} -ml-1.5`}><IconMenu /></button>
+            <button ref={menuButton} type="button" onClick={() => setDrawer(true)} aria-label="メニューを開く" aria-haspopup="dialog" aria-expanded={drawer} className={`${iconBtn} relative -ml-1.5`}><IconMenu />{updateNotice.data?.available && <span data-testid="update-mark-menu" aria-hidden className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-accent-600 ring-2 ring-zinc-50 dark:ring-zinc-950" />}</button>
             <span className="pl-1 text-lg font-bold tracking-tight" data-testid="brand">ニュースハブ</span>
           </div>
         </header>

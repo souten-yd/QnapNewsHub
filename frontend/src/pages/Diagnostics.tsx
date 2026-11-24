@@ -127,6 +127,17 @@ export default function DiagnosticsPage() {
         </dl>
       </Card>
 
+      <Card id="diag-update" title="更新" hint="新しい版の確認（GitHub の Release）と、前回の更新の結果です。">
+        <dl>
+          <Row k="今の版" v={`${d.update.version}（${d.update.install === "linux" ? "Linux・手動で更新" : "QPKG"}）`} id="update-version" />
+          <Row k="新しい版" v={d.update.latest || "なし"} id="update-latest-diag" />
+          <Row k="最後に確かめた" v={clock(d.update.checked_at)} />
+          <Row k="確認の失敗" v={d.update.error || "なし"} />
+          <Row k="ETag の当たり（GitHub の制限の節約）" v={`${d.update.etag_hits} / ${d.update.checks} 回`} />
+          <Row k="前回の更新" v={d.update.last ? `${d.update.last.ok ? "成功" : "失敗"}（${d.update.last.from} → ${d.update.last.to}）` : "なし"} id="update-last-diag" />
+        </dl>
+      </Card>
+
       <SelfCheckCard />
     </div>
   );

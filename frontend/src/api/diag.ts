@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
+import type { UpdateLast } from "./update";
 
 /** 診断（backend/qnapnewshub/diagnostics.py）。管理者だけ。鍵・URL の秘密は含まれない。 */
 export interface DiagSource { key: string; name: string; kind: string; ok: boolean | null; reason: string; error: string; last_ok_at: string; last_at: string; interval_min: number; interval_auto: boolean; backoff: boolean; hit_rate: number | null; hits_304: number; conditional: number; new_7d: number; fail_streak: number; stalled: boolean; problems: string[]; fix: string }
@@ -19,6 +20,7 @@ export interface Diagnostics {
     rest_writes: { at: string; name: string; user: boolean }[]; rest_app_writes: number; writes_by_name: Record<string, number>; flush_history: DiagFlush[];
   };
   machine: { cpu_pct: number; load: number[]; rss: number; uptime_seconds: number; version: string; python: string; cpus: number };
+  update: { version: string; install: string; can_install: boolean; checked_at: string; error: string; latest: string; include_prerelease: boolean; etag_hits: number; checks: number; job: string; last: UpdateLast | null; rollback: string | null };
   problems: { area: string; level: "error" | "warn"; text: string }[];
 }
 export interface SelfCheck { at: string; ok: boolean; checks: { name: string; ok: boolean; detail: string; fix: string }[] }

@@ -4,6 +4,7 @@ import { useHubSettings, useSaveHubSettings, type HubSettings } from "../../api/
 import { DEFAULT_PREFS, LEGACY_DESIGNS, useNewsChannels, useNewsPrefs, useSaveChannels, useSavePrefs, type ChannelsConfig, type NewsChannel, type NewsDesign, type NewsDisplay, type NewsPrefs, type NewsTaste } from "../../api/news";
 import { useToasts } from "../../stores";
 import { NewsSourcesSettings } from "./NewsSourcesSettings";
+import { UpdateCard } from "./UpdateCard";
 import { NewsRuntimeCards } from "./NewsRuntimeSettings";
 import { Card, field, ghost, primary } from "./settingsUi";
 
@@ -269,6 +270,7 @@ export function NewsSettings() {
       <PrefsCards />
       <ArchiveCard />
       <HubCard />
+      <UpdateCard />
     </>
   );
 }

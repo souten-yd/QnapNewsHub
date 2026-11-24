@@ -193,6 +193,9 @@ RSS 1.0・2.0・Atom の自動判別 / CSV と OPML の取り込み・書き出�
 - 記事の中の命令を実行しない（プロンプトインジェクション）。ニュースの分析の係は最小の権限（ControlDeck の道具・コマンドを呼べない）。
 - SSRF（私的な IP・リダイレクトの各段）・XML（外部の実体・過大な展開を禁止）・HTML（スクリプトを無効に）・API の認証（読み取りと書き込みを分ける）・AI の出力は JSON Schema で検査・事実と主張に出どころ・トランザクションと冪等性・整合性のある世代のバックアップ・著作権（保存と書き出しの対象を制御）。
 
+### 13 章の実装: 更新の守り（0.1.1）
+アプリの更新（docs/UPDATE.md）は、Release の manifest の **Ed25519 署名**・名前・版・大きさ・sha256 をすべて確かめてからだけ入れる。取得は https・GitHub のホストだけ・リダイレクトの各段を検査・300MB まで。操作は管理者の session だけ（API トークンは不可）。試験用の差し替えは `NEWSHUB_INSTALL=qpkg-sim` のときだけ効く。
+
 ## 14. アプリ
 QnapNewsHub。QPKG（x86_64）・Linux・レスポンシブな画面・iPhone と iPad の PWA・夜の表示・自動起動・データを残す更新・App Center での停止と再開・LAN・HTTPS（Tailscale などと）・アイコンは QNAP・PWA・iOS で共通（案「Knowledge Hub」: 点と線のつながりの図）。用意するもの: SVG の元・favicon・apple-touch-icon（180）・PWA（192・512）・maskable・QPKG（QDK の決まりの通常・無効・80px）。
 

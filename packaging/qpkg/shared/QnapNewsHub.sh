@@ -56,6 +56,8 @@ case "$1" in
         NEWSHUB_DATA="$DATA" NEWSHUB_HOST="${QNH_HOST:-0.0.0.0}" NEWSHUB_PORT="$PORT" NEWSHUB_WEB="$QPKG_ROOT/web" \
         NEWSHUB_SETUP_TOKEN=1 PYTHONPATH="$QPKG_ROOT/app:$QPKG_ROOT/site" PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
         SSL_CERT_FILE="$QPKG_ROOT/site/certifi/cacert.pem" \
+        NEWSHUB_INSTALL="${QNH_INSTALL:-qpkg}" NEWSHUB_QPKG_ROOT="$QPKG_ROOT" \
+        NEWSHUB_UPDATE_TEST_FEED="${QNH_UPDATE_TEST_FEED:-}" NEWSHUB_UPDATE_TEST_PUBKEY="${QNH_UPDATE_TEST_PUBKEY:-}" \
         "$PY" -m qnapnewshub.cli run >/dev/null 2>&1 &
     echo $! > "$PIDFILE"
     note_setup_token &

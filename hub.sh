@@ -7,6 +7,9 @@
 #   ./hub.sh e2e [args]     画面の E2E（Playwright）。一時の置き場でバックエンドを起こして流す（本物のデータには触れない）。
 #                           ブラウザは PLAYWRIGHT_BROWSERS_PATH のものを使う（install はしない）。撮影は NEWSHUB_SHOTS_DIR にも写す
 #   ./hub.sh qpkg           QNAP の QPKG（x86_64）を作る → dist/QnapNewsHub_<版>_x86_64.qpkg（packaging/qpkg/build.sh。podman と QDK を使う）
+#   ./hub.sh release <版> [--prerelease] [--notes ノートのファイル] [--dry-run]
+#                           版の書き換えの確認 → test → build → qpkg → 署名（packaging/release/sign.py。秘密鍵は NEWSHUB_SIGNING_KEY・既定 ~/.keys/qnapnewshub-release.pem）
+#                           → gh release create。--dry-run は最後の gh release create を表示するだけ（docs/UPDATE.md）
 #   ./hub.sh run            127.0.0.1:8787 で起動（NEWSHUB_HOST / NEWSHUB_PORT か設定の API で変える）
 #   ./hub.sh install-service   systemd のユーザーの単位 qnapnewshub.service を ~/.config/systemd/user に書いて有効にする（root は使わない。停電のあと自動で起きる）
 #   ./hub.sh uninstall-service 止めて、無効にして、単位を消す（データの置き場は消さない）
@@ -93,6 +96,43 @@ case "$cmd" in
     status=$?
     set -e
     exit $status
+    ;;
+  release)
+    need_venv
+    VER="${1:-}"; shift || true
+    [ -n "$VER" ] || { echo "使い方: ./hub.sh release <版> [--prerelease] [--notes ファイル] [--dry-run]" >&2; exit 1; }
+    echo "$VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "版の形が正しくありません（例 0.1.1・0.2.0-rc1）: $VER" >&2; exit 1; }
+    PRE=""; NOTES=""; DRY=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --prerelease) PRE="--prerelease"; shift ;;
+        --notes) NOTES="${2:-}"; [ -f "$NOTES" ] || { echo "ノートのファイルがありません: $NOTES" >&2; exit 1; }; shift 2 ;;
+        --dry-run) DRY=1; shift ;;
+        *) echo "知らない引数です: $1" >&2; exit 1 ;;
+      esac
+    done
+    # 1. 版の書き換えの確認（コード・パッケージ・画面の版がそろっていること。QPKG の版は build が __version__ から作る）
+    CODE_VER="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$ROOT/backend/qnapnewshub/__init__.py")"
+    PROJ_VER="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/backend/pyproject.toml" | head -n 1)"
+    WEB_VER="$(sed -n 's/^  "version": "\(.*\)",/\1/p' "$ROOT/frontend/package.json" | head -n 1)"
+    for v in "$CODE_VER" "$PROJ_VER" "$WEB_VER"; do
+      [ "$v" = "$VER" ] || { echo "版が合いません: 指定 $VER・__init__.py $CODE_VER・pyproject.toml $PROJ_VER・package.json $WEB_VER（先に書き換えてコミットする）" >&2; exit 1; }
+    done
+    [ -z "$(git -C "$ROOT" status --porcelain)" ] || { echo "コミットされていない変更があります。コミットしてから Release を作ってください" >&2; exit 1; }
+    # 2. 試験（不合格なら止まる）→ 3. build → qpkg → 4. 署名
+    "$0" test
+    "$0" build
+    "$0" qpkg
+    Q="$ROOT/dist/QnapNewsHub_${VER}_x86_64.qpkg"
+    [ -f "$Q" ] || { echo ".qpkg ができていません: $Q" >&2; exit 1; }
+    "$PY" "$ROOT/packaging/release/sign.py" "$Q"
+    # 5. Release（ノートは日本語・更新の方法と戻し方・確かめていないこと）
+    ARGS=(release create "v$VER" "$Q" "$Q.sha256" "$Q.manifest.json" "$Q.manifest.sig" -R souten-yd/QnapNewsHub --title "QNAP ニュースハブ $VER")
+    [ -z "$PRE" ] || ARGS+=("$PRE")
+    if [ -n "$NOTES" ]; then ARGS+=(--notes-file "$NOTES"); else ARGS+=(--notes "QNAP ニュースハブ $VER"); fi
+    if [ "$DRY" = 1 ]; then echo "（dry-run）gh ${ARGS[*]}"; exit 0; fi
+    command -v gh >/dev/null || { echo "gh が要ります" >&2; exit 1; }
+    exec gh "${ARGS[@]}"
     ;;
   run)
     need_venv

@@ -32,6 +32,9 @@ QNAP（x86_64。例: TS-253Be の Celeron J3455）向けの QPKG の作り方・
 - **QPKG を更新しても、消しても、データは残る**（QDK は QPKG の置き場だけを消す）。データも消したいときは、QPKG を消したあとに SSH でこの置き場を消す。
 - 更新のときは、古い版のプログラム（python・site・app・web）を消してから新しい版を入れる（`package_routines`）。
 
+## 更新（アプリの中から）
+0.1.1 から、設定の「アプリの更新」で、GitHub の Release の署名つきの .qpkg を確かめて入れられる（docs/UPDATE.md）。起動台本は `NEWSHUB_INSTALL=qpkg`（QPKG で動いている印）と `NEWSHUB_QPKG_ROOT`（QPKG の置き場）を渡す。取得物はデータの置き場の `updates/`（QPKG の更新でも消えない）。模擬: `packaging/qpkg/test/run-sim.sh update`。
+
 ## 止める・更新
 - 停止は SIGTERM。Write Coordinator がメモリに溜めた記事を書き切るまで最大 100 秒待ち、それでも止まらなければ強制終了（`qpkg.cfg` の QPKG_TIMEOUT は停止 120 秒）。
 - 待ち受けのポートは `qpkg.cfg` の 8787（`qpkg.conf` の `Web_Port` を変えると起動台本が従う）。待ち受けのアドレスは起動台本が 0.0.0.0 を渡す（設定の画面の「待ち受け」より環境変数が勝つ）。
@@ -49,6 +52,9 @@ CentOS 7（glibc 2.17 = 同梱の Python と wheel が求める最も古い glib
 
 ### 2026-11-24 の結果（模擬・開発の PC）
 すべて合格: 入れる・起きる（glibc 2.17）・画面 200・番号がログに出る・0600・番号なし 403／あり 200・番号のファイルが消える・.pyc の書き込み 0 件・HTTPS 200・SIGTERM で止まる・入れ直しで管理者が残る。
+
+### 更新の模擬（`run-sim.sh update`）
+0.1.0 相当の古い QPKG を入れる → 署名の違う Release は入れない（取得物も残らない）→ 正しい Release から API 経由で 0.1.1 へ更新 → サーバーが新しい版で起き直す・qpkg.conf の版が変わる・データ（管理者・ファイル）が残る・結果が `last.json` に出る。
 
 ## 確かめていないこと
 - **QNAP の実機**（QTS の版・App Center の手動インストールの画面・署名の無いアプリの扱い・通知センターでの番号の見え方・電源を入れ直したあとの自動起動）。
