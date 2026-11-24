@@ -93,6 +93,17 @@ GitHub 等  │   ├ 下ごしらえ（無料の LLM、30 件ずつ、1 日の�
 - 確かめた: `./hub.sh test`（backend 135 件・外への通信と LLM は全部模擬）。`./hub.sh run` で起動し、目録から 4 件の RSS ＋チャンネルの検索（Google ニュース）で 1 回の取得が通り、記事・og:image・取得先ごとの履歴が入ること。鍵が無いので下ごしらえは「鍵が未設定」で止まること。
 - 確かめていない: 実際の OpenRouter への呼び出し（鍵が無い。HTTP の形は模擬で確認）・24 時間の見張りの運用（3 段）・ControlDeck の目録の元になった未マージの版（ControlDeck の `feat/news-feed-catalog`）が本番へ入ったあとの差分・QNAP の機種での動作・Python 3.12 以外。
 
+### 2.7 画面の作り（2 段。2026-11-24）
+`frontend/`（React 18 ＋ Vite 5 ＋ TypeScript ＋ Tailwind 4 ＋ TanStack Query。版は ControlDeck の frontend と同じ系統で `package.json` に固定）。build した `frontend/dist` をバックエンド（`main.py`）が `/` 以下で配る（`NEWSHUB_WEB` で置き場を変えられる。`/assets` はハッシュつきで長く覚えさせ、画面の中の道は `index.html`。`/api` は画面に飲まれない）。
+
+**ページ**: `/` ニュース（放送・新着・アーカイブ・全文検索・まとめのバブル・チャンネル・好み〔👍・☆・隠す・興味の語のミュート〕。放送局・マガジン・新聞・経済紙・テキスト一覧の 5 デザイン）／`/sources` 取得先の管理／`/settings` 設定（チャンネル・ソース・更新・OpenRouter の鍵・LLM〔モデル・今日の呼び出し・上限・まとめの重点〕・表示・好み・アーカイブ・待ち受け）。ログインと最初の管理者を作る画面は、`/auth/status` の結果で出し分ける（利用者がいなければ setup）。殻（`layouts/AppLayout.tsx`）は ☰ から: 携帯は左から出るドロワー、PC は折りたためるサイドバー（端末に覚える）、下部ナビは置かない、Safe Area、ライト・ダーク・自動。
+
+**ControlDeck から変えた所**: 画像の無い記事は画像の部分を出さない（チャンネルの色の細い線だけ）・生成画像の印と画像生成の設定は無い／記事は元のページを新しいタブで開く（noopener noreferrer。リーダーは無い）／「意味で探す」（RAG）・CPU の LLM・Models への案内・設定の管理権限は無い（利用者はすべて管理者）／チャットの話題の項目は無い／LLM のモデルは OpenRouter のモデル名を入れる／OpenRouter の鍵の入力は伏せ字で、保存したら入力欄を空にし、画面・保存先に値を残さない（サーバーは入っているかだけを返す）／ControlDeck のホームのカードと Marquee は移していない（放送局のテロップは `BroadcastHome` の自前）／ログイン・ログアウト・待ち受けの設定が加わった。
+
+**PWA とアイコン**: `manifest.webmanifest`・apple-touch-icon・iOS のホーム画面用の meta（status-bar-style は black）。アイコンは案「Knowledge Hub」（点と線のつながり・暗い地に黄）で、元は `frontend/icons/*.svg`、`./hub.sh icons` が Playwright のブラウザで PNG（16・32・180・192・512・maskable・QPKG 用の 64・80 と灰色版〔`packaging/qpkg/icons/`〕）を作る。
+
+**確かめたこと**: `./hub.sh test`（139 件）・`./hub.sh build`・`./hub.sh e2e`（80 件。320・390・1280、ライト・ダークで、ログイン・setup・放送局と新聞・画像の無い記事・まとめのバブル・取得先・設定〔鍵の値が画面に出ない〕・manifest とアイコンの配信。うち 1 本は API を模擬せず、一時の置き場の本物のバックエンドで通す）。E2E で、認証の sqlite 接続を全スレッドで共有していたため同時の GET が 500 になる不具合を見つけて直した（`test_concurrent_requests_do_not_share_one_sqlite_connection`）。**確かめていないこと**: 実機の iPhone でのホーム画面の全画面・Safe Area・実際の OpenRouter・QNAP・長時間の動作・Firefox と Safari（Chromium だけ）。
+
 ## 3. ControlDeck との受け渡し
 
 ### 3.1 つなぐ（ペアリング）
