@@ -105,7 +105,7 @@ test.describe("記事は元のページを開く", () => {
     // すべての記事のリンクが外へ（リーダーの /news/read は無い）
     const hrefs = await page.locator("[data-news-card] a, [data-testid=onair-title] a").evaluateAll((els) => els.map((e) => (e as HTMLAnchorElement).getAttribute("href")));
     expect(hrefs.length).toBeGreaterThan(0);
-    for (const h of hrefs.filter((x) => !x?.startsWith("/entities/"))) expect(h).toMatch(/^https:\/\//);      // 物の札だけは画面の中（/entities/）
+    for (const h of hrefs.filter((x) => !x?.startsWith("/entities/") && !x?.startsWith("/events/"))) expect(h).toMatch(/^https:\/\//);      // 物の札・イベントの「ほか N 件」だけは画面の中
   });
 });
 

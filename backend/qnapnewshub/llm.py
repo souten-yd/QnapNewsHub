@@ -5,7 +5,7 @@
 - 送るのは記事の題・抜粋・出どころ（公開情報）と、まとめの重点（利用者が書いた文）だけ。
 - 回数の上限（無料のモデルの上限に当たる前に自分で止める）: 1 日（既定 800 回。日が変われば 0）と 1 分（既定 15 回。超えそうなら空くまで待つ）。
   HTTP の要求 1 回を 1 回と数える（混み合いのやり直しも数える）。1 日の上限に達したら LlmDailyLimit（次の日まで何も送らない）。
-- 用途ごとの割り当て（設定 llm.quota。既定: 下ごしらえと取り出し prep 300・要約 gist 150・まとめ digest 20・知識カード card 200・傾向の解説 trend 10・予備 spare 120。
+- 用途ごとの割り当て（設定 llm.quota。既定: 下ごしらえと取り出し prep 300・要約 gist 150・まとめ digest 20・知識カード card 150・傾向の解説 trend 10・イベントの要約 event 100・予備 spare 70。
   合計が 1 日の上限を超えない）。自分の割り当てを使い切った用途は予備から借りる。予備も尽きたら LlmQuotaLimit。
   夜（night_from 時以降）は、使い残した割り当ての合計までを、後回しの仕事 backfill（古い記事の取り出し直し）が使える。
 - 混み合い（429・temporarily rate-limited など）は 20・60・120 秒待って最大 3 回やり直す。待っても変わらない失敗（鍵が無効・モデルが無い）はやり直さない。
@@ -38,15 +38,15 @@ DEFAULT_MODEL = "nvidia/nemotron-3.5-super-vl:free"
 TIMEOUT_SECONDS = 120
 DEFAULT_DAILY_LIMIT = 800
 DEFAULT_MINUTE_LIMIT = 15
-DEFAULT_QUOTA = {"prep": 300, "gist": 150, "digest": 20, "card": 200, "trend": 10, "spare": 120}
-QUOTA_LABELS = {"prep": "下ごしらえと取り出し", "gist": "要約", "digest": "まとめ", "card": "知識カード", "trend": "傾向の解説", "spare": "予備"}
+DEFAULT_QUOTA = {"prep": 300, "gist": 150, "digest": 20, "card": 150, "trend": 10, "event": 100, "spare": 70}
+QUOTA_LABELS = {"prep": "下ごしらえと取り出し", "gist": "要約", "digest": "まとめ", "card": "知識カード", "trend": "傾向の解説", "event": "イベントの要約", "spare": "予備"}
 DEFAULT_NIGHT_FROM = 21
 GATEWAY_KEY_NAME = "gateway_key"
 GATEWAY_PREFIX = "gateway:"
 DEFAULT_GATEWAY = {"enabled": False, "base_url": "", "model": "auto", "first": True, "batch": 10, "timeout_seconds": 300, "minute_limit": 6, "cooldown_minutes": 10}
 MAX_MINUTE_WAIT = 65.0
-PURPOSES = ("prep", "digest", "gist", "card", "trend", "backfill")
-QUOTA_PURPOSES = ("prep", "gist", "digest", "card", "trend")
+PURPOSES = ("prep", "digest", "gist", "card", "trend", "event", "backfill")
+QUOTA_PURPOSES = ("prep", "gist", "digest", "card", "trend", "event")
 
 
 class LlmNotAllowed(RuntimeError):

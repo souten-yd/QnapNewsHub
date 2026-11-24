@@ -58,7 +58,10 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
     if not staged:
         return 0
     ids = list(staged)
-    published = {i: p for i, p in db.execute(select(NewsItem.id, NewsItem.published_at).where(NewsItem.id.in_(ids)))}
+    meta = {r[0]: r[1:] for r in db.execute(select(NewsItem.id, NewsItem.published_at, NewsItem.dup_of, NewsItem.kind, NewsItem.user_id, NewsItem.source_key)
+                                            .where(NewsItem.id.in_(ids)))}
+    published = {i: m[0] for i, m in meta.items()}
+    deltas: list[tuple] = []      # 物の集計（ana_entity）への増減。取り出し直しは、前の結びつきを引いて新しい結びつきを足す
     touched: set[int] = set()
     cache: dict[str, Entity] = {}
     done = 0
@@ -89,6 +92,9 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
             db.add(ArticleEntity(article_id=article_id, entity_id=ent.id))
             touched.add(ent.id)
         db.flush()
+        now_ids = {ent.id for ent in linked.values()}
+        deltas += [(eid, *meta[article_id], -1) for eid in set(old) - now_ids]
+        deltas += [(eid, *meta[article_id], 1) for eid in now_ids - set(old)]
         done += 1
     for i in range(0, len(touched), 400):      # 記事の数は数え直す（取り出し直し・消えた記事で、足し引きがずれない）
         chunk = list(touched)[i:i + 400]
@@ -96,6 +102,9 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
         for ent in db.scalars(select(Entity).where(Entity.id.in_(chunk))):
             ent.article_count = int(counts.get(ent.id, 0))
     db.flush()
+    from qnapnewshub import analytics
+
+    analytics.apply_entity_deltas(db, deltas)
     return done
 
 

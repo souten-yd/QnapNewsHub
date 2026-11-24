@@ -51,13 +51,15 @@ class _Buf:
         self.states: dict[str, Callable[[], None]] = {}  # 名前 -> 書く処理（LLM の回数など。後の指定が勝つ）
         self.token_used: dict[int, str] = {}
         self.extractions: dict[int, dict] = {}         # 記事の id -> 要素の取り出し（物・fact。entities.apply_extractions が書く）
+        self.event_summaries: dict[int, dict] = {}     # イベントの id -> 要約（events.apply_summaries が書く）。{"tries": 1} は失敗の記録
+        self.trend_notes: list[dict] = []              # 「今日の傾向」の解説（trend.save_note が書く）
         self.bytes = 0
 
     def empty(self) -> bool:
-        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions)
+        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes)
 
     def count(self) -> int:
-        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions)
+        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes)
 
 
 def merge_patch(old: dict | None, new: dict) -> dict:
@@ -277,6 +279,29 @@ class Coordinator:
             self.buf.extractions[article_id] = data
         self._touch(300 + 150 * (len(data.get("entities", [])) + len(data.get("facts", []))))
 
+    def stage_event_summary(self, event_id: int, data: dict) -> None:
+        """イベントの要約（または失敗の記録 {"tries": 1}）を積む。成功した要約は、失敗の記録より後でも先でも残る。"""
+        with self.lock:
+            old = self.buf.event_summaries.get(event_id) or {}
+            merged = {**old, **data}
+            if "tries" in old and "tries" in data:
+                merged["tries"] = int(old["tries"]) + int(data["tries"])
+            self.buf.event_summaries[event_id] = merged
+        self._touch(300 + len(str(data.get("summary", ""))))
+
+    def pending_event_summary(self, event_id: int) -> dict | None:
+        with self.lock:
+            return self.buf.event_summaries.get(event_id) or self.inflight.event_summaries.get(event_id)
+
+    def stage_trend_note(self, note: dict) -> None:
+        with self.lock:
+            self.buf.trend_notes.append(note)
+        self._touch(500 + len(str(note)))
+
+    def pending_trend_notes(self) -> list[dict]:
+        with self.lock:
+            return [*self.inflight.trend_notes, *self.buf.trend_notes]
+
     def stage_token_used(self, token_id: int, at: str) -> None:
         with self.lock:
             self.buf.token_used[token_id] = at
@@ -408,14 +433,28 @@ class Coordinator:
                         entities.apply_extractions(db, snap.extractions)
                     if snap.fetchlog:
                         fetchlog.record(db, snap.fetchlog, commit=False)
+                    if snap.event_summaries:
+                        from qnapnewshub import events as events_mod
+
+                        events_mod.apply_summaries(db, snap.event_summaries)
+                    if snap.trend_notes:
+                        from qnapnewshub import trend
+
+                        trend.save_notes(db, snap.trend_notes)
                     if snap.new or gained or snap.fetchlog:      # 分析の集計の表へ、増えた分だけを同じトランザクションで足す
                         from qnapnewshub import analytics
 
                         analytics.apply(db, list(snap.new.values()), gained, snap.fetchlog)
+                    from qnapnewshub import events as events_mod
+
+                    touched = set(snap.new) | set(snap.extractions)
+                    if touched:      # 新しい記事・物の取り出しが保存された記事を、前後 48 時間の記事と見比べてイベントへ（同じトランザクション）
+                        events_mod.update(db, touched)
                     if snap.new or snap.updates:
                         from qnapnewshub import channels
 
                         store.prune(db, channels.load()["archive_keep"], commit=False)
+                        events_mod.cleanup(db)
                     db.commit()
                 from qnapnewshub import analytics
 
@@ -464,6 +503,9 @@ class Coordinator:
             into.states.setdefault(k, v)
         for k, v in older.extractions.items():
             into.extractions.setdefault(k, v)
+        for k, v in older.event_summaries.items():
+            into.event_summaries.setdefault(k, v)
+        into.trend_notes[:0] = older.trend_notes
         for k, v in older.token_used.items():
             into.token_used.setdefault(k, v)
         into.bytes += older.bytes

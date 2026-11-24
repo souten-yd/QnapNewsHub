@@ -43,10 +43,10 @@ def good(n, **extra):
 # ---- 設定: 予算と割り当て ----
 
 def test_default_budget_and_quota_sum_is_checked(admin_client):
-    """目的: 既定の割り当て（下ごしらえと取り出し 300・要約 150・まとめ 20・知識カード 200・傾向の解説 10・予備 120 = 800）と、合計が 1 日の上限を超える保存を断ること。
+    """目的: 既定の割り当て（下ごしらえと取り出し 300・要約 150・まとめ 20・知識カード 150・傾向の解説 10・イベントの要約 100・予備 70 = 800）と、合計が 1 日の上限を超える保存を断ること。
     根拠: ARCHITECTURE 5.1。上限を下げたとき割り当てが黙って縮むと、利用者が決めた配分が分からなくなる。"""
     cfg = settings.load()["llm"]
-    assert cfg["quota"] == {"prep": 300, "gist": 150, "digest": 20, "card": 200, "trend": 10, "spare": 120} and sum(cfg["quota"].values()) == cfg["daily_limit"] == 800
+    assert cfg["quota"] == {"prep": 300, "gist": 150, "digest": 20, "card": 150, "trend": 10, "event": 100, "spare": 70} and sum(cfg["quota"].values()) == cfg["daily_limit"] == 800
     assert cfg["fallback_models"] == [] and cfg["extract_enabled"] is True
     full = settings.load()
     full["llm"]["daily_limit"] = 500
@@ -54,7 +54,7 @@ def test_default_budget_and_quota_sum_is_checked(admin_client):
     assert r.status_code == 422 and "超えています" in r.json()["detail"]
     full["llm"]["quota"]["prep"] = 0
     full["llm"]["quota"]["card"] = 0
-    assert admin_client.put("/api/v1/news/settings", json=full).status_code == 200      # 120 + 150 + 20 + 10 = 300 ≤ 500
+    assert admin_client.put("/api/v1/news/settings", json=full).status_code == 200      # 70 + 150 + 20 + 10 + 100 = 350 ≤ 500
     low = admin_client.put("/api/v1/news/settings", json={"llm": {"daily_limit": 100}})      # 割り当てを書かなければ、既定の割合を縮める
     assert low.status_code == 200 and sum(low.json()["settings"]["llm"]["quota"].values()) == 100
     assert admin_client.put("/api/v1/news/settings", json={"llm": {"fallback_models": ["bad model!"]}}).status_code == 422
@@ -179,7 +179,7 @@ def test_entities_api_list_search_detail_and_card_tags(admin_client):
     assert d["article_count"] == 2 and [a["id"] for a in d["timeline"]] == sorted([ids[0], ids[1]], reverse=True) or len(d["timeline"]) == 2
     assert d["facts"][0]["text"] == "公開された" and d["facts"][0]["ai_extracted"] is True and d["facts"][0]["value"] == "3.5"
     assert {x["name"] for x in d["related"]} == {"Alibaba", "llama.cpp"} and admin_client.get("/api/v1/entities/99999").status_code == 404
-    items = admin_client.get("/api/v1/news/items?view=latest").json()["items"]
+    items = admin_client.get("/api/v1/news/items?view=latest&q=number").json()["items"]      # 検索ではイベントでまとめない（題が似ていて同じイベントになるため）
     tagged = {i["id"]: [t["name"] for t in i["entities"]] for i in items}
     assert set(tagged[ids[0]]) == {"Qwen", "Alibaba"} and tagged[ids[2]] == ["llama.cpp"]
     admin_client.cookies.clear()

@@ -9,11 +9,15 @@ export interface Filters { kind: string; lang: string }
 export interface Overview {
   today: number; today_indep: number; last24h: number; last24h_indep: number; sources_today: number; sources_8d: number;
   prev7_daily_avg: number | null; prev7_days: number; ratio_24h: number | null; ratio_today: number | null; day: string; built_at: string; unsaved: number;
+  /** 独立したイベントの数（直近 24 時間。イベント＋どのイベントにも入らない記事）。古いサーバーには無い */
+  events_24h?: number; independent_events_24h?: number; event_members_24h?: number; singles_24h?: number; independent_events_prev_daily?: number | null;
 }
 export interface SeriesItem { key: string; label: string; counts: number[]; total: number; color?: string; other_n?: number }
 export interface Series { range: Range; grain: "hour" | "day"; by: By; metric: "all" | "indep"; buckets: string[]; series: SeriesItem[]; total: number }
 export interface HotTopic {
   term: string; label: string; score: number | null; count: number; count_all: number; baseline_mean: number; baseline_sd: number; growth_pct: number | null; sources: number; spark: number[];
+  /** 語（term）か物（entity）。物なら entity_id・entity_type がある（押すと物のページ）。古いサーバーには無い */
+  kind?: "term" | "entity"; entity_id?: number; entity_type?: string;
 }
 export interface HotTopics {
   window_hours: number; baseline_days: number; enough_history: boolean; spark_days: string[]; top: HotTopic[]; new: HotTopic[];
@@ -26,6 +30,17 @@ export interface SourceRow {
 export interface SourcesAnalysis { range: Range; days: string[]; sources: SourceRow[]; total_sources: number }
 export interface CompareRow { key: string; label: string; this: number; prev: number; this_indep: number; prev_indep: number; delta: number; pct: number | null }
 export interface Compare { by: string; this_week: string[]; prev_week: string[]; rows: CompareRow[]; total_this: number; total_prev: number }
+export interface TrendWindow { n: number; indep: number; dup_pct: number | null; img_pct: number | null; lag_min: number | null; fast_pct: number | null; primary_n: number; primary_pct: number | null }
+export interface TrendNoteRef { key: string; label: string; kind: "stat" | "entity" | "event"; to?: string }
+export interface TrendNote { day: string; slot: number; model: string; created_at: string; lines: { text: string; refs: TrendNoteRef[] }[] }
+export interface TrendStats {
+  window_hours: number; enough_history: boolean; cur: TrendWindow; prev: TrendWindow & { n_per_day: number | null; days: number }; ratio: number | null;
+  channels: { channel: string; name: string; color: string; cur: number; prev_per_day: number | null; ratio: number | null }[];
+  new_entities: { id: number; name: string; type: string; count: number }[];
+  surging_entities: { entity_id: number; label: string; entity_type: string; score: number; count: number; baseline_mean: number; sources: number }[];
+  events: { events_24h: number; independent_events_24h: number; event_members_24h: number; singles_24h: number; independent_events_prev_daily: number | null };
+  built_at: string; note: TrendNote | null;
+}
 export interface AnalyticsFilters { kinds: { id: string; label: string }[]; langs: { id: string; label: string }[]; channels: { id: string; name: string; color: string }[] }
 
 const key = ["analytics"] as const;
@@ -39,3 +54,4 @@ export const useSeries = (p: { range: Range; grain: string; by: By; metric: stri
 export const useHotTopics = (f: Filters) => useQuery({ queryKey: [...key, "hot", f], queryFn: () => api<HotTopics>(`/analytics/hot-topics?${qs({ ...f })}`), ...opts });
 export const useSourcesAnalysis = (p: { range: Range } & Filters) => useQuery({ queryKey: [...key, "sources", p], queryFn: () => api<SourcesAnalysis>(`/analytics/sources?${qs({ ...p })}`), ...opts });
 export const useCompare = (p: { by: string } & Filters) => useQuery({ queryKey: [...key, "compare", p], queryFn: () => api<Compare>(`/analytics/compare?${qs({ ...p })}`), ...opts });
+export const useTrendStats = () => useQuery({ queryKey: [...key, "trend"], queryFn: () => api<TrendStats>("/analytics/trend"), ...opts });

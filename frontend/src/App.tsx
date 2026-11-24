@@ -9,6 +9,7 @@ import { LoginPage, SetupPage } from "./pages/Auth";
 import NewsPage from "./pages/News";
 import AnalyticsPage from "./pages/Analytics";
 import EntitiesPage, { EntityPage } from "./pages/Entities";
+import EventsPage, { EventPage } from "./pages/Events";
 import NewsSourcesPage from "./pages/NewsSources";
 import SettingsPage from "./pages/Settings";
 import DiagnosticsPage from "./pages/Diagnostics";
@@ -41,6 +42,8 @@ export default function App() {
       <Route element={<AppLayout username={status.data.username ?? ""} />}>
         <Route path="/" element={<NewsPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/events" element={<EventsPage />} />
+        <Route path="/events/:id" element={<EventPage />} />
         <Route path="/entities" element={<EntitiesPage />} />
         <Route path="/entities/:id" element={<EntityPage />} />
         <Route path="/sources" element={<NewsSourcesPage />} />

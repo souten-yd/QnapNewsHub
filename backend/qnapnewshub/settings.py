@@ -109,7 +109,10 @@ def _quota(value: object, daily: int) -> dict:
         return default_quota(daily)
     if not isinstance(value, dict):
         raise ConfigError("用途ごとの割り当ては表です")
-    out = {k: _int(value.get(k, DEFAULT_QUOTA[k]), f"{QUOTA_LABELS[k]}の割り当て", 0, 5000) for k in DEFAULT_QUOTA}
+    given = dict(value)
+    if "event" not in given:      # event を足す前の設定: 合計が上限に収まる範囲だけ足す（足りなければ 0。割り当てが 0 の用途も予備から借りて動く）
+        given["event"] = max(0, min(DEFAULT_QUOTA["event"], daily - sum(_int(v, "割り当て", 0, 5000) for k, v in given.items() if k in DEFAULT_QUOTA)))
+    out = {k: _int(given.get(k, DEFAULT_QUOTA[k]), f"{QUOTA_LABELS[k]}の割り当て", 0, 5000) for k in DEFAULT_QUOTA}
     if sum(out.values()) > daily:
         raise ConfigError(f"用途ごとの割り当ての合計（{sum(out.values())} 回）が 1 日の上限（{daily} 回）を超えています")
     return out

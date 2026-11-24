@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useAnalyticsFilters, useCompare, useHotTopics, useOverview, useSeries, useSourcesAnalysis, type By, type Filters, type HotTopic, type Range, type Series } from "../api/analytics";
+import { useAnalyticsFilters, useCompare, useHotTopics, useOverview, useSeries, useSourcesAnalysis, useTrendStats, type By, type Filters, type HotTopic, type Range, type Series } from "../api/analytics";
 import { Sparkline, Skeleton } from "../components/ui";
 import { Chart } from "../features/analytics/Chart";
 import { chartColors, colorOf, useIsDark } from "../features/analytics/theme";
@@ -49,9 +49,11 @@ function Cards({ f }: { f: Filters }) {
   const d = o.data;
   const ratio = d.ratio_24h;
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-4" data-testid="cards">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-5" data-testid="cards">
       <Stat id="card-today" label="今日の記事" value={`${num(d.today)} 件`} sub={d.unsaved > 0 ? `ほか未保存 ${d.unsaved} 件（数えていません）` : `直近 24 時間 ${num(d.last24h)} 件`} />
       <Stat id="card-indep" label="独立した記事" value={`${num(d.today_indep)} 件`} sub="近い重複を除いた今日の数" />
+      <Stat id="card-events" label="独立したイベント" value={d.independent_events_24h == null ? "—" : `${num(d.independent_events_24h)} 件`}
+        sub={d.independent_events_24h == null ? "" : `直近 24 時間。まとまり ${num(d.events_24h)} 件 + 単独の記事 ${num(d.singles_24h)} 件${d.independent_events_prev_daily != null ? `（前の 7 日の 1 日平均 ${d.independent_events_prev_daily} 件）` : ""}`} />
       <Stat id="card-sources" label="取得先" value={`${num(d.sources_today)} 件`} sub="今日、記事を出した取得先の数" />
       <Stat id="card-ratio" label="前の 7 日との比" value={ratio == null ? "—" : `×${ratio.toFixed(2)}`}
         sub={d.prev7_daily_avg == null ? "比べる履歴がまだありません" : `直近 24 時間 ÷ 前の 7 日の 1 日平均（${d.prev7_daily_avg} 件）`} />
@@ -95,7 +97,7 @@ function Trend({ f, range }: { f: Filters; range: Range }) {
       </div>
       {s.isLoading ? <Skeleton className="h-72" /> : s.isError || !option ? <p role="alert" className="text-sm text-red-600">グラフを読み込めませんでした。</p>
         : s.data!.total === 0 ? <p className="py-8 text-center text-sm text-zinc-500" data-testid="trend-empty">この期間の記事はありません。</p>
-        : <Chart option={option} height={340} testId="trend-chart" label={`新着の傾向（${s.data!.grain === "hour" ? "時間" : "日"}ごと・${BYS.find((b) => b[0] === by)?.[1]}別の積み上げ。合計 ${s.data!.total} 件）`} />}
+        : <Chart option={option} height={340} testId="trend-chart" label={`記事の数の推移（${s.data!.grain === "hour" ? "時間" : "日"}ごと・${BYS.find((b) => b[0] === by)?.[1]}別の積み上げ。合計 ${s.data!.total} 件）`} />}
     </Section>
   );
 }
@@ -104,9 +106,9 @@ function TopicRow({ t, rank, showScore = true }: { t: HotTopic; rank: number; sh
   return (
     <li data-testid="hot-row" className="flex min-w-0 items-center gap-2 border-b border-zinc-100 py-2 last:border-0 dark:border-zinc-800">
       <span className="num w-5 shrink-0 text-right text-xs text-zinc-500">{rank}</span>
-      <Link to={`/?q=${encodeURIComponent(t.label)}`} data-testid="hot-link" className="flex min-h-11 min-w-0 flex-1 items-center gap-2" aria-label={`${t.label} の記事を見る`}>
+      <Link to={t.kind === "entity" && t.entity_id ? `/entities/${t.entity_id}` : `/?q=${encodeURIComponent(t.label)}`} data-testid="hot-link" className="flex min-h-11 min-w-0 flex-1 items-center gap-2" aria-label={t.kind === "entity" ? `${t.label}（物）のページを見る` : `${t.label} の記事を見る`}>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold">{t.label}</span>
+          <span className="flex min-w-0 items-center gap-1.5"><span className="truncate text-sm font-semibold">{t.label}</span>{t.kind === "entity" && <span data-testid="hot-entity-mark" className="shrink-0 rounded-md bg-accent-600/10 px-1 py-0.5 text-[10px] font-medium text-accent-700 dark:text-accent-300">物</span>}</span>
           <span className="num block break-words text-[11px] leading-snug text-zinc-500">{showScore && t.score != null ? `点数 ${t.score.toFixed(1)} · ` : ""}{t.growth_pct != null && showScore ? `平均より +${num(t.growth_pct)}% · ` : ""}{t.count} 件 · 出どころ {t.sources}</span>
         </span>
         <span className="w-16 shrink-0 text-accent-600 sm:w-24" aria-hidden><Sparkline values={t.spark} max={Math.max(1, ...t.spark)} fill heightClass="h-6" /></span>
@@ -148,6 +150,81 @@ function Hot({ f }: { f: Filters }) {
           )}
         </div>
       )}
+    </Section>
+  );
+}
+
+const diffLabel = (cur: number | null | undefined, prev: number | null | undefined, unit = "") => (cur == null || prev == null ? "" : `${cur - prev >= 0 ? "+" : ""}${(Math.round((cur - prev) * 10) / 10).toLocaleString("ja-JP")}${unit}`);
+
+function Arrivals() {
+  const t = useTrendStats();
+  return (
+    <Section id="sec-arrivals" title="新着の傾向" hint="直近 24 時間を、その前の 7 日（1 日あたり）と比べます。数字は集計の表から（LLM なし）。解説だけが AI です。">
+      {t.isLoading ? <Skeleton className="h-64" /> : t.isError || !t.data ? <p role="alert" className="text-sm text-red-600">読み込めませんでした。</p> : (() => {
+        const d = t.data;
+        const rows: [string, string, string, string][] = [
+          ["記事", `${num(d.cur.n)} 件`, d.prev.n_per_day == null ? "—" : `${num(d.prev.n_per_day)} 件/日`, d.ratio == null ? "" : `×${d.ratio.toFixed(2)}`],
+          ["重複の率", pct(d.cur.dup_pct), pct(d.prev.dup_pct), diffLabel(d.cur.dup_pct, d.prev.dup_pct, " pt")],
+          ["画像のある率", pct(d.cur.img_pct), pct(d.prev.img_pct), diffLabel(d.cur.img_pct, d.prev.img_pct, " pt")],
+          ["発表から取得までの遅れ（平均）", d.cur.lag_min == null ? "—" : `${d.cur.lag_min} 分`, d.prev.lag_min == null ? "—" : `${d.prev.lag_min} 分`, diffLabel(d.cur.lag_min, d.prev.lag_min, " 分")],
+          ["1 時間以内に取れた率", pct(d.cur.fast_pct), pct(d.prev.fast_pct), diffLabel(d.cur.fast_pct, d.prev.fast_pct, " pt")],
+          ["一次情報の率", pct(d.cur.primary_pct), pct(d.prev.primary_pct), diffLabel(d.cur.primary_pct, d.prev.primary_pct, " pt")],
+          ["独立したイベント", `${num(d.events.independent_events_24h)} 件`, d.events.independent_events_prev_daily == null ? "—" : `${d.events.independent_events_prev_daily} 件/日`, ""],
+        ];
+        return (
+          <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+            <div className="min-w-0 lg:col-span-2" data-testid="trend-note">
+              <h3 className="text-sm font-semibold">今日の傾向 <span className="ml-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-300">AI の解説</span></h3>
+              {d.note ? (
+                <>
+                  <ul className="mt-1 space-y-2" data-testid="trend-note-lines">
+                    {d.note.lines.map((ln, i) => (
+                      <li key={i} className="min-w-0 break-words text-sm leading-relaxed" data-testid="trend-note-line">{ln.text}
+                        <span className="ml-1.5 inline-flex flex-wrap gap-1 align-middle">
+                          {ln.refs.map((r) => r.to ? <Link key={r.key} to={r.to} title={r.label} className="rounded-md border border-zinc-300 px-1.5 py-0.5 text-[10px] text-accent-700 dark:border-zinc-700 dark:text-accent-300">{r.kind === "event" ? "イベント" : "物"} {r.key}</Link>
+                            : <span key={r.key} title={r.label} className="rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">数字 {r.key}</span>)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1 text-[11px] text-zinc-500">{d.note.day} の{d.note.slot === 0 ? "朝" : "夕方"} · {d.note.model}。数字は集計にあるものだけを使い、間違いを含むことがあります。</p>
+                </>
+              ) : <p className="py-2 text-xs text-zinc-500" data-testid="trend-note-empty">まだ解説はありません（1 日 1〜2 回、無料の LLM が書きます。記事が直近 24 時間に 20 件以上あるときだけ）。</p>}
+            </div>
+            <div className="min-w-0" data-testid="arrivals-table-wrap">
+              <div className="max-w-full overflow-x-auto">
+                <table className="w-full min-w-[20rem] text-xs" data-testid="arrivals-table">
+                  <thead><tr className="border-b border-zinc-200 text-left text-zinc-500 dark:border-zinc-800"><th className="py-1.5 pr-2 font-medium">項目</th><th className="px-2 text-right font-medium">直近 24 時間</th><th className="px-2 text-right font-medium">前の 7 日</th><th className="pl-2 text-right font-medium">差</th></tr></thead>
+                  <tbody>{rows.map(([k, a, b, c]) => <tr key={k} className="num border-b border-zinc-100 last:border-0 dark:border-zinc-800"><td className="py-1.5 pr-2 font-medium">{k}</td><td className="px-2 text-right">{a}</td><td className="px-2 text-right">{b}</td><td className="pl-2 text-right">{c}</td></tr>)}</tbody>
+                </table>
+              </div>
+              {!d.enough_history && <p className="mt-1 text-[11px] text-zinc-500">比べる履歴がまだ足りません（{d.prev.days} 日分）。</p>}
+            </div>
+            <div className="min-w-0 space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold">新しく出た物</h3>
+                {d.new_entities.length === 0 ? <p className="py-1 text-xs text-zinc-500" data-testid="arrivals-new-empty">ありません。</p> : (
+                  <ul className="mt-1 flex flex-wrap gap-1.5" data-testid="arrivals-new">{d.new_entities.map((e) => <li key={e.id}><Link to={`/entities/${e.id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700">{e.name}<span className="num text-zinc-500">{e.count}</span></Link></li>)}</ul>
+                )}
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold">急に増えた物</h3>
+                {d.surging_entities.length === 0 ? <p className="py-1 text-xs text-zinc-500">ありません。</p> : (
+                  <ul className="mt-1 flex flex-wrap gap-1.5" data-testid="arrivals-surging">{d.surging_entities.map((e) => <li key={e.entity_id}><Link to={`/entities/${e.entity_id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700">{e.label}<span className="num text-zinc-500">{e.count} 件</span></Link></li>)}</ul>
+                )}
+              </div>
+              {d.channels.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold">分野ごとの勢い</h3>
+                  <ul className="mt-1 text-xs" data-testid="arrivals-channels">{d.channels.map((c) => (
+                    <li key={c.channel} className="num flex justify-between gap-2 border-b border-zinc-100 py-1 dark:border-zinc-800"><span className="flex min-w-0 items-center gap-1.5"><span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: c.color }} /><span className="truncate">{c.name}</span></span><span>{c.cur} 件{c.ratio != null ? `（×${c.ratio.toFixed(2)}）` : ""}</span></li>
+                  ))}</ul>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </Section>
   );
 }
@@ -273,6 +350,7 @@ export default function AnalyticsPage() {
         <Seg label="言語" value={lang} onChange={setLang} items={[["", "すべての言語"], ["ja", "日本語"], ["en", "英語"]]} testId="filter-lang" />
       </div>
       <Cards f={f} />
+      <Arrivals />
       <Trend f={f} range={range} />
       <Hot f={f} />
       <SourcesPanel f={f} range={range} />

@@ -2,7 +2,8 @@
  *  模擬に無い API が呼ばれたら 404 を返して unhandled に記録する（試験の終わりに空であることを確かめる）。 */
 import type { Page, Route } from "@playwright/test";
 import type { UpdateStatus, UpdateRelease } from "../src/api/update";
-import type { AnalyticsFilters, Compare, HotTopics, Overview, Series, SourcesAnalysis } from "../src/api/analytics";
+import type { AnalyticsFilters, Compare, HotTopics, Overview, Series, SourcesAnalysis, TrendStats } from "../src/api/analytics";
+import type { EventDetail, EventRow } from "../src/api/events";
 import type { Digest, EntityDetail, EntityRow, NewsHome, NewsItem, NewsPrefs, NewsRuntimeSettings } from "../src/api/news";
 
 const NOW = Date.now();
@@ -44,7 +45,7 @@ export const ENTITY_DETAIL: EntityDetail = {
 export const ITEMS: NewsItem[] = [
   mk(1, { entities: [{ id: 1, name: "llama.cpp", type: "software" }, { id: 2, name: "Qwen 3.5", type: "model" }, { id: 5, name: "量子化", type: "tech" }], title: "llama.cpp の新しい量子化が入りました", summary: "GPU が無くても動く軽い量子化。速度と精度の比較が公開されました。", image_url: "https://img.example.test/1.png", topics: ["llama.cpp", "量子化"] }),
   mk(2, { title: "画像のない記事: ローカル LLM の運用メモ", summary: "画像の部分は出さず、細い線だけが付きます。", topics: ["運用"] }),
-  mk(3, { entities: [{ id: 1, name: "llama.cpp", type: "software" }], kind: "release", source: "llama.cpp", source_key: "llama-cpp", title: "llama.cpp b9000 を公開", summary: "新しい量子化と修正。", topics: ["llama.cpp"] }),
+  mk(3, { event: { id: 1, others: 3, sources: 4, primary: true }, entities: [{ id: 1, name: "llama.cpp", type: "software" }], kind: "release", source: "llama.cpp", source_key: "llama-cpp", title: "llama.cpp b9000 を公開", summary: "新しい量子化と修正。", topics: ["llama.cpp"] }),
   mk(4, { kind: "forum", source: "フォーラム", source_key: "forum", title: "24GB でどこまで動くか", summary: "実測の報告が集まっています。", channel: "infra", topics: ["VRAM"] }),
   mk(5, { kind: "model", source: "Hugging Face", source_key: "hf", title: "新しい GGUF モデルが話題に", summary: "小さくて速いモデル。", image_url: "https://img.example.test/2.png", channel: "ai", topics: ["GGUF"] }),
   mk(6, { title: "NAS で動かす小さなサーバー", summary: "非力な機器でニュースを集める話。", channel: "infra", topics: ["NAS"] }),
@@ -95,7 +96,7 @@ export const SETTINGS: NewsRuntimeSettings = {
   digest_daily: { enabled: true, time: "06:30" }, digest_weekly: { enabled: true, weekday: 0, time: "07:00" }, quiet: { enabled: false, start: "01:00", end: "05:00" },
   rest: { enabled: false, start: "01:00", end: "06:00", mode: "keep_memory" }, storage: { flush_minutes: 30, max_items: 1000, max_mb: 128, log_file: false, access_log: false },
   llm: { digest_model: "example/free-model:free", gist_enabled: false, gist_model: "example/free-model:free", digest_focus: "", prep_enabled: true, prep_model: "example/free-model:free", prep_max_per_run: 100, daily_limit: 800, minute_limit: 15,
-    extract_enabled: true, fallback_models: [], quota: { prep: 300, gist: 150, digest: 20, card: 200, trend: 10, spare: 120 }, night_from: 21, backfill_enabled: true,
+    extract_enabled: true, fallback_models: [], quota: { prep: 300, gist: 150, digest: 20, card: 150, trend: 10, event: 100, spare: 70 }, night_from: 21, backfill_enabled: true,
     gateway: { enabled: false, base_url: "", model: "auto", first: true, batch: 10, timeout_seconds: 300, minute_limit: 6, cooldown_minutes: 10 } },
 };
 
@@ -131,12 +132,13 @@ export const HOT: HotTopics = {
   window_hours: 24, baseline_days: 28, enough_history: true, spark_days: DAYS7,
   top: [hot("rocm", "ROCm", 6.1, 14, 2.1, 5, [1, 2, 1, 3, 2, 4, 14, 14]), hot("qwen", "Qwen", 4.4, 11, 3, 4, [2, 3, 2, 3, 4, 3, 5, 11]), hot("gguf", "GGUF", 3.2, 8, 2, 3, [1, 1, 2, 1, 2, 2, 3, 8]),
     hot("vulkan", "Vulkan", 2.5, 6, 1.5, 3, [1, 1, 1, 2, 1, 1, 2, 6]), hot("nas", "NAS", 2.1, 5, 1, 2, [0, 1, 1, 0, 1, 1, 2, 5]), hot("llama.cpp", "llama.cpp", 1.9, 9, 5, 4, [4, 5, 5, 6, 5, 4, 6, 9]),
-    hot("ollama", "Ollama", 1.7, 5, 2, 3, [2, 2, 1, 2, 2, 3, 2, 5]), hot("radeon", "Radeon", 1.5, 4, 1.4, 2, [1, 1, 2, 1, 1, 2, 1, 4]), hot("wayland", "Wayland", 1.2, 4, 1.8, 2, [1, 2, 2, 1, 2, 1, 2, 4]), hot("mesa", "Mesa", 1.1, 3, 1, 2, [1, 0, 1, 1, 0, 1, 1, 3])],
+    hot("ollama", "Ollama", 1.7, 5, 2, 3, [2, 2, 1, 2, 2, 3, 2, 5]), hot("radeon", "Radeon", 1.5, 4, 1.4, 2, [1, 1, 2, 1, 1, 2, 1, 4]), hot("wayland", "Wayland", 1.2, 4, 1.8, 2, [1, 2, 2, 1, 2, 1, 2, 4]), { ...hot("entity:2", "Qwen 3.5", 1.1, 6, 2, 3, [1, 0, 1, 1, 0, 1, 1, 6]), kind: "entity", entity_id: 2, entity_type: "model" }],
   new: [hot("zorblax", "Zorblax", null, 4, 0, 3, [0, 0, 0, 0, 0, 0, 0, 4])],
   fields: [{ channel: "ai", name: "AI・LLM", color: "#7c3aed", top: [hot("qwen", "Qwen", 4.4, 11, 3, 4, [2, 3, 2, 3, 4, 3, 5, 11])] }, { channel: "infra", name: "インフラ", color: "#0ea5e9", top: [hot("nas", "NAS", 2.1, 5, 1, 2, [0, 1, 1, 0, 1, 1, 2, 5])] }],
   method: "",
 };
-export const OVERVIEW: Overview = { today: 412, today_indep: 361, last24h: 980, last24h_indep: 870, sources_today: 57, sources_8d: 80, prev7_daily_avg: 790, prev7_days: 7, ratio_24h: 1.24, ratio_today: 0.52, day: DAYS7[6], built_at: ago(1), unsaved: 0 };
+export const OVERVIEW: Overview = { today: 412, today_indep: 361, last24h: 980, last24h_indep: 870, sources_today: 57, sources_8d: 80, prev7_daily_avg: 790, prev7_days: 7, ratio_24h: 1.24, ratio_today: 0.52, day: DAYS7[6], built_at: ago(1), unsaved: 0,
+  events_24h: 41, independent_events_24h: 612, event_members_24h: 140, singles_24h: 571, independent_events_prev_daily: 530.4 };
 const KINDS = [["news", "ニュース"], ["release", "更新"], ["model", "モデル"], ["forum", "フォーラム"], ["reddit", "Reddit"]] as const;
 export const ANA_FILTERS: AnalyticsFilters = { kinds: KINDS.map(([id, label]) => ({ id, label })), langs: [{ id: "ja", label: "日本語" }, { id: "en", label: "英語" }], channels: CHANNELS.map((c) => ({ id: c.id, name: c.name, color: c.color })) };
 const mockSeries = (p: URLSearchParams): Series => {
@@ -156,6 +158,34 @@ const SOURCE_ROWS: SourcesAnalysis["sources"] = Array.from({ length: 8 }, (_, i)
 export const COMPARE: Compare = { by: "kind", this_week: [DAYS7[0], DAYS7[6]], prev_week: ["2026-11-10", "2026-11-16"], total_this: 5400, total_prev: 4900,
   rows: [{ key: "news", label: "ニュース", this: 4000, prev: 3500, this_indep: 3600, prev_indep: 3200, delta: 500, pct: 14 }, { key: "release", label: "更新", this: 900, prev: 1000, this_indep: 880, prev_indep: 990, delta: -100, pct: -10 },
     { key: "model", label: "モデル", this: 500, prev: 400, this_indep: 480, prev_indep: 390, delta: 100, pct: 25 }] };
+
+export const TREND: TrendStats = {
+  window_hours: 24, enough_history: true, ratio: 1.24,
+  cur: { n: 980, indep: 870, dup_pct: 11.2, img_pct: 63.4, lag_min: 38.5, fast_pct: 71.2, primary_n: 52, primary_pct: 5.3 },
+  prev: { n: 5530, indep: 5000, dup_pct: 9.6, img_pct: 66.1, lag_min: 45.2, fast_pct: 66, primary_n: 290, primary_pct: 5.2, n_per_day: 790, days: 7 },
+  channels: [{ channel: "ai", name: "AI・LLM", color: "#7c3aed", cur: 210, prev_per_day: 140, ratio: 1.5 }, { channel: "infra", name: "インフラ", color: "#0ea5e9", cur: 90, prev_per_day: 100, ratio: 0.9 }],
+  new_entities: [{ id: 7, name: "Zorblax Labs", type: "org", count: 5 }, { id: 8, name: "Quasar 7", type: "product", count: 3 }],
+  surging_entities: [{ entity_id: 2, label: "Qwen 3.5", entity_type: "model", score: 3.2, count: 14, baseline_mean: 2.1, sources: 5 }],
+  events: { events_24h: 41, independent_events_24h: 612, event_members_24h: 140, singles_24h: 571, independent_events_prev_daily: 530.4 },
+  built_at: ago(1),
+  note: { day: new Date(NOW).toLocaleDateString("en-CA"), slot: 0, model: "gateway:auto", created_at: ago(1), lines: [
+    { text: "直近 24 時間の記事は 980 件で、前の 7 日の 1 日平均 790 件を上回っています。", refs: [{ key: "F1", label: "直近 24 時間の記事は 980 件", kind: "stat" }] },
+    { text: "Qwen 3.5 の話題が複数の出どころで大きなイベントになっています。", refs: [{ key: "V1", label: "イベント: Qwen 3.5 が公開", kind: "event", to: "/events/1" }, { key: "S1", label: "急に増えた物: Qwen 3.5", kind: "entity", to: "/entities/2" }] }] },
+};
+const ev = (id: number, over: Partial<EventRow>): EventRow => ({
+  id, rep_id: id, title: `見本のイベント ${id}`, n_articles: 3, n_sources: 3, has_primary: false, first_at: ago(5), last_at: ago(1), summary: "", summary_model: "",
+  entities: [{ id: 2, name: "Qwen 3.5", type: "model", n: 3 }, { id: 3, name: "Alibaba", type: "org", n: 2 }], ...over });
+export const EVENTS: EventRow[] = [
+  ev(1, { title: "Qwen 3.5 が公開された（公式・報道・日本語の記事）", n_articles: 6, n_sources: 5, has_primary: true, first_at: ago(4), summary: "Alibaba が Qwen 3.5 を公開し、複数の媒体が性能と対応環境を報じている。", summary_model: "gateway:auto" }),
+  ev(2, { title: "llama.cpp b9000 の量子化の更新", n_articles: 3, n_sources: 2, first_at: ago(9) }), ev(3, { title: "NAS 向けの小さなサーバーが話題", n_articles: 2, n_sources: 2, first_at: ago(30), entities: [] }),
+];
+const EVENT_DETAIL: EventDetail = { ...EVENTS[0], hours_since_first: 4, origins: [{ origin: "official", label: "公式", n: 1 }, { origin: "press", label: "報道", n: 4 }, { origin: "community", label: "コミュニティ", n: 1 }],
+  articles: [
+    { id: 11, title: "Alibaba releases Qwen 3.5", url: "https://news.example.test/e/1", source: "Qwen Blog", source_key: "qwen", kind: "release", origin: "official", origin_label: "公式", published_at: ago(4), summary: "Qwen 3.5 is available today.", is_rep: true, is_dup: false },
+    { id: 12, title: "Qwen 3.5 open weights land on Hugging Face", url: "https://news.example.test/e/2", source: "見本の報道 1", source_key: "p1", kind: "news", origin: "press", origin_label: "報道", published_at: ago(3.5), summary: "", is_rep: false, is_dup: false },
+    { id: 13, title: "アリババ、Qwen 3.5 を公開", url: "https://news.example.test/e/3", source: "見本の報道 2", source_key: "p2", kind: "news", origin: "press", origin_label: "報道", published_at: ago(3), summary: "新しいモデルが公開された。", is_rep: false, is_dup: false },
+    { id: 14, title: "Qwen 3.5 の量子化を試した", url: null, source: "見本のフォーラム", source_key: "f1", kind: "forum", origin: "community", origin_label: "コミュニティ", published_at: ago(1), summary: "", is_rep: false, is_dup: false },
+  ] };
 
 export interface MockState {
   authenticated: boolean; setupNeeded: boolean; setupTokenRequired?: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
@@ -186,7 +216,8 @@ const diagnostics = (state: MockState) => ({
     quota: state.settings.llm.quota, spare_used: 4, leftover: 730, night_from: 21, extract_enabled: true, extract_waiting: 33,
     chain: { gateway_down_in_seconds: 420, chain: ["example/free-model:free", "example/second-model:free"], current: "example/second-model:free", index: 1, return_in_seconds: 1500, events: [{ at: ago(0.4), kind: "switch", model: "example/second-model:free", reason: "example/free-model:free が直近 5 回で 3 回失敗（429）" }] },
     gateway: { enabled: true, base_set: true, key_set: true, calls: 6, model: "auto", batch: 10 },
-    knowledge: { entities: 128, claims: 340, extracted_articles: 410 } },
+    knowledge: { entities: 128, claims: 340, extracted_articles: 410 },
+    events: { events: 41, summarized: 9, summary_waiting: 2, summary_gave_up: 1, trend_note_day: new Date(NOW).toLocaleDateString("en-CA"), trend_note_slot: 0 } },
   storage: {
     io: { rchar: 9_000_000, wchar: 350_000, read_bytes: 4_000_000, write_bytes: 1_048_576, syscw: 900 },
     series: Array.from({ length: 96 }, (_, i) => ({ t: new Date(NOW - (96 - i) * 900_000).toISOString(), write_bytes: i % 24 === 5 ? 524_288 : 0, read_bytes: 0, wchar: 0, cpu_pct: 0.1, rss: 120_000_000 })),
@@ -232,6 +263,13 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("PUT", "/auth/hub")) return json(route, { ...(body as object), restart_needed: true });
 
     if (is("GET", "/analytics/filters")) return json(route, ANA_FILTERS);
+    if (is("GET", "/analytics/trend")) return json(route, state.analyticsEmpty ? { ...TREND, note: null, new_entities: [], surging_entities: [], channels: [] } : TREND);
+    if (is("GET", "/events")) {
+      const primary = url.searchParams.get("primary") === "true";
+      const items = EVENTS.filter((e) => !primary || e.has_primary);
+      return json(route, { items, total: items.length });
+    }
+    if (is("GET", /^\/events\/\d+$/)) return path.endsWith("/99") ? json(route, { detail: "そのイベントは見つかりません" }, 404) : json(route, { ...EVENT_DETAIL, id: Number(path.split("/")[2]) });
     if (is("GET", "/analytics/overview")) return json(route, state.analyticsEmpty ? { ...OVERVIEW, today: 0, today_indep: 0, last24h: 0, sources_today: 0, prev7_daily_avg: null, ratio_24h: null } : OVERVIEW);
     if (is("GET", "/analytics/series")) return json(route, state.analyticsEmpty ? { ...mockSeries(url.searchParams), series: [], total: 0 } : mockSeries(url.searchParams));
     if (is("GET", "/analytics/hot-topics")) return json(route, state.analyticsEmpty ? { ...HOT, enough_history: false, baseline_days: 1, top: [], new: [], fields: [] } : HOT);
@@ -291,7 +329,7 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("GET", "/news/settings")) return json(route, {
       settings: state.settings, weekdays: ["月", "火", "水", "木", "金", "土", "日"], interval_minutes: 30, prep_calls_today: 12, prep_batch: 30,
       rest_state: { enabled: state.settings.rest.enabled, active: state.restActive, mode: state.settings.rest.mode, ends_at: state.restActive ? "2026-11-25T06:00:00" : null },
-      quota_labels: { prep: "下ごしらえと取り出し", gist: "要約", digest: "まとめ", card: "知識カード", trend: "傾向の解説", spare: "予備" },
+      quota_labels: { prep: "下ごしらえと取り出し", gist: "要約", digest: "まとめ", card: "知識カード", trend: "傾向の解説", event: "イベントの要約", spare: "予備" },
       model_chain: { gateway_down_in_seconds: null, chain: ["example/free-model:free"], current: "example/free-model:free", index: 0, return_in_seconds: null, paid: [], events: [] },
       gateway_key_set: state.gatewayKeySet,
       rest_modes: { keep_memory: "集め続けてメモリに保持", stop_all: "集める・分析・保存をすべて休む", flush_at_limit: "集め続けて上限のときだけ一括で保存" },

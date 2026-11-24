@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text
 
-from qnapnewshub import channels, entities as entities_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, updater, writer
+from qnapnewshub import channels, entities as entities_mod, events as events_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, updater, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.config import data_dir
 from qnapnewshub.db import NewsFetchLog, NewsItem
@@ -156,7 +156,7 @@ def llm_section(db) -> dict:
             "chain": llm_models.status(), "daily_models": llm_models.load_daily(), "extract_enabled": cfg["extract_enabled"],
             "gateway": {"enabled": cfg["gateway"]["enabled"], "base_set": bool(cfg["gateway"]["base_url"]), "key_set": st["gateway_key_set"], "calls": st["gateway_calls"],
                         "model": cfg["gateway"]["model"], "batch": cfg["gateway"]["batch"]},
-            "knowledge": entities_mod.summary(db), "extract_waiting": int(extract_waiting)}
+            "knowledge": entities_mod.summary(db), "extract_waiting": int(extract_waiting), "events": events_mod.diag(db)}
 
 
 def storage_section() -> dict:

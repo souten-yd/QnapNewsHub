@@ -188,6 +188,10 @@ class AnaCount(Base):
     n: Mapped[int] = mapped_column(Integer, default=0)
     indep: Mapped[int] = mapped_column(Integer, default=0)
     img: Mapped[int] = mapped_column(Integer, default=0)
+    # 発表から取得までの遅れ（秒）。0〜48 時間に収まる記事だけ（lag_n 件）。lag_fast は 1 時間以内の件数（新着の傾向 7.5）
+    lag_sum: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    lag_n: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    lag_fast: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class AnaTopic(Base):
@@ -231,6 +235,64 @@ class AnaFetch(Base):
     new: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class AnaEntity(Base):
+    """物の日ごと（d）・時間ごと（h）の記事の数（物のホットトピック・新着の傾向）。n は記事、indep は近い重複を除いた数。取り出しが保存されるたびに増減を足す。"""
+
+    __tablename__ = "ana_entity"
+    __table_args__ = {"sqlite_with_rowid": False}
+    grain: Mapped[str] = mapped_column(String(1), primary_key=True)
+    t: Mapped[str] = mapped_column(String(13), primary_key=True)
+    entity_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    indep: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Event(Base):
+    """イベント＝同じ出来事を報じる 2 件以上の記事のまとまり（events.py。ARCHITECTURE 4 章）。1 件だけの記事は行にしない。
+    rep_id は代表の記事（一次情報があればその最初、無ければ最初の記事）で、title はその題の控え。summary は LLM の要約（記事 3 件以上・出どころ 2 以上のとき 1 回）。
+    entities は物の上位（JSON の配列 [{id, name, type, n}]）。"""
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rep_id: Mapped[int] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(400), default="")
+    n_articles: Mapped[int] = mapped_column(Integer, default=0)
+    n_sources: Mapped[int] = mapped_column(Integer, default=0)
+    has_primary: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    first_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    entities: Mapped[str] = mapped_column(Text, default="[]")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    summary_model: Mapped[str] = mapped_column(String(200), default="")
+    summary_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    summary_tries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class EventArticle(Base):
+    """イベント × 記事（1 つの記事は 1 つのイベントだけ）。記事・イベントが消えれば一緒に消える。"""
+
+    __tablename__ = "event_articles"
+
+    article_id: Mapped[int] = mapped_column(ForeignKey("news_items.id", ondelete="CASCADE"), primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
+
+
+class TrendNote(Base):
+    """「今日の傾向」の解説（LLM。trend.py）。day は地域の日付、slot は 1 日の何回目か（0・1）。lines は検査を通った行（JSON: text・refs）、stats は材料にした数字の控え。"""
+
+    __tablename__ = "trend_notes"
+    __table_args__ = (UniqueConstraint("day", "slot", name="uq_trend_note"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[str] = mapped_column(String(10), index=True)
+    slot: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    model: Mapped[str] = mapped_column(String(200), default="")
+    lines: Mapped[str] = mapped_column(Text, default="[]")
+    stats: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class AnaMeta(Base):
     """集計の表の状態（sig: 作ったときのチャンネル・出どころの設定の指紋、built_at）。"""
 
@@ -244,7 +306,9 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("news_items", "img_prompt", "TEXT DEFAULT ''"), ("news_items", "prep_tries", "INTEGER NOT NULL DEFAULT 0"),
                                         ("news_items", "canon_url", "VARCHAR(1000) DEFAULT ''"), ("news_items", "guid", "VARCHAR(500) DEFAULT ''"),
                                         ("news_items", "simhash", "BIGINT"), ("news_items", "dup_of", "INTEGER"),
-                                        ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0")]
+                                        ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0"),
+                                        ("ana_count", "lag_sum", "BIGINT NOT NULL DEFAULT 0"), ("ana_count", "lag_n", "INTEGER NOT NULL DEFAULT 0"),
+                                        ("ana_count", "lag_fast", "INTEGER NOT NULL DEFAULT 0")]
 # 後から足した索引（既にあるファイルにも足す）
 _LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at")]
 
