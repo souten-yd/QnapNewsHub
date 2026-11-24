@@ -12,6 +12,7 @@
 - 設計（正）: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - これまでの設計: [docs/DESIGN.md](docs/DESIGN.md)・[docs/KNOWLEDGE.md](docs/KNOWLEDGE.md)
 - 計画: [docs/PLAN.md](docs/PLAN.md)
+- 引き継ぎ（今の状態・次にやること）: [docs/HANDOFF.md](docs/HANDOFF.md)
 - 無料の LLM の件数の調査: [docs/research-free-llm-batch.md](docs/research-free-llm-batch.md)
 - 開発の決まり: [AGENTS.md](AGENTS.md)
 
