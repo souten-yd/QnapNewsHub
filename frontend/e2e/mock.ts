@@ -75,8 +75,17 @@ export const SETTINGS: NewsRuntimeSettings = {
 
 const managed = (i: number, over: Record<string, unknown> = {}) => ({
   key: `rss:${i}`, kind: "rss", format: "rss", name: `見本の取得先 ${i}`, value: `https://feed${i}.example.test/rss`, domain: `feed${i}.example.test`, enabled: true, interval: 30, groups: ["ai"],
-  last_at: ago(0.2), last_ok_at: ago(0.2), last_ok: true, last_error: "", last_count: 20, last_status: 200, last_skipped: "", week: [100, 100, 90, 100, 100, 100, 100], total: 120, ...over,
+  last_at: ago(0.2), last_ok_at: ago(0.2), last_ok: true, last_error: "", last_count: 20, last_status: 200, last_skipped: "", week: [100, 100, 90, 100, 100, 100, 100], total: 120,
+  fixed: false, origin: "press", origin_set: false, category: "",
+  poll: { interval: 45, auto: true, backoff: false, fails: 0, next_at: new Date(NOW + 25 * 60_000).toISOString(), hit_rate: 80, conditional: 10, hits: 8, has_etag: true }, ...over,
 });
+
+const IMPORT_ROWS = [
+  { line: 2, name: "見本のニュース", url: "https://import1.example.test/rss", category: "ニュース", origin: "press", origin_guess: "press", interval: 60, enabled: true, kind: "rss", status: "new", reason: "" },
+  { line: 3, name: "見本の公式ブログ", url: "https://blog.import2.example.test/feed", category: "企業", origin: "", origin_guess: "official", interval: 0, enabled: true, kind: "rss", status: "new", reason: "http を https に直しました" },
+  { line: 4, name: "見本の取得先 1", url: "https://feed1.example.test/rss", category: "", origin: "", origin_guess: "other", interval: 0, enabled: true, kind: "rss", status: "duplicate", reason: "すでに登録されています" },
+  { line: 5, name: "使えない行", url: "ftp://bad.example.test/x", category: "", origin: "", origin_guess: "other", interval: 0, enabled: true, kind: "rss", status: "invalid", reason: "https の URL ではありません" },
+];
 
 export interface MockState {
   authenticated: boolean; setupNeeded: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
@@ -97,9 +106,9 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 
 const diagnostics = (state: MockState) => ({
   generated_at: ago(0),
-  fetch: { total: 3, stalled: state.diagProblems ? 1 : 0, sources: [
-    { key: "rss:https://feed2.example.test/rss", name: "失敗中の取得先", kind: "rss", ok: false, reason: "http", error: "HTTP 500", last_ok_at: ago(30), last_at: ago(0.2), interval_min: 30, new_7d: 0, fail_streak: 5, stalled: true, problems: ["失敗が 5 回続いています"], fix: "取得先の管理で URL を確かめるか、無効にしてください" },
-    { key: "rss:https://feed1.example.test/rss", name: "見本の取得先 1", kind: "rss", ok: true, reason: "", error: "", last_ok_at: ago(0.2), last_at: ago(0.2), interval_min: 30, new_7d: 24, fail_streak: 0, stalled: false, problems: [], fix: "" }] },
+  fetch: { total: 3, stalled: state.diagProblems ? 1 : 0, hit_rate: 80, hits_304: 8, conditional: 10, backoff: 1, sources: [
+    { key: "rss:https://feed2.example.test/rss", name: "失敗中の取得先", kind: "rss", ok: false, reason: "http", error: "HTTP 500", last_ok_at: ago(30), last_at: ago(0.2), interval_min: 240, interval_auto: false, backoff: true, hit_rate: null, hits_304: 0, conditional: 0, new_7d: 0, fail_streak: 5, stalled: true, problems: ["失敗が 5 回続いています"], fix: "取得先の管理で URL を確かめるか、無効にしてください" },
+    { key: "rss:https://feed1.example.test/rss", name: "見本の取得先 1", kind: "rss", ok: true, reason: "", error: "", last_ok_at: ago(0.2), last_at: ago(0.2), interval_min: 45, interval_auto: true, backoff: false, hit_rate: 80, hits_304: 8, conditional: 10, new_7d: 24, fail_streak: 0, stalled: false, problems: [], fix: "" }] },
   llm: { day: new Date(NOW).toLocaleDateString("en-CA"), calls: { prep: 12, digest: 2, gist: 0 }, total: 14, daily_limit: 300, minute_limit: 10, failed: 1, last_error: "HTTP 429", key_set: state.keySet,
     models: [{ model: "example/free-model:free", ok: 12, fail: 2, success_pct: 86, rate_limited: 1, avg_ms: 4200 }], rate_limited: 1, unprocessed: 7, prep_enabled: true, prep_model: "example/free-model:free" },
   storage: {
@@ -177,8 +186,10 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     });
     if (is("GET", "/news/sources/manage")) return json(route, {
       items: [managed(1), managed(2, { name: "失敗中の取得先", last_ok: false, last_error: "接続できませんでした", last_status: null, week: [100, 80, 0, 0, null, 0, 0] }), managed(3, { enabled: false, name: "止めている取得先" })],
-      groups: [{ id: "ai", label: "AI・LLM", hint: "", count: 3 }], default_interval: 30, reddit_key: false, limit: 200, interval_range: [15, 1440], formats: { rss: "RSS／Atom" }, running: false,
+      groups: [{ id: "ai", label: "AI・LLM", hint: "", count: 3 }], default_interval: 30, reddit_key: false, limit: 200, interval_range: [15, 1440], formats: { rss: "RSS／Atom" }, origins: { official: "公式", press: "報道", blog: "ブログ", community: "コミュニティ", paper: "論文", other: "その他" }, running: false,
     });
+    if (is("POST", "/news/sources/import/preview")) return json(route, { format: "csv", rows: IMPORT_ROWS, counts: { new: 2, duplicate: 1, invalid: 1 }, room: 400, total: 4 });
+    if (is("POST", "/news/sources/import/commit")) return json(route, { added: (body as { rows: unknown[] }).rows.length, duplicate: 0, invalid: 0, failed: [], mode: (body as { mode: string }).mode });
     if (is("GET", "/news/sources/manage/detail")) return json(route, { item: managed(1), history: [{ at: ago(0.2), ok: true, status: 200, count: 20, new: 2, ms: 420, error: "", skipped: "" }], articles: [{ id: 1, title: ITEMS[0].title, url: ITEMS[0].url!, published_at: ITEMS[0].published_at }] });
     if (is("GET", "/news/presets")) return json(route, { groups: [{ id: "ai", label: "AI・LLM", hint: "", count: 1 }], items: [{ id: "p1", group: "ai", kind: "rss", name: "見本の目録", value: "https://preset.example.test/rss", lang: "ja", note: "", key: false, verified: "2026-11-24", recommended: true }], verified: "2026-11-24" });
     if (is("GET", "/news/settings")) return json(route, {

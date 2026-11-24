@@ -46,6 +46,7 @@ export function NewsCard({ item, channel, label, hideRemoves = false, dimRead = 
           <span>{style.icon} {style.label}</span>
           <span className="src">{item.source}</span>
           <span>· {relativeTime(item.published_at)}</span>
+          {!!item.also && <span title={(item.also_sources ?? []).join("、")} data-testid="news-also">· ほか {item.also} か所が報道</span>}
         </p>
         <h3 className="card-title"><ArticleLink item={item} onOpen={open}>{item.title}</ArticleLink></h3>
         {item.summary && <p className="card-sum">{item.summary}</p>}

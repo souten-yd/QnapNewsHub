@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text
 
-from qnapnewshub import channels, fetchlog, llm, logbuf, metrics, prep, rest, service, settings, sourcemgr, sources, store, writer
+from qnapnewshub import channels, fetchlog, llm, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.config import data_dir
 from qnapnewshub.db import NewsFetchLog, NewsItem
@@ -84,12 +84,15 @@ def fetch_section(db) -> dict:
     news = {k: int(n or 0) for k, n in db.execute(select(NewsFetchLog.source_key, func.sum(NewsFetchLog.new)).where(NewsFetchLog.at >= since_n).group_by(NewsFetchLog.source_key))}
     runs = {k: int(n or 0) for k, n in db.execute(select(NewsFetchLog.source_key, func.count(NewsFetchLog.id)).where(NewsFetchLog.at >= since_n).group_by(NewsFetchLog.source_key))}
     streaks = _streaks(db)
-    rows, stalled = [], 0
+    rows, stalled, hits, conds = [], 0, 0, 0
     for e in sourcemgr.entries(cfg):
         if not e["enabled"]:
             continue
         st, live = stats.get(e["key"]) or {}, mem.get(e["key"]) or {}
-        every = (e["interval"] or default_min) * 60
+        snap = polling.snapshot(e["key"], float(e["interval"] or default_min), e["fixed"])
+        every = snap["interval"] * 60      # いまの間隔（自動で伸びていれば、その値。伸びた分を「止まった」と見なさない）
+        hits += snap["hits"]
+        conds += snap["conditional"]
         last_ok = st.get("last_ok_at") or live.get("ok_at") or ""
         error = st.get("last_error") or live.get("error") or ""
         problems = []
@@ -107,11 +110,13 @@ def fetch_section(db) -> dict:
                 pass
         stalled += bool(problems)
         rows.append({"key": redact_key(e["key"]), "name": e["name"], "kind": e["kind"], "ok": st.get("last_ok", live.get("ok")), "reason": reason_of(error),
-                     "error": logbuf.redact(error)[:160], "last_ok_at": last_ok, "last_at": st.get("last_at") or live.get("at", ""), "interval_min": e["interval"] or default_min,
+                     "error": logbuf.redact(error)[:160], "last_ok_at": last_ok, "last_at": st.get("last_at") or live.get("at", ""), "interval_min": snap["interval"], "interval_auto": snap["auto"], "backoff": snap["backoff"], "hit_rate": snap["hit_rate"], "hits_304": snap["hits"],
+                     "conditional": snap["conditional"],
                      "new_7d": news.get(e["key"], 0), "fail_streak": streak, "stalled": bool(problems), "problems": problems,
                      "fix": "取得先の管理で URL を確かめるか、無効にしてください" if problems else ""})
     rows.sort(key=lambda r: (not r["stalled"], r["name"]))
-    return {"total": len(rows), "stalled": stalled, "sources": rows[:300]}
+    return {"total": len(rows), "stalled": stalled, "hit_rate": round(hits * 100 / conds) if conds else None, "hits_304": hits, "conditional": conds,
+            "backoff": sum(1 for r in rows if r["backoff"]), "sources": rows[:300]}
 
 
 def _streaks(db) -> dict[str, int]:

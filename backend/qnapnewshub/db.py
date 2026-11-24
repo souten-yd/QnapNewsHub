@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event, inspect, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -61,6 +61,11 @@ class NewsItem(Base):
     img_prompt: Mapped[str] = mapped_column(Text, default="", server_default="")
     # 下ごしらえの試行の回数（失敗のたびに +1。PREP_DONE なら済み。3 回で諦めて次の取得でも送らない）
     prep_tries: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # 重複の除去（app dedup.py）: 正規化した URL・取得元の GUID・題＋抜粋の SimHash（符号つき 64bit）・代表の記事の id（NULL なら自分が代表）
+    canon_url: Mapped[str] = mapped_column(String(1000), default="", server_default="")
+    guid: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    simhash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    dup_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class NewsAction(Base):
@@ -114,7 +119,11 @@ class NewsFetchLog(Base):
 
 # 後から足した列（既にあるファイルにも足す。そのファイルを初めて開いたとき 1 回）。（表, 列, 宣言）
 _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOLEAN NOT NULL DEFAULT 0"), ("news_items", "summary_ja", "TEXT DEFAULT ''"),
-                                        ("news_items", "img_prompt", "TEXT DEFAULT ''"), ("news_items", "prep_tries", "INTEGER NOT NULL DEFAULT 0")]
+                                        ("news_items", "img_prompt", "TEXT DEFAULT ''"), ("news_items", "prep_tries", "INTEGER NOT NULL DEFAULT 0"),
+                                        ("news_items", "canon_url", "VARCHAR(1000) DEFAULT ''"), ("news_items", "guid", "VARCHAR(500) DEFAULT ''"),
+                                        ("news_items", "simhash", "BIGINT"), ("news_items", "dup_of", "INTEGER")]
+# 後から足した索引（既にあるファイルにも足す）
+_LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at")]
 
 _engines: dict[str, Engine] = {}
 _lock = threading.Lock()
@@ -129,6 +138,10 @@ def _add_missing_columns(conn) -> None:
     for table, column, decl in _LATE_COLUMNS:
         if column not in {c["name"] for c in have.get_columns(table)}:
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {decl}"))
+    have = inspect(conn)
+    for table, column in _LATE_INDEXES:
+        if column in {c["name"] for c in have.get_columns(table)}:
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} ON {table} ({column})"))
 
 
 def _open(file: Path) -> Engine:

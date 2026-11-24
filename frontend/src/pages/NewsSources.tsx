@@ -8,7 +8,8 @@ import { useToasts } from "../stores";
 import { CheckResultView, SiteAdder } from "../features/news/NewsSourceTools";
 import { FeedMaker } from "../features/news/FeedMaker";
 import { PresetPanel } from "../features/news/NewsPresetPanel";
-import { INTERVAL_CHOICES, STATE_LABEL, failRate, intervalLabel, stateOf, type SourceState } from "../features/news/sourceUtil";
+import { SourceImport } from "../features/news/SourceImport";
+import { INTERVAL_CHOICES, STATE_LABEL, failRate, intervalLabel, nextLabel, pollLabel, stateOf, type SourceState } from "../features/news/sourceUtil";
 
 /** 取得先の管理（/news/sources）。ニュースの取得先（RSS・Atom・一覧の巡回・GitHub・Steam・arXiv・Reddit など）の一覧・実績・通信確認・有効/無効・間隔・追加と削除。
  *  2026-11-24 利用者「設定の中にボタンを置き、別の管理ページに飛ばして、疎通確認だったりとか、これまでの取得実績、最終取得日時などを確認、サイトごとに確認できたりとか、新しいサイトの追加、削除などができるように」。 */
@@ -44,8 +45,18 @@ function IntervalSelect({ value, def, disabled, onChange, label }: { value: numb
   );
 }
 
-function Detail({ s, canEdit, def, groupName, onToggle, onInterval, onDelete }: {
-  s: ManagedSource; canEdit: boolean; def: number; groupName: (id: string) => string; onToggle: () => void; onInterval: (m: number) => void; onDelete: () => void;
+function OriginSelect({ s, origins, disabled, onChange }: { s: ManagedSource; origins: Record<string, string>; disabled?: boolean; onChange: (origin: string) => void }) {
+  return (
+    <select aria-label={`${s.name} の出どころの種類`} className={sel} disabled={disabled} value={s.origin_set ? s.origin : "auto"} data-testid="news-origin" onChange={(e) => onChange(e.target.value)}>
+      <option value="auto">{origins[s.origin] ?? s.origin}（推定）</option>
+      {Object.entries(origins).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+    </select>
+  );
+}
+
+function Detail({ s, canEdit, def, groupName, origins, onToggle, onInterval, onFixed, onOrigin, onDelete }: {
+  s: ManagedSource; canEdit: boolean; def: number; groupName: (id: string) => string; origins: Record<string, string>; onToggle: () => void; onInterval: (m: number) => void;
+  onFixed: (fixed: boolean) => void; onOrigin: (origin: string) => void; onDelete: () => void;
 }) {
   const { data } = useManageDetail(s.key);
   const [check, setCheck] = useState<{ busy: boolean; result: CheckResult | null; failed: string }>({ busy: false, result: null, failed: "" });
@@ -61,7 +72,9 @@ function Detail({ s, canEdit, def, groupName, onToggle, onInterval, onDelete }: 
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className={btn} disabled={check.busy} onClick={run} data-testid="news-detail-check">{check.busy ? "確認中…" : "通信確認"}</button>
         {canEdit && <button type="button" className={btn} onClick={onToggle} data-testid="news-detail-toggle">{s.enabled ? "無効にする" : "有効にする"}</button>}
-        {canEdit && <label className="flex items-center gap-1">間隔 <IntervalSelect value={s.interval} def={def} onChange={onInterval} label={`${s.name} の取得の間隔`} /></label>}
+        {canEdit && <label className="flex items-center gap-1">基準の間隔 <IntervalSelect value={s.interval} def={def} onChange={onInterval} label={`${s.name} の取得の間隔`} /></label>}
+        {canEdit && <label className="flex min-h-9 items-center gap-1"><input type="checkbox" checked={s.fixed} onChange={(e) => onFixed(e.target.checked)} data-testid="news-fixed" />間隔を固定する（自動で変えない）</label>}
+        {canEdit && <label className="flex items-center gap-1">出どころ <OriginSelect s={s} origins={origins} onChange={onOrigin} /></label>}
         {canEdit && !confirm && <button type="button" className={`${btn} text-red-600`} onClick={() => setConfirm(true)} data-testid="news-detail-delete">削除</button>}
         {canEdit && confirm && (
           <span className="flex items-center gap-1">この取得先を削除しますか？（取得済みの記事は残ります）
@@ -69,6 +82,10 @@ function Detail({ s, canEdit, def, groupName, onToggle, onInterval, onDelete }: 
             <button type="button" className={btn} onClick={() => setConfirm(false)}>やめる</button></span>
         )}
       </div>
+      <p className="text-zinc-500" data-testid="news-detail-poll">
+        いまの間隔 {pollLabel(s)} · 次の取得 {nextLabel(s)} · 基準の 1/2〜8 倍の範囲で、新着の出る頻度に合わせて自動で変えます（失敗・429・503 では延ばし、上限は 24 時間）。
+        {s.poll.hit_rate !== null && ` 304（変わりなし）の当たり ${s.poll.hit_rate}%（${s.poll.hits} / ${s.poll.conditional} 回）。`}
+      </p>
       {check.result && <CheckResultView result={check.result} testId="news-detail-check-result" />}
       {check.failed && <p role="alert" className="text-red-600">{check.failed}</p>}
       <div>
@@ -83,7 +100,7 @@ function Detail({ s, canEdit, def, groupName, onToggle, onInterval, onDelete }: 
                   <tr key={h.at + h.count + h.error} className="border-t border-zinc-100 align-top dark:border-zinc-800">
                     <td className="whitespace-nowrap px-2 py-1">{when(h.at)}</td>
                     <td className={`px-2 ${h.ok ? "" : "text-red-600 dark:text-red-400"}`}>{h.ok ? (h.skipped ? `見送り: ${h.skipped}` : "成功") : `失敗: ${h.error}`}</td>
-                    <td className="px-2">{h.status ?? "—"}</td><td className="px-2">{h.count}</td><td className="px-2">{h.new}</td><td className="whitespace-nowrap px-2">{(h.ms / 1000).toFixed(1)} 秒</td>
+                    <td className="px-2">{h.status ?? "—"}{h.status === 304 ? "（変わりなし）" : ""}</td><td className="px-2">{h.count}</td><td className="px-2">{h.new}</td><td className="whitespace-nowrap px-2">{(h.ms / 1000).toFixed(1)} 秒</td>
                   </tr>
                 ))}
               </tbody>
@@ -110,7 +127,7 @@ export default function NewsSourcesPage() {
   const { bulk, add } = useManageMutations();
   const toast = useToasts((s) => s.show);
   const canEdit = true;      // ニュースハブの利用者はすべて管理者
-  const [tab, setTab] = useState<"list" | "add">("list");
+  const [tab, setTab] = useState<"list" | "add" | "io">("list");
   const [q, setQ] = useState("");
   const [group, setGroup] = useState("");
   const [status, setStatus] = useState<"" | SourceState>("");
@@ -144,6 +161,8 @@ export default function NewsSourcesPage() {
   const fail = (e: unknown) => toast(e instanceof Error ? e.message : "保存できませんでした", "error");
   const doBulk = (action: "enable" | "disable" | "delete" | "interval", keys: string[], interval?: number, message?: string) =>
     bulk.mutate({ action, keys, interval }, { onSuccess: () => { if (message) toast(message, "success"); setPicked(new Set()); if (action === "delete" && open && keys.includes(open)) setOpen(null); }, onError: fail });
+  const doOrigin = (keys: string[], origin: string) => bulk.mutate({ action: "origin", keys, origin }, { onError: fail });
+  const doFixed = (keys: string[], fixed: boolean) => bulk.mutate({ action: fixed ? "fixed" : "auto", keys }, { onError: fail });
   const doAdd = (list: { kind: string; value: string; name?: string; interval?: number }[]) =>
     add.mutate(list, { onSuccess: (r) => toast(r.added ? `${r.added} 件を足しました` : "すでに入っています", "success"), onError: fail });
   const addGenerated = (f: GeneratedFeed) => doAdd([{ kind: f.kind, value: f.value, name: f.name }]);
@@ -173,7 +192,7 @@ export default function NewsSourcesPage() {
         間隔は取得先ごとに決められます（既定 {intervalLabel(data.default_interval)}）。{!data.reddit_key && " Reddit は API キーが無いので取得しません。"}
       </p>
       <div role="tablist" aria-label="表示" className="flex gap-1.5">
-        {([["list", "取得先の一覧"], ["add", "追加・目録"]] as const).map(([id, label]) => (
+        {([["list", "取得先の一覧"], ["add", "追加・目録"], ["io", "取り込み・書き出し"]] as const).map(([id, label]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} data-testid={`news-tab-${id}`}
             className={`min-h-10 rounded-full border px-4 text-sm ${tab === id ? "border-accent-600 bg-accent-50 font-semibold dark:bg-accent-600/15" : "border-zinc-300 dark:border-zinc-700"}`}>{label}</button>
         ))}
@@ -216,12 +235,15 @@ export default function NewsSourcesPage() {
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                         <button type="button" className="text-left text-sm font-medium break-words" aria-expanded={open === s.key} onClick={() => setOpen(open === s.key ? null : s.key)} data-testid="news-src-open">{s.name}</button>
                         <span className="rounded bg-zinc-100 px-1.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{data.formats[s.format] ?? s.format}</span>
+                        <span className="rounded border border-zinc-300 px-1.5 text-[10px] text-zinc-600 dark:border-zinc-600 dark:text-zinc-300" data-testid="news-src-origin" title={s.origin_set ? "利用者が決めた種類" : "ドメインからの推定"}>{data.origins[s.origin] ?? s.origin}</span>
                         <span className={`text-[11px] font-medium ${STATE_STYLE[st]}`} data-testid="news-src-state">{STATE_LABEL[st]}</span>
                       </div>
                       <p className="break-all text-[11px] text-zinc-500">{s.domain}{s.groups.length > 0 && ` · ${s.groups.slice(0, 2).map(groupName).join(" / ")}`}</p>
                       <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] sm:grid-cols-4 lg:grid-cols-6">
                         <div><dt className="text-zinc-400">最終取得</dt><dd>{when(s.last_at)}</dd></div>
                         <div><dt className="text-zinc-400">最終成功</dt><dd>{when(s.last_ok_at)}</dd></div>
+                        <div><dt className="text-zinc-400">次の取得の予定</dt><dd data-testid="news-src-next">{nextLabel(s)}</dd></div>
+                        <div><dt className="text-zinc-400">いまの間隔</dt><dd data-testid="news-src-poll">{pollLabel(s)}</dd></div>
                         <div className="col-span-2"><dt className="text-zinc-400">直近の結果</dt>
                           <dd className={s.last_ok === false ? "break-words text-red-600 dark:text-red-400" : "break-words"}>{!s.last_at ? "まだ取っていません" : s.last_ok === false ? s.last_error : s.last_skipped ? `見送り: ${s.last_skipped}` : `${s.last_count} 件`}{s.last_status && !s.last_error.includes(String(s.last_status)) ? ` (HTTP ${s.last_status})` : ""}</dd></div>
                         <div><dt className="text-zinc-400">7 日の成功率</dt><dd><WeekBars week={s.week} /></dd></div>
@@ -238,7 +260,8 @@ export default function NewsSourcesPage() {
                   </div>
                   {c && <CheckResultView result={c} testId="news-src-check-result" />}
                   {open === s.key && (
-                    <Detail s={s} canEdit={canEdit} def={data.default_interval} groupName={groupName}
+                    <Detail s={s} canEdit={canEdit} def={data.default_interval} groupName={groupName} origins={data.origins}
+                      onFixed={(f) => doFixed([s.key], f)} onOrigin={(o) => doOrigin([s.key], o)}
                       onToggle={() => doBulk(s.enabled ? "disable" : "enable", [s.key])} onInterval={(m) => doBulk("interval", [s.key], m)} onDelete={() => doBulk("delete", [s.key], undefined, "削除しました")} />
                   )}
                 </li>
@@ -255,6 +278,7 @@ export default function NewsSourcesPage() {
           {canEdit && cfg.data && <SiteAdder config={cfg.data.config} busy={busy} onChange={(next) => save.mutate(next, { onSuccess: () => toast("足しました", "success"), onError: fail })} />}
         </section>
       )}
+      {tab === "io" && <SourceImport origins={data.origins} onDone={() => undefined} />}
     </div>
   );
 }

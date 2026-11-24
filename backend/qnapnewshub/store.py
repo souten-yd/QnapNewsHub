@@ -144,6 +144,7 @@ def stage_items(items: list[dict]) -> dict:
     new_ids: list[int] = []
     new_urls: list[str] = []
     added = 0
+    id_by_url: dict[str, int] = {}
     for url, data in by_url.items():
         with coord.lock:
             pending = {r.url: r for r in (*coord.inflight.new.values(), *coord.buf.new.values())}
@@ -162,16 +163,20 @@ def stage_items(items: list[dict]) -> dict:
             rec = NewsItem(id=item_id, kind=data["kind"], source=data["source"], source_key=data["source_key"], title=data["title"], url=url,
                            summary=data["summary"], image_url=data.get("image_url"), published_at=data["published_at"], fetched_at=now,
                            topics=json.dumps(extract_topics(data["title"], data["summary"], data.get("extra_topics", ())), ensure_ascii=False),
-                           user_id=data.get("user_id"), gist="", image_tried=False, summary_ja="", img_prompt="", prep_tries=0)
+                           user_id=data.get("user_id"), gist="", image_tried=False, summary_ja="", img_prompt="", prep_tries=0,
+                           canon_url=data.get("canon_url", ""), guid=data.get("guid", ""), simhash=data.get("simhash"),
+                           dup_of=data.get("dup_of") or id_by_url.get(data.get("dup_of_url", "")))
             rec._unsaved = True
             with coord.lock:
                 coord.buf.new[item_id] = rec
-            added += len(rec.title) + len(rec.summary) + len(url) + 400
+            id_by_url[url] = item_id
+            added += len(rec.title) + len(rec.summary) + len(url) + 460
             new += 1
-            new_ids.append(item_id)
             new_urls.append(url)
-            if rec.kind != "event":
-                changed.append(item_dict(rec))
+            if rec.dup_of is None:      # 別の出どころ（重複）は、一言要約・下ごしらえ・画像の仕事に回さない（代表の記事がやる）
+                new_ids.append(item_id)
+                if rec.kind != "event":
+                    changed.append(item_dict(rec))
             continue
         cur = writer.clone(base)
         coord._overlay(cur)  # noqa: SLF001
@@ -213,13 +218,15 @@ def apply_staged(db: Session, new: list, updates: dict[str, dict], patches: dict
 
 def changes_persisted(db: Session, after_id: int = 0, limit: int = 500) -> list[dict]:
     """ControlDeck への差分に出す記事: 保存済み（DB にある）ものだけ。バッファの未保存の分は出さない（保存されてから出る）。"""
-    rows = db.scalars(select(NewsItem).where(NewsItem.id > after_id, NewsItem.kind != "event").order_by(NewsItem.id.asc()).limit(max(1, min(limit, 2000)))).all()
+    rows = db.scalars(select(NewsItem).where(NewsItem.id > after_id, NewsItem.kind != "event", NewsItem.dup_of.is_(None)).order_by(NewsItem.id.asc()).limit(max(1, min(limit, 2000)))).all()
     return [{**item_dict(r), "persisted": True} for r in rows]
 
 
 def _pending_match(item: NewsItem, user_id: int, *, kinds, source: str, topic: str, q: str, day: str, mute: bool) -> bool:
     """バッファの記事が、一覧の条件（filters と同じ意味）に合うか。"""
     if item.user_id is not None and item.user_id != user_id:
+        return False
+    if getattr(item, "dup_of", None):
         return False
     if any(item.source_key.startswith(p) for p in sources_mod.HIDDEN_SOURCE_PREFIXES):
         return False
@@ -278,7 +285,7 @@ def _internal_path(url: str) -> str:
 
 def visible(user_id: int):
     """その人に見える記事（全員宛て＋自分宛ての出来事）。自分のリポジトリ（HIDDEN_SOURCE_PREFIXES）の記事は、貯まっていても出さない。"""
-    return and_(or_(NewsItem.user_id.is_(None), NewsItem.user_id == user_id),
+    return and_(or_(NewsItem.user_id.is_(None), NewsItem.user_id == user_id), NewsItem.dup_of.is_(None),
                 *[not_(NewsItem.source_key.like(f"{_like_escape(p)}%", escape="\\")) for p in sources_mod.HIDDEN_SOURCE_PREFIXES])
 
 
@@ -343,6 +350,25 @@ def states(db: Session, user_id: int, ids: list[int]) -> dict[int, dict]:
     return out
 
 
+def attach_also(db: Session, rows: list[dict]) -> list[dict]:
+    """一覧の各記事に also（同じ記事の別の出どころの数。代表の記事だけに付く）と、その出どころの名前（最大 5）を付ける。"""
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return rows
+    found: dict[int, list[str]] = defaultdict(list)
+    for dup_of, source in db.execute(select(NewsItem.dup_of, NewsItem.source).where(NewsItem.dup_of.in_(ids)).order_by(NewsItem.id)):
+        found[dup_of].append(source)
+    for p in writer.get().pending_items():
+        if p.dup_of in ids:
+            found[p.dup_of].append(p.source)
+    for r in rows:
+        names = found.get(r["id"], [])
+        r["also"] = len(names)
+        if names:
+            r["also_sources"] = list(dict.fromkeys(names))[:5]
+    return rows
+
+
 def present(item: NewsItem, state: dict, score: float | None = None) -> dict:
     url = safe_url(item.url) or (_internal_path(item.url) if item.kind == "event" else None)
     row = {"id": item.id, "kind": item.kind, "source": item.source, "source_key": item.source_key, "title": item.title,
@@ -383,7 +409,7 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
         ranked = profile.rank(db, user_id, rows, st, now)
         offset = int(before[2:]) if before.startswith("o:") and before[2:].isdigit() else 0
         page = ranked[offset:offset + limit]
-        return {"items": [present(r, st[r.id], score) for r, score in page],
+        return {"items": attach_also(db, [present(r, st[r.id], score) for r, score in page]),
                 "next": f"o:{offset + limit}" if offset + limit < len(ranked) else None}
     if before:
         stamp, _, last = before.partition("|")
@@ -405,7 +431,7 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
     more = len(rows) > limit
     rows = rows[:limit]
     st = states(db, user_id, [r.id for r in rows])
-    return {"items": [present(r, st[r.id]) for r in rows],
+    return {"items": attach_also(db, [present(r, st[r.id]) for r in rows]),
             "next": f"{iso(rows[-1].published_at)}|{rows[-1].id}" if more and rows else None}
 
 
@@ -424,7 +450,7 @@ def _channel_page(db: Session, user_id: int, channel: dict, conds: list, *, view
     scored = profile.rank(db, user_id, rows, st, now) if view == "recommended" else [(r, None) for r in rows]
     offset = int(before[2:]) if before.startswith("o:") and before[2:].isdigit() else 0
     page = scored[offset:offset + limit]
-    return {"items": [dict(present(r, st[r.id], score), channel=channel["id"]) for r, score in page],
+    return {"items": attach_also(db, [dict(present(r, st[r.id], score), channel=channel["id"]) for r, score in page]),
             "next": f"o:{offset + limit}" if offset + limit < len(scored) else None}
 
 

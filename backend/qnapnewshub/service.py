@@ -6,9 +6,10 @@ import logging
 import os
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 
-from qnapnewshub import channels, fetchlog, gist, images, metrics, prep, rest, settings, sources, store, writer
+from qnapnewshub import channels, dedup, fetchlog, gist, images, metrics, polling, prep, rest, settings, sources, store, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsItem
 
@@ -40,25 +41,32 @@ async def _fetch_one(source: sources.Source, gate: asyncio.Semaphore) -> tuple[s
     at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     async with gate:
         started = time.monotonic()
+        etag, last_modified = polling.conditional_headers(source.key)
+        meta = sources.FetchMeta(etag=etag, last_modified=last_modified)
+        sources.FETCH_META.set(meta)      # gather の中の自分のタスクだけに効く。fetch_rss が条件付きの取得に使う
 
         def ms() -> int:
             return int((time.monotonic() - started) * 1000)
         try:
             items = await asyncio.wait_for(source.fetch(), SOURCE_TIMEOUT_SECONDS)
-            return source, items, {"label": source.label, "kind": source.kind, "ok": True, "skipped": "", "error": "", "count": len(items), "at": at, "ms": ms(), "status": 200}
+            return source, items, {"label": source.label, "kind": source.kind, "ok": True, "skipped": "", "error": "", "count": len(items), "at": at, "ms": ms(),
+                                   "status": 304 if meta.not_modified else 200, "not_modified": meta.not_modified, "conditional": meta.conditional,
+                                   "etag": meta.new_etag, "last_modified": meta.new_last_modified}
         except sources.SkippedSource as exc:
             return source, [], {"label": source.label, "kind": source.kind, "ok": True, "skipped": str(exc), "error": "", "count": 0, "at": at, "ms": ms(), "status": None}
         except Exception as exc:  # noqa: BLE001 - 1 つのソースの失敗で他を止めない
             logger.info("ニュースの取得に失敗しました (%s): %s", source.key, exc)
             text = _error_text(exc)
             return source, [], {"label": source.label, "kind": source.kind, "ok": False, "skipped": "", "error": text, "count": 0, "at": at, "ms": ms(),
-                                "status": fetchlog.status_of(text)}
+                                "status": meta.status or fetchlog.status_of(text), "retry_after": meta.retry_after}
 
 
 def _save(items: list[dict]) -> dict:
     """記事をバッファへ積む（DB へは Write Coordinator が後でまとめて書く。古い記事の削除も、そのまとめ書きの中）。"""
+    items, result_dedup = dedup.prepare(items)
     result = store.stage_items(items) if items else {"new": 0, "updated": 0, "changed": [], "new_ids": [], "new_urls": []}
     result["pruned"] = 0
+    result["dedup"] = result_dedup
     return result
 
 
@@ -74,6 +82,23 @@ def _log_results(results: list, new_urls: list[str]) -> None:
         writer.get().stage_fetchlog(rows)
     except Exception:  # noqa: BLE001
         logger.exception("取得の履歴を積めませんでした")
+
+
+def _record_polling(results: list, new_urls: list[str], cfg: dict) -> None:
+    """取得の結果を、取得先ごとの状態（ETag・次の間隔・バックオフ）へ。見送り（Reddit の鍵なしなど）は残さない。"""
+    fresh = set(new_urls)
+    default = channels.load()["interval_minutes"]
+    ivs, fixed = cfg.get("intervals", {}), set(cfg.get("fixed", []))
+    for source, got, info in results:
+        if info.get("skipped"):
+            continue
+        base = float(ivs.get(source.key) or source.interval or default)
+        try:
+            polling.record(source.key, base=base, fixed=source.key in fixed, ok=info["ok"], new=sum(1 for i in got if i["url"] in fresh),
+                           not_modified=bool(info.get("not_modified")), conditional=bool(info.get("conditional")), etag=info.get("etag", ""),
+                           last_modified=info.get("last_modified", ""), status=info.get("status"), retry_after=info.get("retry_after"))
+        except Exception:  # noqa: BLE001 - 状態を残せなくても取得は成功
+            logger.exception("取得の状態を残せませんでした")
 
 
 def _reload(ids: list[int]) -> list[dict]:
@@ -140,6 +165,8 @@ async def refresh(*, force: bool = False, channel_ids: list[str] | None = None, 
         stamp = time.monotonic()
         for source, _, _ in results:
             _last_fetch[source.key] = stamp
+        cfg_now = cfg
+        _record_polling(results, saved.get("new_urls", []), cfg_now)
         await asyncio.to_thread(_log_results, results, saved.get("new_urls", []))
         for source, _, info in results:
             # 最後に取れた時刻は、失敗しても前回の値を残す（画面の「最後に取れた」「最後の失敗」）
@@ -157,6 +184,22 @@ async def refresh(*, force: bool = False, channel_ids: list[str] | None = None, 
 
 
 TICK_SECONDS = 60
+
+
+def _effective_interval(source: sources.Source, cfg: dict, default: int) -> float:
+    """いまの取得の間隔（分）: 基準（取得先ごとの設定か既定）を、Adaptive Polling とバックオフで伸ばし縮めた値。固定の取得先は基準のまま。"""
+    base = float(source.interval or default)
+    return polling.effective_minutes(polling.get(source.key), base, source.key in set(cfg.get("fixed", [])))
+
+
+def _seed_last_fetch(listing: list[sources.Source]) -> None:
+    """再起動の直後は、前回の取得の時刻（fetch-state.json）から続ける（起動のたびに全部を取りに行かない）。"""
+    wall, mono = time.time(), time.monotonic()
+    for s in listing:
+        if s.key not in _last_fetch:
+            last = polling.get(s.key).get("last_at")
+            if last:
+                _last_fetch[s.key] = mono - max(0.0, wall - float(last))
 
 
 def due_keys(listing: list[sources.Source], last_fetch: dict[str, float], now: float, default_minutes: int, limit: int = sources.MAX_PER_RUN) -> list[str]:
@@ -184,7 +227,11 @@ async def news_loop() -> None:
                 conf = settings.load()
                 if not settings.in_quiet(conf, datetime.now()) and not rest.blocks_fetch():
                     listing = sources.build_sources(sources.load_config(), channels.load()["channels"])
-                    due = due_keys(listing, _last_fetch, time.monotonic(), channels.load()["interval_minutes"])
+                    default = channels.load()["interval_minutes"]
+                    cfg = sources.load_config()
+                    listing = [replace(s, interval=_effective_interval(s, cfg, default)) for s in listing]
+                    _seed_last_fetch(listing)
+                    due = due_keys(listing, _last_fetch, time.monotonic(), default)
                     if due:
                         result = await refresh(force=True, keys=due)
                         if result.get("started"):

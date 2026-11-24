@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from qnapnewshub import channels as channels_mod
-from qnapnewshub import rest, writer, feedgen, fetchlog, probe, sourcemgr, digest, home, llm, prefs, prep, presets, profile, service, sources, store
+from qnapnewshub import polling, portability, rest, writer, feedgen, fetchlog, probe, sourcemgr, digest, home, llm, prefs, prep, presets, profile, service, sources, store
 from qnapnewshub.auth import AuthUser as User
 from qnapnewshub.auth import current_user as get_current_user
 from qnapnewshub.auth import require_admin
@@ -177,15 +177,23 @@ def generate_feed(body: GenerateBody, user: User = Depends(require_admin)):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _iso_epoch(value: float | None) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(value, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if value else ""
+
+
 def _manage_rows(db: Session) -> list[dict]:
     cfg = sources.load_config()
     stats, bars, totals = fetchlog.summary(db), fetchlog.week_bars(db), fetchlog.article_totals(db)
     mem = {s["source_key"]: s for s in service.status()["sources"]}
+    default_min = channels_mod.load()["interval_minutes"]
     rows = []
     for e in sourcemgr.entries(cfg):
         st = stats.get(e["key"]) or {}
         live = mem.get(e["key"]) or {}
-        rows.append({**e, "last_at": st.get("last_at", "") or live.get("at", ""), "last_ok_at": st.get("last_ok_at", "") or live.get("ok_at", ""),
+        snap = polling.snapshot(e["key"], float(e["interval"] or default_min), e["fixed"])
+        rows.append({**e, "poll": {**snap, "next_at": _iso_epoch(snap["next_at"]) if e["enabled"] else ""}, "last_at": st.get("last_at", "") or live.get("at", ""), "last_ok_at": st.get("last_ok_at", "") or live.get("ok_at", ""),
                      "last_ok": st.get("last_ok"), "last_error": st.get("last_error", ""), "last_count": st.get("last_count", 0), "last_status": st.get("last_status"),
                      "last_skipped": st.get("last_skipped", ""), "week": bars.get(e["key"], [None] * 7), "total": totals.get(e["key"], 0)})
     return rows
@@ -197,7 +205,7 @@ def manage_list(user: User = Depends(get_current_user), db: Session = Depends(ge
     cfg = sources.load_config()
     return {"items": _manage_rows(db), "groups": presets.listing()["groups"], "default_interval": channels_mod.load()["interval_minutes"],
             "reddit_key": False, "limit": sources.MAX_PER_LIST, "interval_range": [sources.INTERVAL_MIN, sources.INTERVAL_MAX],
-            "formats": sourcemgr.FORMAT_LABELS, "running": service.status()["running"], "enabled": cfg["enabled"]}
+            "formats": sourcemgr.FORMAT_LABELS, "origins": sources.ORIGIN_LABELS, "running": service.status()["running"], "enabled": cfg["enabled"]}
 
 
 @router.get("/sources/manage/detail")
@@ -211,9 +219,10 @@ def manage_detail(key: str = Query(min_length=1, max_length=600), limit: int = Q
 
 
 class BulkBody(BaseModel):
-    action: str = Field(pattern="^(enable|disable|delete|interval|check)$")
+    action: str = Field(pattern="^(enable|disable|delete|interval|check|fixed|auto|origin)$")
     keys: list[str] = Field(min_length=1, max_length=300)
     interval: int | None = Field(default=None, ge=0, le=sources.INTERVAL_MAX)
+    origin: str | None = Field(default=None, max_length=20)
 
 
 @router.post("/sources/manage/bulk")
@@ -230,12 +239,13 @@ async def manage_bulk(body: BulkBody, user: User = Depends(require_admin), db: S
                 return {"key": e["key"], **await probe.check(e["kind"], e["value"], e["name"])}
         return {"results": await asyncio.gather(*[one(e) for e in wanted])}
     try:
-        sourcemgr.apply(cfg, body.action, body.keys, body.interval)
+        sourcemgr.apply(cfg, body.action, body.keys, body.interval, body.origin)
         saved = sources.save_config(cfg)
     except sources.ConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.action == "delete":
         writer.run("fetchlog.forget", lambda: _forget(body.keys))
+        polling.forget(body.keys)
     return {"count": len(body.keys), "items": _manage_rows(db), "enabled": saved["enabled"]}
 
 
@@ -244,6 +254,9 @@ class AddItem(BaseModel):
     value: str = Field(default="", max_length=800)
     name: str = Field(default="", max_length=60)
     interval: int | None = Field(default=None, ge=0, le=sources.INTERVAL_MAX)
+    origin: str | None = Field(default=None, max_length=20)
+    category: str = Field(default="", max_length=40)
+    enabled: bool = True
 
 
 class AddBody(BaseModel):
@@ -260,6 +273,83 @@ def manage_add(body: AddBody, user: User = Depends(require_admin), db: Session =
     except sources.ConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"added": added, "items": _manage_rows(db)}
+
+
+class ImportPreviewBody(BaseModel):
+    data: str = Field(min_length=1, max_length=3_000_000, description="ファイルの中身（base64）")
+    format: str = Field(default="auto", pattern="^(auto|csv|opml)$")
+
+
+@router.post("/sources/import/preview")
+def import_preview(body: ImportPreviewBody, user: User = Depends(require_admin)):
+    """CSV・OPML の取り込みの「確認の表」。何も保存しない・通信しない。行ごとに new・duplicate・invalid と理由。"""
+    try:
+        return portability.preview(sources.load_config(), portability.decode_b64(body.data), body.format)
+    except portability.ImportError_ as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class ImportRow(BaseModel):
+    url: str = Field(max_length=800)
+    name: str = Field(default="", max_length=60)
+    category: str = Field(default="", max_length=40)
+    origin: str = Field(default="", max_length=20)
+    kind: str = Field(default="rss", pattern="^(rss|page)$")
+    interval: int = Field(default=0, ge=0, le=sources.INTERVAL_MAX)
+    enabled: bool = True
+
+
+class ImportCommitBody(BaseModel):
+    rows: list[ImportRow] = Field(min_length=1, max_length=100)
+    mode: str = Field(pattern="^(check|direct)$")
+
+
+@router.post("/sources/import/commit")
+async def import_commit(body: ImportCommitBody, user: User = Depends(require_admin), db: Session = Depends(get_news_db)):
+    """確認の表で選んだ行を足す。mode=check は 1 件ずつ通信確認し、取れたものだけ有効で足す（取れなかったものは足さず理由を返す）。
+    mode=direct は通信せず、すべて無効で足す（あとで有効にする）。重複（同じ URL）は足さず数える。サーバーで改めて検査する（表の値を信じない）。"""
+    cfg = sources.load_config()
+    pre = portability.build_preview(cfg, [{"line": i + 1, "name": r.name, "url": r.url, "category": r.category, "origin": r.origin, "type": r.kind,
+                                           "interval": r.interval, "enabled": r.enabled} for i, r in enumerate(body.rows)])
+    todo = [r for r in pre["rows"] if r["status"] == "new"]
+    room = max(0, sources.MAX_PER_LIST - len(cfg["rss"]) - len(cfg.get("pages", [])))
+    over = todo[room:]
+    todo = todo[:room]
+    failed: list[dict] = [{"url": r["url"], "name": r["name"], "reason": f"取得先の上限（{sources.MAX_PER_LIST} 件）を超えます"} for r in over]
+    if body.mode == "check":
+        gate = asyncio.Semaphore(4)
+
+        async def one(r: dict) -> tuple[dict, dict]:
+            async with gate:
+                return r, await probe.check(r["kind"], r["url"], r["name"])
+        good = []
+        for r, res in await asyncio.gather(*[one(r) for r in todo]):
+            if res.get("ok"):
+                good.append(r)
+            else:
+                failed.append({"url": r["url"], "name": r["name"], "reason": (res.get("error") or {}).get("message") or "取れませんでした"})
+        todo, enabled_all = good, None
+    else:
+        enabled_all = False
+    items = [{"kind": r["kind"], "value": r["url"], "name": r["name"], "interval": r["interval"] or None, "origin": r["origin"] or None,
+              "category": r["category"], "enabled": r["enabled"] if enabled_all is None else enabled_all} for r in todo]
+    added = 0
+    if items:
+        try:
+            added = sourcemgr.add(cfg, items)
+            sources.save_config(cfg)
+        except sources.ConfigError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"added": added, "duplicate": pre["counts"]["duplicate"], "invalid": pre["counts"]["invalid"], "failed": failed, "mode": body.mode, "items": _manage_rows(db)}
+
+
+@router.get("/sources/export")
+def export_sources(format: str = Query(default="opml", pattern="^(opml|csv)$"), user: User = Depends(get_current_user)):
+    """取得先の書き出し（OPML・CSV）。無効のものも含む。書き出したファイルは、そのまま取り込める。"""
+    cfg = sources.load_config()
+    if format == "csv":
+        return Response(portability.export_csv(cfg), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="newshub-sources.csv"'})
+    return Response(portability.export_opml(cfg), media_type="text/x-opml; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="newshub-sources.opml"'})
 
 
 @router.get("/home")

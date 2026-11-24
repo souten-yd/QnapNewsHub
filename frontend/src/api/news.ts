@@ -14,6 +14,8 @@ export interface NewsItem {
   channel?: string | null;
   /** 英語の抜粋を日本語に訳したもの（summary がその訳になり、元の抜粋は summary_original） */
   translated?: boolean; summary_original?: string;
+  /** 同じ記事の別の出どころの数（代表の記事だけ。一覧では 1 件にまとめて出す）と、その出どころの名前 */
+  also?: number; also_sources?: string[];
 }
 export interface NewsPage { items: NewsItem[]; next: string | null }
 export interface NewsQuery { view: NewsView; kinds: string; q: string; date: string; topic: string; source: string; channel?: string }
@@ -304,10 +306,14 @@ export interface ManagedSource {
   last_at: string; last_ok_at: string; last_ok: boolean | null; last_error: string; last_count: number; last_status: number | null; last_skipped: string;
   /** 直近 7 日（古い日→今日）の成功率 0〜100・その日に取っていなければ null */
   week: (number | null)[]; total: number;
+  /** 間隔を自動で変えない（固定）。出どころの種類（origin_set が偽なら、ドメインからの推定）・取り込んだ分類 */
+  fixed: boolean; origin: string; origin_set: boolean; category: string;
+  /** 取得の状態: interval = いまの間隔（分）・auto = 自動で決めている・backoff = 失敗で延ばしている・next_at = 次の取得の予定（ISO・無効なら空）・hit_rate = 304 の当たり率（%） */
+  poll: { interval: number; auto: boolean; backoff: boolean; fails: number; next_at: string; hit_rate: number | null; conditional: number; hits: number; has_etag: boolean };
 }
 export interface ManageList {
   items: ManagedSource[]; groups: { id: string; label: string; hint: string; count: number }[]; default_interval: number; reddit_key: boolean; limit: number;
-  interval_range: [number, number]; formats: Record<string, string>; running: boolean;
+  interval_range: [number, number]; formats: Record<string, string>; origins: Record<string, string>; running: boolean;
 }
 export interface FetchHistoryRow { at: string; ok: boolean; status: number | null; count: number; new: number; ms: number; error: string; skipped: string }
 export interface ManageDetail { item: ManagedSource; history: FetchHistoryRow[]; articles: { id: number; title: string; url: string; published_at: string }[] }
@@ -317,7 +323,18 @@ export type GenerateRequest =
   | { type: "github"; target: string; what: "releases" | "commits" | "tags"; branch?: string }
   | { type: "steam"; target: string }
   | { type: "arxiv"; cats: string[] };
-export type BulkAction = "enable" | "disable" | "delete" | "interval";
+export type BulkAction = "enable" | "disable" | "delete" | "interval" | "fixed" | "auto" | "origin";
+
+export interface ImportRow {
+  line: number; name: string; url: string; category: string; origin: string; origin_guess: string; interval: number; enabled: boolean; kind: "rss" | "page";
+  status: "new" | "duplicate" | "invalid"; reason: string;
+}
+export interface ImportPreview { format: "csv" | "opml"; rows: ImportRow[]; counts: { new: number; duplicate: number; invalid: number }; room: number; total: number }
+export interface ImportResult { added: number; duplicate: number; invalid: number; failed: { url: string; name: string; reason: string }[]; mode: "check" | "direct" }
+export const previewImport = (data: string, format: "auto" | "csv" | "opml" = "auto") =>
+  api<ImportPreview>("/news/sources/import/preview", { method: "POST", json: { data, format } });
+export const commitImport = (rows: ImportRow[], mode: "check" | "direct") =>
+  api<ImportResult>("/news/sources/import/commit", { method: "POST", json: { mode, rows: rows.map((r) => ({ url: r.url, name: r.name, category: r.category, origin: r.origin, kind: r.kind, interval: r.interval, enabled: r.enabled })) } });
 
 export const useManageList = () =>
   useQuery({ queryKey: [...key, "manage"], queryFn: () => api<ManageList>("/news/sources/manage"), staleTime: 10_000 });
@@ -332,7 +349,7 @@ export function useManageMutations() {
   const done = () => { qc.invalidateQueries({ queryKey: key }); };
   return {
     bulk: useMutation({
-      mutationFn: (b: { action: BulkAction; keys: string[]; interval?: number }) => api<{ count: number }>("/news/sources/manage/bulk", { method: "POST", json: b }),
+      mutationFn: (b: { action: BulkAction; keys: string[]; interval?: number; origin?: string }) => api<{ count: number }>("/news/sources/manage/bulk", { method: "POST", json: b }),
       onSuccess: done,
     }),
     add: useMutation({

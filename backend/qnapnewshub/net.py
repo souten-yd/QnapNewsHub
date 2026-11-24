@@ -34,9 +34,10 @@ class NetError(RuntimeError):
 class HttpError(RuntimeError):
     """HTTP の 4xx・5xx。status で言い分ける。"""
 
-    def __init__(self, status: int):
+    def __init__(self, status: int, retry_after: float | None = None):
         super().__init__(f"HTTP {status}")
         self.status = status
+        self.retry_after = retry_after      # 秒（Retry-After ヘッダー。無ければ None）
 
 
 def _check_url(url: str, *, https_only: bool) -> None:
@@ -109,6 +110,53 @@ async def aget_bytes(url: str, *, timeout: float = 30) -> bytes:
     if status >= 400:
         raise NetError(f"HTTP {status}")
     return body
+
+
+def parse_retry_after(value: str | None, now: float | None = None) -> float | None:
+    """Retry-After（秒数か HTTP の日時）を、待つ秒数にする。読めなければ None。負の値は 0。"""
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.isdigit():
+        return float(text)
+    try:
+        from email.utils import parsedate_to_datetime
+
+        when = parsedate_to_datetime(text)
+        return max(0.0, when.timestamp() - (now if now is not None else time.time()))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+async def aget_conditional(url: str, *, etag: str = "", last_modified: str = "", timeout: float = 30) -> tuple[int, dict, bytes]:
+    """条件付きの GET（https だけ・リダイレクトは追わない）。ETag・Last-Modified があれば If-None-Match・If-Modified-Since を付ける。
+    304 は (304, 応答の見出し, b"") で返す（本文は読まない）。4xx・5xx は HttpError（Retry-After つき）。"""
+    _check_url(url, https_only=True)
+    headers = {}
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+    status, head, body = await get(url, accept="*/*", timeout=timeout, follow=False, headers=headers or None)
+    if status == 304:
+        return status, head, b""
+    if 300 <= status < 400:
+        raise NetError("リダイレクトは追いません")
+    if status >= 400:
+        raise HttpError(status, parse_retry_after(head.get("retry-after")))
+    return status, head, body
+
+
+def http_get_conditional(url: str, *, etag: str = "", last_modified: str = "", pace: float = 1.0, timeout: int = 30) -> tuple[int, dict, bytes]:
+    """同期の条件付き取得（呼び出し側は asyncio.to_thread）。同じホストへは pace 秒あける。"""
+    _check_url(url, https_only=True)
+    host = urlsplit(url).hostname or ""
+    with _pace_lock:
+        wait = pace - (time.time() - _last_call.get(host, 0))
+        _last_call[host] = time.time() + max(wait, 0)
+    if wait > 0:
+        time.sleep(min(wait, 10))
+    return asyncio.run(aget_conditional(url, etag=etag, last_modified=last_modified, timeout=timeout))
 
 
 def http_get(url: str, *, pace: float = 1.0, timeout: int = 30) -> bytes:

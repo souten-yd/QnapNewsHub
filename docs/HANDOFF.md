@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-24
+最終更新: 2026-11-24（#8 の後）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -25,19 +25,19 @@
 | #2・#3・#4 | 設計: 知識化 → 設計 v2（ARCHITECTURE.md）→ 無料 LLM を QNAP 側の主力に・新着の傾向・診断 |
 | #5 | 画面（React ＋ Vite。ControlDeck の 5 デザイン・まとめのバブル・取得先の管理・設定・ログイン）・PWA とアイコン（iOS・QPKG 用）・E2E |
 | #6 | v0.1: Write Coordinator（まとめ書き 30 分）・お休みモード・診断・systemd のユーザーの単位の生成 |
+| #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
-- 試験: backend 162 件・E2E 90 件（#6 の時点）。
+- 試験: backend 206 件・E2E 109 件（#8 の時点）。
 - 実測（開発の PC）: 待機中の書き込み 0 バイト／10 分、お休み中も 0、常駐 114〜190MB、待機 CPU 0.1〜0.4%。
-- **作業中**: ブランチ `feat/fetch-engine`（ETag/Last-Modified・Adaptive Polling とバックオフ・URL 正規化と SimHash の近い重複のまとめ・CSV/OPML の取り込みと書き出し・出どころの種類）。まだマージしていない。引き継ぐときは `git log main..feat/fetch-engine` と `./hub.sh test` で状態を見る（ローカルだけにある場合がある）。
-- まだ無いもの: QPKG・24 時間の連続運転・QNAP 実機・無料 LLM の係（予算 800 回・用途ごとの割り当て・モデルの切り替え）・要素の取り出し・イベント・新着の傾向・ControlDeck との連携（ペアリング・仕事の列・同期）・知識グラフ・分析の画面。
+- **作業中**: ブランチ `feat/qpkg`（作業の場所 `../QnapNewsHub-qpkg` の worktree。QPKG x86_64。まだ中身は無い〔2026-11-24、子エージェントが上限で止まった〕）。
+- まだ無いもの: QPKG・長時間の連続運転・QNAP 実機・無料 LLM の係（予算 800 回・用途ごとの割り当て・モデルの切り替え）・要素の取り出し・イベント・新着の傾向・ControlDeck との連携（ペアリング・仕事の列・同期）・知識グラフ・分析の画面。
 - 既知の小さなずれ: LLM の 1 日の上限の既定は今 300 回（設計は 800 回。v0.2 で変える）。試験で StarletteDeprecationWarning が 1 件出る（動作に影響なし）。
 
 ## 4. 次にやること（順番）
-1. `feat/fetch-engine` を検証してマージ（試験・build・E2E を自分で流す・撮影を見る）。
-2. 開発の PC で 24 時間動かす（`./hub.sh install-service` か `./hub.sh run`、目録から 50〜100 件を有効に）。取得の実績・失敗・書き込みの量・メモリを診断の画面で見る。
-3. QPKG（x86_64）: python-build-standalone ＋ venv ＋ build 済みの画面。QDK の形・App Center のアイコン（`packaging/qpkg/icons/`）・データを残す更新。利用者の QNAP に入れて確かめる（型番と CPU を QTS の画面で確認してもらう）。ここで v0.1 を Release。
-4. v0.2: 無料 LLM の係（ARCHITECTURE 5.1）・概要と要素の取り出しを 1 回で・粗いイベント・本文の取り出し（Trafilatura）・新着の傾向（7.5）・FTS5 ＋ trigram・zstd・集計の表・100 万件の模擬データでの性能。
-5. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
+1. 開発の PC で動かす（利用者「24 時間も待たなくて良い」〔2026-11-24〕。長時間の運転は並行して、結果を待たずに次へ進む）（`./hub.sh install-service` か `./hub.sh run`、目録から 50〜100 件を有効に）。取得の実績・失敗・書き込みの量・メモリを診断の画面で見る。
+2. QPKG（x86_64）: python-build-standalone ＋ venv ＋ build 済みの画面。QDK の形・App Center のアイコン（`packaging/qpkg/icons/`）・データを残す更新。利用者の QNAP に入れて確かめる（型番と CPU を QTS の画面で確認してもらう）。ここで v0.1 を Release。
+3. v0.2: 無料 LLM の係（ARCHITECTURE 5.1）・概要と要素の取り出しを 1 回で・粗いイベント・本文の取り出し（Trafilatura）・新着の傾向（7.5）・FTS5 ＋ trigram・zstd・集計の表・100 万件の模擬データでの性能。
+4. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
 
 ## 5. 開発の仕方
 ```
@@ -63,6 +63,8 @@
 - **未保存**: バッファにある記事は `persisted:false`。ControlDeck への差分は保存済みだけ（`store.changes_persisted`）。
 - **E2E の模擬**: `frontend/e2e/mock.ts` の値（お休みの終わり 06:00 など）は固定の見本。撮影の数字は実データではない。
 - **作業の場所**: 子エージェントが `QnapNewsHub` の checkout で作業している間に docs を直すときは、`git worktree add ../QnapNewsHub-xxx origin/main` で別の場所を作り、終わったら `git worktree remove` する。
+
+- **子エージェントの利用の上限**: 上限で途中で止まると、コミットされていない変更が作業の場所に残る。引き継ぐときは `git status` と `./hub.sh test` で状態を見てから続ける。
 
 ## 7. 守ること（要点。全文は AGENTS.md）
 - **公開のリポジトリ**: 鍵・パスワード・トークン・利用者の名前・メール・ホスト名・私的な IP・手元の絶対パスを入れない。push の前に差分を grep で確かめる。試験の見本の値は実行時に組み立てる。
