@@ -1,6 +1,7 @@
 import { TranslatedMark } from "./TranslatedMark";
 import { useState, type CSSProperties } from "react";
-import { KIND_STYLE, relativeTime, useNewsAction, type NewsAction, type NewsItem } from "../../api/news";
+import { Link } from "react-router-dom";
+import { ENTITY_TYPE_LABEL, KIND_STYLE, relativeTime, useNewsAction, type NewsAction, type NewsItem } from "../../api/news";
 import { useToasts } from "../../stores";
 import { chNo } from "./newsTheme";
 import { ArticleLink } from "./ArticleLink";
@@ -54,6 +55,11 @@ export function NewsCard({ item, channel, label, hideRemoves = false, dimRead = 
         {item.topics.length > 0 && (
           <ul className="card-chips" aria-label="話題">
             {item.topics.slice(0, 4).map((topic) => <li key={topic}><button type="button" onClick={() => onTopic?.(topic)}>{topic}</button></li>)}
+          </ul>
+        )}
+        {!!item.entities?.length && (
+          <ul className="card-ents" aria-label="物（AI の取り出し）" data-testid="card-entities">
+            {item.entities.map((e) => <li key={e.id}><Link to={`/entities/${e.id}`} title={`${ENTITY_TYPE_LABEL[e.type] ?? e.type}（AI の取り出し）`}>{e.name}</Link></li>)}
           </ul>
         )}
         <div className="card-foot">

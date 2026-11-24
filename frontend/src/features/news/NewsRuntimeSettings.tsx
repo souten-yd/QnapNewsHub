@@ -3,10 +3,20 @@ import { Toggle } from "../models/formControls";
 import { useDeleteOpenRouterKey, useNewsChannels, useNewsSettings, useOpenRouterKey, useRunDigest, useSaveChannels, useSaveNewsSettings, useSaveOpenRouterKey, type NewsRuntimeSettings } from "../../api/news";
 import { useToasts } from "../../stores";
 import { Card, field, ghost, primary } from "./settingsUi";
+import { GatewayCard } from "./GatewayCard";
 
 const label = "block text-xs text-zinc-500";
 const REST_MODES: Record<string, string> = { keep_memory: "集め続けてメモリに保持", stop_all: "集める・分析・保存をすべて休む", flush_at_limit: "集め続けて上限のときだけ一括で保存" };
-const PURPOSE_LABEL: Record<string, string> = { prep: "下ごしらえ", digest: "まとめ", gist: "一言要約" };
+const PURPOSE_LABEL: Record<string, string> = { prep: "下ごしらえ", digest: "まとめ", gist: "一言要約", card: "知識カード", trend: "傾向の解説", backfill: "夜の後回し" };
+const QUOTA_ORDER = ["prep", "gist", "digest", "card", "trend", "spare"];
+const isPaid = (name: string) => name.trim() !== "" && !name.trim().endsWith(":free") && !name.startsWith("gateway:");
+
+/** 有料のモデルを選んだときの注意（無料は :free で終わる）。 */
+function PaidNote({ names }: { names: string[] }) {
+  const paid = names.filter(isPaid);
+  if (paid.length === 0) return null;
+  return <p role="alert" data-testid="paid-warning" className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-900 dark:text-amber-300">有料のモデル（{paid.join("、")}）が入っています。使うたびに OpenRouter の残高が減ります。無料のモデルは名前が :free で終わります。</p>;
+}
 
 /** OpenRouter のモデル名の入力（無料のモデルは :free で終わる）。一覧は取らない（ニュースハブは外へ余計に通信しない）。 */
 function ModelInput({ name, value, disabled, onChange }: { name: string; value: string; disabled: boolean; onChange: (v: string) => void }) {
@@ -168,6 +178,21 @@ export function NewsRuntimeCards() {
           {draft.llm.prep_enabled && <>
             <label className={label}>下ごしらえのモデル
               <ModelInput name="下ごしらえのモデル" value={draft.llm.prep_model} disabled={dis} onChange={(v) => set({ llm: { ...draft.llm, prep_model: v } })} /></label>
+            <div className="space-y-2" data-testid="model-chain">
+              <p className={label}>次のモデル（失敗が続いたとき、上から順に切り替える。空でよい）</p>
+              {draft.llm.fallback_models.map((m, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="num w-5 shrink-0 text-xs text-zinc-500">{i + 2}</span>
+                  <div className="min-w-0 flex-1"><ModelInput name={`${i + 2} 番目のモデル`} value={m} disabled={dis} onChange={(v) => set({ llm: { ...draft.llm, fallback_models: draft.llm.fallback_models.map((x, j) => (j === i ? v : x)) } })} /></div>
+                  <button type="button" disabled={dis} aria-label={`${i + 2} 番目のモデルを消す`} onClick={() => set({ llm: { ...draft.llm, fallback_models: draft.llm.fallback_models.filter((_, j) => j !== i) } })} className={`${ghost} mt-1`}>消す</button>
+                </div>
+              ))}
+              {draft.llm.fallback_models.length < 4 && <button type="button" disabled={dis} onClick={() => set({ llm: { ...draft.llm, fallback_models: [...draft.llm.fallback_models, ""] } })} className={ghost}>モデルを足す</button>}
+              <p className="text-[11px] text-zinc-500">429（混み合い）・空の答え・検査落ちが直近 5 回で 3 回続いたら次のモデルへ移り、30 分後に 1 番目へ戻します。</p>
+              {data.model_chain && data.model_chain.chain.length > 1 && <p className="num text-xs" role="status" data-testid="chain-status">いま使っているモデル: <span className="font-mono">{data.model_chain.current}</span>{data.model_chain.return_in_seconds !== null ? `（あと約 ${Math.ceil(data.model_chain.return_in_seconds / 60)} 分で 1 番目へ戻します）` : ""}</p>}
+              <PaidNote names={[draft.llm.prep_model, ...draft.llm.fallback_models]} />
+            </div>
+            <Toggle label="要素の取り出し（物と fact）を、下ごしらえと同じ呼び出しで行う" hint="記事ごとに、物（モデル・ソフト・組織など）と事実を取り出して「物」の画面にためます。AI の取り出しなので、間違いを含みます。呼び出しの回数は増えません。" value={draft.llm.extract_enabled} disabled={dis} onChange={(on) => set({ llm: { ...draft.llm, extract_enabled: on } })} />
             <label className={label}>1 回の取得で下ごしらえする上限（件。{data.prep_batch} 件で 1 回の呼び出し）
               <input type="number" min={1} max={200} aria-label="下ごしらえの上限" data-testid="prep-max" value={draft.llm.prep_max_per_run} disabled={dis}
                 onChange={(e) => set({ llm: { ...draft.llm, prep_max_per_run: num(e.target.value, 1, 200, 1) } })} className={`${field} mt-1 w-28`} /></label>
@@ -181,10 +206,10 @@ export function NewsRuntimeCards() {
         <div className="grid gap-3 sm:grid-cols-2">
           <label className={label}>1 日の呼び出しの上限（回。1〜5000）
             <input type="number" min={1} max={5000} aria-label="1 日の上限" data-testid="daily-limit" value={draft.llm.daily_limit} disabled={dis}
-              onChange={(e) => set({ llm: { ...draft.llm, daily_limit: num(e.target.value, 1, 5000, 300) } })} className={`${field} mt-1 w-full`} /></label>
+              onChange={(e) => set({ llm: { ...draft.llm, daily_limit: num(e.target.value, 1, 5000, 800) } })} className={`${field} mt-1 w-full`} /></label>
           <label className={label}>1 分の呼び出しの上限（回。1〜100）
             <input type="number" min={1} max={100} aria-label="1 分の上限" value={draft.llm.minute_limit} disabled={dis}
-              onChange={(e) => set({ llm: { ...draft.llm, minute_limit: num(e.target.value, 1, 100, 10) } })} className={`${field} mt-1 w-full`} /></label>
+              onChange={(e) => set({ llm: { ...draft.llm, minute_limit: num(e.target.value, 1, 100, 15) } })} className={`${field} mt-1 w-full`} /></label>
         </div>
         <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-700" data-testid="llm-stats" role="status">
           <p className="num"><span className="font-semibold">今日の呼び出し {stats.total} / {stats.daily_limit} 回</span>
@@ -193,6 +218,32 @@ export function NewsRuntimeCards() {
         </div>
         <p className="text-[11px] text-zinc-500">LLM が使えないときは、まとめを作りません（鍵が未設定のときも同じです）。</p>
         {saveButton}
+      </Card>
+
+      <GatewayCard value={draft.llm.gateway} onChange={(g) => set({ llm: { ...draft.llm, gateway: g } })} chain={data.model_chain} disabled={dis} onSave={commit} canSave={dirty && !save.isPending && !saveChannels.isPending} />
+
+      <Card id="news-budget" title="無料 LLM の予算と割り当て" hint="1 日の上限を、用途ごとに分けます。自分の割り当てを使い切った用途は予備から借り、予備も尽きたら翌日まで待ちます。割り当ての合計は 1 日の上限を超えられません。">
+        <div className="grid gap-2 sm:grid-cols-2" data-testid="quota-grid">
+          {QUOTA_ORDER.map((k) => (
+            <label key={k} className={label}>{data.quota_labels?.[k] ?? k}（回）
+              <input type="number" min={0} max={5000} aria-label={`${data.quota_labels?.[k] ?? k}の割り当て`} data-testid={`quota-${k}`} value={draft.llm.quota[k] ?? 0} disabled={dis}
+                onChange={(e) => set({ llm: { ...draft.llm, quota: { ...draft.llm.quota, [k]: num(e.target.value, 0, 5000, 0) } } })} className={`${field} mt-1 w-full`} />
+              <span className="num text-[11px] text-zinc-500">今日 {k === "spare" ? stats.spare_used : (stats.calls[k] ?? 0)} 回使用</span></label>
+          ))}
+        </div>
+        {(() => {
+          const sum = Object.values(draft.llm.quota).reduce((a, b) => a + b, 0);
+          const over = sum > draft.llm.daily_limit;
+          return <p role="status" data-testid="quota-sum" className={`num text-xs font-medium ${over ? "text-red-700 dark:text-red-400" : "text-zinc-600 dark:text-zinc-300"}`}>合計 {sum} / 1 日の上限 {draft.llm.daily_limit} 回{over ? "（上限を超えているので保存できません）" : ""}</p>;
+        })()}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Toggle label="余った枠を夜に後回しの仕事へ回す" hint="使い残した枠の分だけ、取り出しが済んでいない古い記事の取り出し直しをします" value={draft.llm.backfill_enabled} disabled={dis} onChange={(on) => set({ llm: { ...draft.llm, backfill_enabled: on } })} />
+          <label className={label}>夜の始まり（時。0〜23）
+            <input type="number" min={0} max={23} aria-label="夜の始まり" value={draft.llm.night_from} disabled={dis || !draft.llm.backfill_enabled}
+              onChange={(e) => set({ llm: { ...draft.llm, night_from: num(e.target.value, 0, 23, 21) } })} className={`${field} mt-1 w-full`} /></label>
+        </div>
+        <p className="num text-xs text-zinc-500" data-testid="budget-leftover">今日使える後回しの残り {stats.leftover} 回（{stats.night_from} 時以降に使います。今日はすでに {stats.calls.backfill ?? 0} 回）</p>
+        <button type="button" onClick={commit} disabled={!dirty || save.isPending || saveChannels.isPending || Object.values(draft.llm.quota).reduce((a, b) => a + b, 0) > draft.llm.daily_limit} className={primary}>保存</button>
       </Card>
     </>
   );

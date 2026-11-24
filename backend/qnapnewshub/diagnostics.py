@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text
 
-from qnapnewshub import channels, fetchlog, llm, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, updater, writer
+from qnapnewshub import channels, entities as entities_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, updater, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.config import data_dir
 from qnapnewshub.db import NewsFetchLog, NewsItem
@@ -141,13 +141,22 @@ def llm_section(db) -> dict:
     for name, row in sorted(llm.MODEL_STATS.items()):
         total = row["ok"] + row["fail"]
         models.append({"model": name, "ok": row["ok"], "fail": row["fail"], "success_pct": round(row["ok"] * 100 / total) if total else None,
-                       "rate_limited": row["rate_limited"], "avg_ms": int(row["ms_total"] / total) if total else 0})
+                       "rate_limited": row["rate_limited"], "avg_ms": int(row["ms_total"] / total) if total else 0,
+                       "ja_pct": round(row["ja_ok"] * 100 / row["ja_total"]) if row["ja_total"] else None, "quality_fail": row.get("quality_fail", 0),
+                       "paid": not llm_models.is_free(name), "provider": "gateway" if llm.is_gateway(name) else "openrouter", "last_ok_at": row.get("last_ok", "")})
     since = (datetime.now(_UTC) - timedelta(days=prep.RETRY_WINDOW_DAYS)).replace(tzinfo=None)
     waiting = db.scalar(select(func.count(NewsItem.id)).where(NewsItem.prep_tries < prep.MAX_TRIES, NewsItem.kind != "event", NewsItem.published_at >= since)) or 0
     waiting += sum(1 for p in writer.get().pending_items() if (p.prep_tries or 0) < prep.MAX_TRIES and p.kind != "event")
+    extract_waiting = db.scalar(select(func.count(NewsItem.id)).where(NewsItem.prep_tries >= prep.PREP_DONE, NewsItem.extract_v == 0, NewsItem.kind != "event", NewsItem.published_at >= since)) or 0
     return {"day": st["day"], "calls": st["calls"], "total": st["total"], "daily_limit": st["daily_limit"], "minute_limit": st["minute_limit"], "failed": st["failed"],
             "last_error": logbuf.redact(st["last_error"]), "key_set": st["key_set"], "models": models, "rate_limited": sum(m["rate_limited"] for m in models),
-            "unprocessed": int(waiting), "prep_enabled": cfg["prep_enabled"], "prep_model": cfg["prep_model"]}
+            "unprocessed": int(waiting), "prep_enabled": cfg["prep_enabled"], "prep_model": cfg["prep_model"],
+            # 用途ごとの今日の使い方（割り当て・使った回数・予備から借りた数・夜の後回しに使える残り）と、モデルの順番の今の状態・要素の取り出しの件数
+            "quota": st["quota"], "spare_used": st["spare_used"], "leftover": st["leftover"], "night_from": st["night_from"],
+            "chain": llm_models.status(), "daily_models": llm_models.load_daily(), "extract_enabled": cfg["extract_enabled"],
+            "gateway": {"enabled": cfg["gateway"]["enabled"], "base_set": bool(cfg["gateway"]["base_url"]), "key_set": st["gateway_key_set"], "calls": st["gateway_calls"],
+                        "model": cfg["gateway"]["model"], "batch": cfg["gateway"]["batch"]},
+            "knowledge": entities_mod.summary(db), "extract_waiting": int(extract_waiting)}
 
 
 def storage_section() -> dict:
@@ -179,11 +188,15 @@ def problems(section: dict) -> list[dict]:
     f, l, s, m = section["fetch"], section["llm"], section["storage"], section["machine"]
     if f["stalled"]:
         out.append({"area": "fetch", "level": "warn", "text": f"取得が止まった可能性のある取得先が {f['stalled']} 件あります"})
-    if l["prep_enabled"] and not l["key_set"] and l["unprocessed"]:
+    if l["prep_enabled"] and not l["key_set"] and not l["gateway"]["enabled"] and l["unprocessed"]:
         out.append({"area": "llm", "level": "warn", "text": "OpenRouter の鍵が未設定のため、下ごしらえが進みません"})
+    if l["gateway"]["enabled"] and l["chain"].get("gateway_down_in_seconds") is not None:
+        out.append({"area": "llm", "level": "warn", "text": f"ControlDeck のゲートウェイにつながらないため、あと約 {l['chain']['gateway_down_in_seconds'] // 60 + 1} 分は OpenRouter を使います"})
     if l["total"] >= l["daily_limit"]:
         out.append({"area": "llm", "level": "warn", "text": "LLM の 1 日の回数の上限に達しました"})
     for mod in l["models"]:
+        if mod["paid"] and mod["ok"] + mod["fail"] > 0:
+            out.append({"area": "llm", "level": "warn", "text": f"有料のモデル（{mod['model']}）を使っています。OpenRouter の残高が減ります"})
         if mod["success_pct"] is not None and mod["ok"] + mod["fail"] >= 5 and mod["success_pct"] < 50:
             out.append({"area": "llm", "level": "warn", "text": f"{mod['model']} の成功率が {mod['success_pct']}% です。別のモデルへの切り替えを検討してください"})
     if s["rest_app_writes"]:
@@ -283,4 +296,6 @@ def bundle(db) -> dict:
 def _safe_settings() -> dict:
     s = settings.load()
     s["llm"] = {k: v for k, v in s["llm"].items() if k != "digest_focus"}      # 利用者が書いた自由記述は出さない
+    if s["llm"].get("gateway", {}).get("base_url"):
+        s["llm"]["gateway"] = {**s["llm"]["gateway"], "base_url": "（設定あり。家の中のアドレスなので書き出さない）"}
     return s

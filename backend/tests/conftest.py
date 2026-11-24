@@ -31,6 +31,11 @@ def isolated_data(tmp_path, monkeypatch):
 
     auth._failures.clear()  # noqa: SLF001
     llm.reset_minute_window()
+    from qnapnewshub import llm_models
+
+    llm.MODEL_STATS.clear()
+    llm._model_day[0] = llm._today()  # noqa: SLF001
+    llm_models.reset()
     service._status.clear()
     service._last.update(started=0.0, finished=None, new=0)
     from qnapnewshub import metrics, rest, writer

@@ -18,7 +18,7 @@ for (const vp of SIZES) {
         await expect(page.getByTestId("diag-page")).toBeVisible();
         await expect(page.getByTestId("diag-problems")).toContainText("取得が止まった可能性");
         await expect(page.getByTestId("fetch-stalled")).toContainText("1 件");
-        await expect(page.getByTestId("llm-total")).toContainText("14 / 300");
+        await expect(page.getByTestId("llm-total")).toContainText("14 / 800");
         await expect(page.getByTestId("unsaved")).toContainText("記事 12 件");
         await expect(page.getByTestId("io-write")).toContainText("1.0 MB");
         await expectNoHorizontalOverflow(page);

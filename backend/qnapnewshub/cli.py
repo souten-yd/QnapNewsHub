@@ -1,4 +1,4 @@
-"""コマンド: ./hub.sh create-admin（最初の管理者）・./hub.sh run（待ち受けの設定を読んで起動）・./hub.sh set-openrouter-key。"""
+"""コマンド: ./hub.sh create-admin（最初の管理者）・./hub.sh run（待ち受けの設定を読んで起動）・./hub.sh set-openrouter-key・./hub.sh llm-try（取り出しを 1 回だけ流す）。"""
 from __future__ import annotations
 
 import argparse
@@ -35,6 +35,12 @@ def _set_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def _llm_try(args: argparse.Namespace) -> int:
+    from qnapnewshub import llm_try
+
+    return llm_try.run(args.provider, args.base, args.model, args.items)
+
+
 def _run(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -56,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     admin.add_argument("--username", default="")
     admin.set_defaults(func=_create_admin)
     sub.add_parser("set-openrouter-key", help="OpenRouter の鍵を暗号化して保存する").set_defaults(func=_set_key)
+    try_p = sub.add_parser("llm-try", help="取り出しを 1 回だけ流す（本物の LLM の評価用。鍵は環境変数 NEWSHUB_LLM_TRY_KEY）")
+    try_p.add_argument("--provider", choices=("gateway", "openrouter"), default="gateway")
+    try_p.add_argument("--base", default="", help="ゲートウェイの基準の URL")
+    try_p.add_argument("--model", required=True)
+    try_p.add_argument("--items", type=int, default=10)
+    try_p.set_defaults(func=_llm_try)
     sub.add_parser("run", help="起動する").set_defaults(func=_run)
     args = parser.parse_args(argv)
     return args.func(args)

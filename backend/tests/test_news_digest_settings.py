@@ -325,13 +325,13 @@ def test_digest_shows_headlines_while_the_llm_is_working(monkeypatch):
 
 
 def test_settings_defaults_and_validation(admin_client):
-    """目的: 設定の既定（まとめの時刻・OpenRouter の無料モデル・1 日 300 回・1 分 10 回）と、形の検査・上限の範囲。
-    根拠: docs/research-free-llm-batch.md（既定の上限は 1 日 300 回・1 分 10 回）。不正な値は黙って受けず 422 にする（AGENTS.md 8）。"""
+    """目的: 設定の既定（まとめの時刻・OpenRouter の無料モデル・1 日 800 回・1 分 15 回）と、形の検査・上限の範囲。
+    根拠: docs/research-free-llm-batch.md（既定の上限は 1 日 800 回・1 分 15 回）。不正な値は黙って受けず 422 にする（AGENTS.md 8）。"""
     body = admin_client.get("/api/v1/news/settings").json()
     cfg = body["settings"]
     assert cfg["digest_daily"] == {"enabled": True, "time": "06:30"} and cfg["digest_weekly"] == {"enabled": True, "weekday": 0, "time": "07:00"}
     assert cfg["llm"]["gist_enabled"] is False and cfg["llm"]["prep_model"] == llm.DEFAULT_MODEL
-    assert cfg["llm"]["daily_limit"] == 300 and cfg["llm"]["minute_limit"] == 10 and body["prep_batch"] == 30
+    assert cfg["llm"]["daily_limit"] == 800 and cfg["llm"]["minute_limit"] == 15 and body["prep_batch"] == 30
     assert "rag" not in cfg and "imagegen" not in cfg
     assert body["weekdays"][0] == "月" and body["interval_minutes"] == 30 and body["llm_stats"]["key_set"] is False
     for bad in ({"digest_daily": {"time": "6:30"}}, {"digest_weekly": {"weekday": 7}}, {"feed_refresh_minutes": 0},

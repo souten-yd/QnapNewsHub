@@ -116,6 +116,8 @@ async def _after_save(saved: dict) -> dict:
         info["gist"] = await gist.enrich(changed)
         prepared = await prep.run(changed)
         info["prep"] = prepared
+        late = await prep.run_backfill()      # 夜だけ: 取り出しが済んでいない記事の要素を、使い残した枠で
+        info["backfill"] = late
         if prepared["error"] and not info["gist"]["error"]:
             info["gist"]["error"] = prepared["error"]
     except Exception as exc:  # noqa: BLE001

@@ -111,6 +111,9 @@
 .card-chips { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; }
 .card-chips button { border: 1px solid var(--nw-line); background: transparent; border-radius: 999px; padding: 1px 9px; font-size: .7rem; color: var(--nw-muted); min-height: 24px; }
 .card-chips button:hover { border-color: var(--nw-accent); color: var(--nw-fg); }
+.card-ents { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.card-ents a { display: inline-flex; align-items: center; min-height: 28px; border-radius: 6px; padding: 0 8px; font-size: .7rem; font-weight: 600; text-decoration: none; color: var(--nw-accent); background: color-mix(in srgb, var(--nw-accent) 10%, transparent); }
+.card-ents a:hover { background: color-mix(in srgb, var(--nw-accent) 22%, transparent); }
 .card-foot { margin-top: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; justify-content: space-between; padding-top: 4px; }
 .card-read { font-weight: 800; font-size: .78rem; letter-spacing: .1em; color: var(--nw-accent); min-height: 36px; display: inline-flex; align-items: center; }
 .card-acts { display: flex; gap: 4px; }

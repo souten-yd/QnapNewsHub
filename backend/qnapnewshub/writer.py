@@ -50,13 +50,14 @@ class _Buf:
         self.fetchlog: list[dict] = []
         self.states: dict[str, Callable[[], None]] = {}  # 名前 -> 書く処理（LLM の回数など。後の指定が勝つ）
         self.token_used: dict[int, str] = {}
+        self.extractions: dict[int, dict] = {}         # 記事の id -> 要素の取り出し（物・fact。entities.apply_extractions が書く）
         self.bytes = 0
 
     def empty(self) -> bool:
-        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used)
+        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions)
 
     def count(self) -> int:
-        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used)
+        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions)
 
 
 def merge_patch(old: dict | None, new: dict) -> dict:
@@ -270,6 +271,12 @@ class Coordinator:
             self.buf.states[key] = fn
         self._touch(100)
 
+    def stage_extraction(self, article_id: int, data: dict) -> None:
+        """要素の取り出し（entities・facts）を積む。同じ記事は後の分が勝つ。"""
+        with self.lock:
+            self.buf.extractions[article_id] = data
+        self._touch(300 + 150 * (len(data.get("entities", [])) + len(data.get("facts", []))))
+
     def stage_token_used(self, token_id: int, at: str) -> None:
         with self.lock:
             self.buf.token_used[token_id] = at
@@ -346,7 +353,7 @@ class Coordinator:
         with self.lock:
             b = self.buf
             return {"items": len(b.new), "updates": len(b.updates), "patches": len(b.patches), "fetchlog": len(b.fetchlog),
-                    "states": len(b.states), "total": b.count(), "bytes": b.bytes, "inflight": self.inflight.count()}
+                    "states": len(b.states), "extractions": len(b.extractions), "total": b.count(), "bytes": b.bytes, "inflight": self.inflight.count()}
 
     def unsaved_total(self) -> int:
         with self.lock:
@@ -395,6 +402,10 @@ class Coordinator:
             try:
                 with news_db.session() as db:
                     gained = store.apply_staged(db, list(snap.new.values()), snap.updates, snap.patches)
+                    if snap.extractions:
+                        from qnapnewshub import entities
+
+                        entities.apply_extractions(db, snap.extractions)
                     if snap.fetchlog:
                         fetchlog.record(db, snap.fetchlog, commit=False)
                     if snap.new or gained or snap.fetchlog:      # 分析の集計の表へ、増えた分だけを同じトランザクションで足す
@@ -451,6 +462,8 @@ class Coordinator:
         into.fetchlog[:0] = older.fetchlog
         for k, v in older.states.items():
             into.states.setdefault(k, v)
+        for k, v in older.extractions.items():
+            into.extractions.setdefault(k, v)
         for k, v in older.token_used.items():
             into.token_used.setdefault(k, v)
         into.bytes += older.bytes

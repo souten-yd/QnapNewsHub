@@ -375,6 +375,9 @@ def attach_also(db: Session, rows: list[dict]) -> list[dict]:
         r["also"] = len(names)
         if names:
             r["also_sources"] = list(dict.fromkeys(names))[:5]
+    from qnapnewshub import entities
+
+    entities.attach_tags(db, rows)      # 物の札（要素の取り出しが済んだ記事だけ。無ければ空）
     return rows
 
 

@@ -16,7 +16,10 @@ export interface NewsItem {
   translated?: boolean; summary_original?: string;
   /** 同じ記事の別の出どころの数（代表の記事だけ。一覧では 1 件にまとめて出す）と、その出どころの名前 */
   also?: number; also_sources?: string[];
+  /** 要素の取り出し（AI）で取れた物の札（記事の数が多い順に最大 4）。押すと物のページ */
+  entities?: EntityTag[];
 }
+export interface EntityTag { id: number; name: string; type: EntityType }
 export interface NewsPage { items: NewsItem[]; next: string | null }
 export interface NewsQuery { view: NewsView; kinds: string; q: string; date: string; topic: string; source: string; channel?: string }
 
@@ -115,13 +118,22 @@ export interface NewsRuntimeSettings {
   quiet: { enabled: boolean; start: string; end: string };
   rest: { enabled: boolean; start: string; end: string; mode: "keep_memory" | "stop_all" | "flush_at_limit" };
   storage: { flush_minutes: number; max_items: number; max_mb: number; log_file: boolean; access_log: boolean };
-  llm: { digest_model: string; gist_enabled: boolean; gist_model: string; digest_focus: string; prep_enabled: boolean; prep_model: string; prep_max_per_run: number; daily_limit: number; minute_limit: number };
+  llm: { digest_model: string; gist_enabled: boolean; gist_model: string; digest_focus: string; prep_enabled: boolean; prep_model: string; prep_max_per_run: number; daily_limit: number; minute_limit: number;
+    extract_enabled: boolean; fallback_models: string[]; quota: Record<string, number>; night_from: number; backfill_enabled: boolean; gateway: GatewaySettings };
 }
+/** ControlDeck のゲートウェイ（OpenAI 互換）。鍵は別（暗号化して保存。画面・応答に出ない） */
+export interface GatewaySettings { enabled: boolean; base_url: string; model: string; first: boolean; batch: number; timeout_seconds: number; minute_limit: number; cooldown_minutes: number }
 /** 今日の LLM の呼び出し（backend の llm.stats）。鍵の本文は含まない（key_set は入っているかだけ）。 */
 export interface LlmStats {
   day: string; calls: Record<string, number>; total: number; daily_limit: number; minute_limit: number; failed: number; last_error: string; key_set: boolean;
+  quota: Record<string, number>; spare_used: number; night_from: number; leftover: number;
 }
-export interface NewsSettingsResponse { settings: NewsRuntimeSettings; weekdays: string[]; interval_minutes: number; prep_calls_today?: number; llm_stats: LlmStats; prep_batch: number; rest_state?: { enabled: boolean; active: boolean; mode: string; ends_at: string | null }; rest_modes?: Record<string, string> }
+export interface ModelChainStatus {
+  gateway_down_in_seconds?: number | null;
+  chain: string[]; current: string; index: number; return_in_seconds: number | null; paid: string[];
+  events: { at: string; kind: "switch" | "return" | "down"; model: string; reason: string }[];
+}
+export interface NewsSettingsResponse { settings: NewsRuntimeSettings; weekdays: string[]; interval_minutes: number; prep_calls_today?: number; llm_stats: LlmStats; prep_batch: number; rest_state?: { enabled: boolean; active: boolean; mode: string; ends_at: string | null }; rest_modes?: Record<string, string>; quota_labels?: Record<string, string>; model_chain?: ModelChainStatus; gateway_key_set?: boolean }
 /** 日刊・週刊のまとめ。body が空で error があるのは「作らなかった」回（外部への送信が許可されていない等）。fallback は LLM なしの見出しの一覧。 */
 export interface Digest {
   id: number; period: "daily" | "weekly"; label: string; day: string; body: string; model: string; created_at: string;
@@ -376,3 +388,54 @@ export function useDeleteOpenRouterKey() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: [...key, "openrouter-key"] }); qc.invalidateQueries({ queryKey: [...key, "settings"] }); },
   });
 }
+export const useGatewayKey = () =>
+  useQuery({ queryKey: [...key, "gateway-key"], queryFn: () => api<{ set: boolean }>("/news/gateway-key"), staleTime: 15_000 });
+export function useSaveGatewayKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (value: string) => api<{ set: boolean }>("/news/gateway-key", { method: "PUT", json: { key: value } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: [...key, "gateway-key"] }); },      // 設定の下書きを巻き戻さないよう、settings は読み直さない
+  });
+}
+export function useDeleteGatewayKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ set: boolean }>("/news/gateway-key", { method: "DELETE" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: [...key, "gateway-key"] }); },      // 設定の下書きを巻き戻さないよう、settings は読み直さない
+  });
+}
+/** 「接続を試す」: {base}/models を読む。入力中の URL を渡す（空なら保存済みの URL）。 */
+export interface GatewayTest { ok: boolean; models: string[]; ms: number; error: string }
+export const useTestGateway = () =>
+  useMutation({ mutationFn: (baseUrl: string) => api<GatewayTest>("/news/gateway/test", { method: "POST", json: { base_url: baseUrl } }) });
+
+/** 物（要素の取り出し）。backend/qnapnewshub/entities.py・entities_router.py と対になる。 */
+export type EntityType = "model" | "software" | "org" | "person" | "tech" | "product" | "game" | "policy" | "place" | "other";
+export const ENTITY_TYPE_LABEL: Record<EntityType, string> = {
+  model: "モデル", software: "ソフト", org: "組織", person: "人", tech: "技術", product: "製品", game: "ゲーム", policy: "制度", place: "場所", other: "その他",
+};
+export interface EntityRow { id: number; name: string; type: EntityType; first_seen: string; last_seen: string; article_count: number; period_count: number }
+export interface EntityList { items: EntityRow[]; total: number; types: EntityType[] }
+export interface EntityFact {
+  id: number; kind: string; text: string; value: string; article_id: number; article_title: string; published_at: string;
+  model: string; prompt_version: string; ai_extracted: boolean;
+}
+export interface EntityDetail {
+  id: number; name: string; type: EntityType; aliases: string[]; first_seen: string; last_seen: string; article_count: number;
+  timeline: { id: number; title: string; url: string | null; source: string; published_at: string; summary: string }[];
+  facts: EntityFact[]; related: { id: number; name: string; type: EntityType; count: number }[];
+}
+export interface EntityQuery { q: string; type: string; days: number; sort: "count" | "recent" }
+export const useEntities = (query: EntityQuery) =>
+  useQuery({
+    queryKey: ["entities", query],
+    queryFn: () => {
+      const p = new URLSearchParams({ sort: query.sort, limit: "100" });
+      if (query.q.trim()) p.set("q", query.q.trim());
+      if (query.type) p.set("type", query.type);
+      if (query.days) p.set("days", String(query.days));
+      return api<EntityList>(`/entities?${p}`);
+    },
+    staleTime: 15_000,
+  });
+export const useEntity = (id: number) => useQuery({ queryKey: ["entities", "one", id], queryFn: () => api<EntityDetail>(`/entities/${id}`), enabled: Number.isFinite(id) });

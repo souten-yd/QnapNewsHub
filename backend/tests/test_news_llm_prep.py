@@ -2,7 +2,7 @@
 外へ通信しない（HTTP の 1 回 = llm._post を差し替える。待ちは llm._sleep を差し替えて実際には待たない）。
 
 根拠: docs/research-free-llm-batch.md（2026-11-24 実測）: 30 件は 30 秒以内で形が崩れず、概要が日本語で返らない記事は回ごとにばらつく → 記事ごとに検査し、
-合わない記事だけ同じ回で 1 回送り直す。既定の上限は 1 日 300 回・1 分 10 回。混み合い（429）は 20・60・120 秒で最大 3 回（ControlDeck と同じ。2026-11-23 利用者
+合わない記事だけ同じ回で 1 回送り直す。既定の上限は（v0.2 から）1 日 800 回・1 分 15 回。混み合い（429）は 20・60・120 秒で最大 3 回（ControlDeck と同じ。2026-11-23 利用者
 「混み合いの制限などで一時的に断られた場合は、少し時間を置いてから再度実行する」）。鍵はログ・応答・例外の文に出さない（AGENTS.md 4）。
 """
 from __future__ import annotations
@@ -194,7 +194,7 @@ def test_prep_without_key_does_nothing_and_does_not_call(monkeypatch):
 def test_daily_limit_stops_and_resumes_next_day(monkeypatch, keyed):
     """目的: 1 日の上限（設定 daily_limit）に達したら、それ以上送らず次の日まで止まる。日が変われば数え直す。記事の試行回数は増やさない。
     根拠: 無料のモデルの 1 日の上限に当たる前に自分で止める（docs/research-free-llm-batch.md「既定の上限は 1 日 300 回」）。"""
-    cfg = settings.load(); cfg["llm"]["daily_limit"] = 2; settings.save(cfg)
+    cfg = settings.load(); cfg["llm"]["daily_limit"] = 2; cfg["llm"]["quota"] = None; settings.save(cfg)
     ids, rows = rows_of(100)
     server = Server()
     monkeypatch.setattr(llm, "_post", server)
@@ -210,9 +210,10 @@ def test_daily_limit_stops_and_resumes_next_day(monkeypatch, keyed):
     assert len(server.calls) == 4 and out["calls"] == 2           # 取り残した 40 件のうち、新しい日の枠（2 回）が使える
 
 
-def test_default_limits_are_300_a_day_and_10_a_minute():
-    assert settings.load()["llm"]["daily_limit"] == 300 and settings.load()["llm"]["minute_limit"] == 10
-    assert llm.DEFAULT_DAILY_LIMIT == 300 and llm.DEFAULT_MINUTE_LIMIT == 10
+def test_default_limits_are_800_a_day_and_15_a_minute():
+    """目的: 既定の上限が 1 日 800 回・1 分 15 回（v0.2 で 300・10 から変えた）。根拠: ARCHITECTURE 5.1・利用者 2026-11-24「OpenRouter の無料 LLM を積極的に使う」。"""
+    assert settings.load()["llm"]["daily_limit"] == 800 and settings.load()["llm"]["minute_limit"] == 15
+    assert llm.DEFAULT_DAILY_LIMIT == 800 and llm.DEFAULT_MINUTE_LIMIT == 15
 
 
 def test_minute_limit_waits_until_the_window_has_room(monkeypatch, keyed):
@@ -287,12 +288,12 @@ def test_the_key_never_appears_in_logs_errors_or_stats(monkeypatch, keyed, caplo
 def test_digest_and_gist_count_against_the_same_daily_budget(monkeypatch, keyed):
     """目的: まとめ・一言要約も 1 日の上限に数える（用途別に見えるが、上限は合計）。
     根拠: OpenRouter の上限はアカウント全体。下ごしらえだけ数えると、まとめの回で上限を超える。"""
-    cfg = settings.load(); cfg["llm"]["daily_limit"] = 3; settings.save(cfg)
+    cfg = settings.load(); cfg["llm"]["daily_limit"] = 3; cfg["llm"]["quota"] = None; settings.save(cfg)
     server = Server(lambda messages, n: chat("ok"))
     monkeypatch.setattr(llm, "_post", server)
     for purpose in ("prep", "digest", "gist"):
         run(llm.complete("m", [{"role": "user", "content": "x"}], purpose=purpose))
-    assert llm.stats(3)["calls"] == {"prep": 1, "digest": 1, "gist": 1}
+    assert {k: v for k, v in llm.stats(3)["calls"].items() if v} == {"prep": 1, "digest": 1, "gist": 1}
     with pytest.raises(llm.LlmDailyLimit):
         run(llm.complete("m", [{"role": "user", "content": "x"}], purpose="digest"))
     assert len(server.calls) == 3
