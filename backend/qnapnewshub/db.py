@@ -66,6 +66,8 @@ class NewsItem(Base):
     guid: Mapped[str] = mapped_column(String(500), default="", server_default="")
     simhash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     dup_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 要素の取り出し（entities.py）の版。0 なら未（夜の後回しの仕事が拾う）。下ごしらえと同じ 1 回の呼び出しで取り出したら EXTRACT_VERSION が入る
+    extract_v: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class NewsAction(Base):
@@ -97,6 +99,60 @@ class NewsDigest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     error: Mapped[str] = mapped_column(Text, default="")
     fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class Entity(Base):
+    """物（モデル・ソフトウェア・組織・人・技術・製品・ゲーム・制度・場所）。key は表記ゆれを寄せた正規化のキー（entities.normalize_key）で、1 つの key は 1 行。
+    name は最初に見えた表示名、type は最初の種類（other だった物は、より具体的な種類が出たら更新）。article_count は article_entities の数（保存のたびに数え直す）。"""
+
+    __tablename__ = "entities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    type: Mapped[str] = mapped_column(String(16), index=True, default="other")
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    article_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+
+
+class EntityAlias(Base):
+    """物の別名（正規化のキーは同じだが、表記が違うもの。例: "GPT-4o" と "GPT 4o"）。"""
+
+    __tablename__ = "entity_aliases"
+    __table_args__ = (UniqueConstraint("entity_id", "alias", name="uq_entity_alias"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), index=True)
+    alias: Mapped[str] = mapped_column(String(200))
+
+
+class ArticleEntity(Base):
+    """記事 × 物。記事が消えれば一緒に消える。"""
+
+    __tablename__ = "article_entities"
+
+    article_id: Mapped[int] = mapped_column(ForeignKey("news_items.id", ondelete="CASCADE"), primary_key=True)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True, index=True)
+
+
+class Claim(Base):
+    """記事が述べる個々の事実（facts）。ai_extracted=True は LLM が取り出したもの（確かめた事実ではない。画面に「AI の取り出し」の印を出す）。
+    source_article_id は出どころの記事（いまは取り出した記事と同じ。重複の代表へ寄せるのは後の段）。"""
+
+    __tablename__ = "claims"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    article_id: Mapped[int] = mapped_column(ForeignKey("news_items.id", ondelete="CASCADE"), index=True)
+    entity_id: Mapped[int | None] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="other")
+    text: Mapped[str] = mapped_column(Text, default="")
+    value: Mapped[str] = mapped_column(String(120), default="")
+    source_article_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model: Mapped[str] = mapped_column(String(200), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ai_extracted: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
 
 class NewsFetchLog(Base):
@@ -187,7 +243,8 @@ class AnaMeta(Base):
 _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOLEAN NOT NULL DEFAULT 0"), ("news_items", "summary_ja", "TEXT DEFAULT ''"),
                                         ("news_items", "img_prompt", "TEXT DEFAULT ''"), ("news_items", "prep_tries", "INTEGER NOT NULL DEFAULT 0"),
                                         ("news_items", "canon_url", "VARCHAR(1000) DEFAULT ''"), ("news_items", "guid", "VARCHAR(500) DEFAULT ''"),
-                                        ("news_items", "simhash", "BIGINT"), ("news_items", "dup_of", "INTEGER")]
+                                        ("news_items", "simhash", "BIGINT"), ("news_items", "dup_of", "INTEGER"),
+                                        ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0")]
 # 後から足した索引（既にあるファイルにも足す）
 _LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at")]
 

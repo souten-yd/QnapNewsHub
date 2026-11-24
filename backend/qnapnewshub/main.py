@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from qnapnewshub import __version__, analytics, analytics_router, auth, auth_router, diag_router, logbuf, metrics, router, service, settings, update_router, updater, writer
+from qnapnewshub import __version__, analytics, analytics_router, auth, auth_router, diag_router, entities_router, logbuf, metrics, router, service, settings, update_router, updater, writer
 
 logger = logging.getLogger("qnapnewshub.main")
 
@@ -103,6 +103,7 @@ def create_app() -> FastAPI:
 
     api.include_router(auth_router.router)
     api.include_router(router.router)
+    api.include_router(entities_router.router)
     api.include_router(diag_router.router)
     api.include_router(update_router.router)
     api.include_router(analytics_router.router)

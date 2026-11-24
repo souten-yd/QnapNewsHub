@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from qnapnewshub import channels as channels_mod
-from qnapnewshub import polling, portability, rest, writer, feedgen, fetchlog, probe, sourcemgr, digest, home, llm, prefs, prep, presets, profile, service, sources, store
+from qnapnewshub import polling, portability, rest, writer, feedgen, fetchlog, probe, sourcemgr, digest, home, llm, llm_models, prefs, prep, presets, profile, service, sources, store
 from qnapnewshub.auth import AuthUser as User
 from qnapnewshub.auth import current_user as get_current_user
 from qnapnewshub.auth import require_admin
@@ -432,7 +432,8 @@ def get_settings(user: User = Depends(get_current_user)):
     cfg = settings["llm"]
     return {"settings": settings, "weekdays": list(news_settings.WEEKDAYS), "interval_minutes": channels_mod.load()["interval_minutes"],
             "prep_calls_today": prep.calls_today(), "llm_stats": llm.stats(cfg["daily_limit"], cfg["minute_limit"]), "prep_batch": prep.BATCH,
-            "rest_state": rest.state(), "rest_modes": rest.MODE_LABELS}
+            "rest_state": rest.state(), "rest_modes": rest.MODE_LABELS,
+            "gateway_key_set": llm.gateway_key_is_set(), "quota_labels": llm.QUOTA_LABELS, "model_chain": llm_models.status()}
 
 
 @router.put("/settings")
@@ -467,6 +468,68 @@ async def put_openrouter_key(body: KeyBody, user: User = Depends(require_admin))
 async def delete_openrouter_key(user: User = Depends(require_admin)):
     await asyncio.to_thread(llm.delete_key)
     return {"set": False}
+
+
+class GatewayKeyBody(BaseModel):
+    key: str = Field(min_length=1, max_length=400, repr=False)
+
+
+@router.get("/gateway-key")
+def get_gateway_key(user: User = Depends(require_admin)):
+    """ゲートウェイの鍵が入っているか（本文は返さない）。"""
+    return {"set": llm.gateway_key_is_set()}
+
+
+@router.put("/gateway-key")
+async def put_gateway_key(body: GatewayKeyBody, user: User = Depends(require_admin)):
+    """ゲートウェイの鍵を入れる（OpenRouter の鍵と同じく暗号化して置き場へ。応答・ログに鍵は出さない）。"""
+    try:
+        await asyncio.to_thread(llm.set_gateway_key, body.key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"set": True}
+
+
+@router.delete("/gateway-key")
+async def delete_gateway_key(user: User = Depends(require_admin)):
+    await asyncio.to_thread(llm.delete_gateway_key)
+    return {"set": False}
+
+
+class GatewayTestBody(BaseModel):
+    base_url: str = Field(default="", max_length=300)
+
+
+@router.post("/gateway/test")
+async def test_gateway(body: GatewayTestBody, user: User = Depends(require_admin)):
+    """「接続を試す」: {base}/models を読む（入力中の URL か、保存済みの URL）。{"ok", "models": [名前], "ms", "error"}。鍵は応答にも文にも出さない。管理者だけ。"""
+    import json as _json
+    import time as _time
+
+    from qnapnewshub import secretbox
+
+    try:
+        base = news_settings.gateway_url(body.base_url) or news_settings.load()["llm"]["gateway"]["base_url"]
+    except sources.ConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not base:
+        raise HTTPException(status_code=422, detail="URL を入れてください")
+    key = await asyncio.to_thread(secretbox.get_secret, llm.GATEWAY_KEY_NAME) or ""
+    started = _time.monotonic()
+    try:
+        status, text = await llm.get_gateway_models(base, key)
+    except llm.LlmUnavailable as exc:
+        return {"ok": False, "models": [], "ms": int((_time.monotonic() - started) * 1000), "error": str(exc)}
+    ms = int((_time.monotonic() - started) * 1000)
+    if status >= 400:
+        return {"ok": False, "models": [], "ms": ms, "error": llm._error_message(status, text).replace(key, "[鍵]") if key else llm._error_message(status, text)}  # noqa: SLF001
+    try:
+        data = _json.loads(text)
+        rows = data["data"] if isinstance(data, dict) else data
+        names = sorted({str(r["id"])[:200] for r in rows if isinstance(r, dict) and r.get("id")})[:300]
+    except (ValueError, KeyError, TypeError):
+        return {"ok": False, "models": [], "ms": ms, "error": "モデルの一覧の形が違います（OpenAI 互換の /models ではありません）"}
+    return {"ok": True, "models": names, "ms": ms, "error": ""}
 
 
 @router.get("/digests")

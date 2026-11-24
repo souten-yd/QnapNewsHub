@@ -16,7 +16,7 @@ for (const vp of VIEWPORTS) {
         await mockApi(page, state);
         await page.goto("/settings");
         await expect(page.getByTestId("key-status")).toContainText("未設定");
-        await expect(page.getByTestId("llm-stats")).toContainText("14 / 300");
+        await expect(page.getByTestId("llm-stats")).toContainText("14 / 800");
         await expectNoHorizontalOverflow(page);
         await shot(page, `settings-top-${vp.name}-${scheme}`);
         await page.locator("#news-key").scrollIntoViewIfNeeded();

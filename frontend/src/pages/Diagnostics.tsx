@@ -5,6 +5,7 @@ import { Card, ghost, primary } from "../features/news/settingsUi";
 const bytes = (n: number) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : n >= 1 << 10 ? `${(n / (1 << 10)).toFixed(0)} KB` : `${n} B`);
 const clock = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 const dur = (s: number) => (s >= 86400 ? `${Math.floor(s / 86400)} 日 ${Math.floor((s % 86400) / 3600)} 時間` : s >= 3600 ? `${Math.floor(s / 3600)} 時間 ${Math.floor((s % 3600) / 60)} 分` : `${Math.floor(s / 60)} 分`);
+const QUOTA_LABEL: Record<string, string> = { prep: "下ごしらえと取り出し", gist: "要約", digest: "まとめ", card: "知識カード", trend: "傾向の解説", spare: "予備（借りた数）" };
 const REASONS: Record<string, string> = { http: "HTTP エラー", timeout: "時間切れ", xml: "XML・形の異常", robots: "robots.txt", other: "その他" };
 
 function Row({ k, v, id }: { k: string; v: React.ReactNode; id?: string }) {
@@ -92,7 +93,24 @@ export default function DiagnosticsPage() {
           <Row k="未処理の記事" v={`${l.unprocessed} 件`} id="llm-unprocessed" />
           <Row k="鍵" v={l.key_set ? "入っています" : "未設定"} />
         </dl>
-        {l.models.length > 0 && <ul className="space-y-1">{l.models.map((x) => <li key={x.model} className="num text-xs"><span className="font-mono">{x.model}</span> — 成功率 {x.success_pct ?? "—"}%（{x.ok}/{x.ok + x.fail}）· 平均 {x.avg_ms} ms</li>)}</ul>}
+        <div data-testid="llm-quota" className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-700">
+          <p className="font-semibold">用途ごとの今日の使い方（使った / 割り当て）</p>
+          <ul className="num mt-1 grid gap-x-4 sm:grid-cols-2">
+            {Object.entries(l.quota).map(([k, n]) => (
+              <li key={k} className="flex justify-between"><span className="text-zinc-500">{QUOTA_LABEL[k] ?? k}</span><span>{k === "spare" ? l.spare_used : (l.calls[k] ?? 0)} / {n}</span></li>
+            ))}
+          </ul>
+          <p className="num mt-1 text-zinc-500">夜（{l.night_from} 時以降）の後回しに使える残り {l.leftover} 回 · 後回しで使った {l.calls.backfill ?? 0} 回 · 取り出し待ちの記事 {l.extract_waiting} 件{l.extract_enabled ? "" : "（取り出しは切）"}</p>
+        </div>
+        <dl>
+          <Row k="いま使うモデル" v={<span className="font-mono">{l.chain.current || l.prep_model}</span>} id="llm-current-model" />
+          <Row k="モデルの並び" v={<span className="font-mono">{l.chain.chain.join(" → ") || l.prep_model}</span>} />
+          {l.chain.return_in_seconds !== null && <Row k="1 番目へ戻すまで" v={`${Math.ceil(l.chain.return_in_seconds / 60)} 分`} />}
+          <Row k="ゲートウェイ" v={!l.gateway.enabled ? "使わない" : l.chain.gateway_down_in_seconds !== null ? `つながらないため、あと約 ${Math.floor(l.chain.gateway_down_in_seconds / 60) + 1} 分は外しています` : `使う（今日 ${l.gateway.calls} 回・1 回 ${l.gateway.batch} 件）`} id="llm-gateway" />
+          <Row k="取り出した物・fact・記事" v={`${l.knowledge.entities} 物・${l.knowledge.claims} fact・${l.knowledge.extracted_articles} 記事`} id="llm-knowledge" />
+        </dl>
+        {l.chain.events.length > 0 && <ul className="num text-xs text-zinc-500" data-testid="llm-chain-events">{l.chain.events.map((e) => <li key={e.at + e.kind}>{clock(e.at)} {e.kind === "switch" ? "切り替え" : e.kind === "down" ? "ゲートウェイを外す" : "戻し"} → <span className="font-mono">{e.model}</span> {e.reason}</li>)}</ul>}
+        {l.models.length > 0 && <ul className="space-y-1">{l.models.map((x) => <li key={x.model} className="num text-xs"><span className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">{x.provider === "gateway" ? "ゲートウェイ" : "OpenRouter"}</span> <span className="font-mono">{x.model.replace(/^gateway:/, "")}</span>{x.paid ? " （有料）" : ""} — 成功率 {x.success_pct ?? "—"}%（{x.ok}/{x.ok + x.fail}）· 日本語 {x.ja_pct ?? "—"}% · 429 {x.rate_limited} 回 · 平均 {x.avg_ms} ms · 最後に成功 {clock(x.last_ok_at)}</li>)}</ul>}
       </Card>
 
       <Card id="diag-storage" title="保存と I/O" hint="書き込みは 30 分ごとのまとめ書きが基本です。数値はメモリにあり、ディスクへは 1 日 1 回だけ要約を書きます。">

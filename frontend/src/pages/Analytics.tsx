@@ -279,7 +279,10 @@ export default function AnalyticsPage() {
       <ComparePanel f={f} />
       <div className="grid gap-2 md:grid-cols-2">
         <Future title="知識の地図" text="記事から取り出した物（モデル・会社・技術）のつながりを地図で見る" />
-        <Future title="物のノート" text="物ごとの知識カードと、時間による変化・メモ" />
+        <Link to="/entities" data-testid="entities-link" className="block min-w-0 rounded-2xl border border-zinc-200 p-3 hover:border-accent-600 dark:border-zinc-800">
+          <h2 className="text-sm font-bold">物 →</h2>
+          <p className="mt-1 text-xs text-zinc-500">記事から AI が取り出した物（モデル・会社・技術）の一覧と、物ごとの年表・facts を見る</p>
+        </Link>
       </div>
     </div>
   );

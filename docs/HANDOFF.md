@@ -28,21 +28,24 @@
 | #9 | v0.1: QPKG（x86_64）`./hub.sh qpkg`・QTS の模擬での確かめ（`packaging/qpkg/test/run-sim.sh`）・LAN に待ち受けるときの最初の管理者の一回限りの番号（`NEWSHUB_SETUP_TOKEN=1`）。docs/QPKG.md |
 | 更新（0.1.1） | 署名つきの Release（Ed25519）・更新の確認（1 日 1 回・ETag・メモリだけ）・QPKG の入れ替え（切り離した子で `sh <qpkg>`）・前の版への戻し・設定の更新の節・ホームの知らせ・診断。docs/UPDATE.md。`./hub.sh release <版>` が Release の台本（作るだけ。実際の Release は司令塔が作る） |
 | 分析（第 1 版） | 集計の表（`analytics.py`・まとめ書きと同じトランザクションで増分・作り直し）・`/api/v1/analytics`（概要・推移・ホットトピック・取得先・比較）・画面「分析」（ECharts 5.6.0 を遅延読み込み）・ホームの上位 5。PLAN v0.4 の一部を前倒し。ARCHITECTURE 7・7.5・11 章の「実装と違った点」、DESIGN 9 章（速さの実測） |
+| v0.1.1 | **Release 済み**（GitHub の Release、署名つき） |
+| v0.2 前半（feat/llm-worker） | 無料の外部 LLM の係（予算 1 日 800 回・1 分 15 回・用途ごとの割り当て・夜の後回し・モデルの順番と切り替え）・**ControlDeck のゲートウェイ**（OpenAI 互換。先に使い、つながらなければ OpenRouter へ）・概要と要素の取り出しを 1 回の呼び出しで・物（entities）と fact（claims）の保存・`/api/v1/entities`・画面「物」・カードの札・`./hub.sh llm-try`。ARCHITECTURE 5.1 の「実装と違った点」・DESIGN 10 章 |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
 - 試験: backend 245 件・E2E 135 件（分析の第 1 版の時点）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
 - 実測（開発の PC）: 待機中の書き込み 0 バイト／10 分、お休み中も 0、常駐 114〜190MB、待機 CPU 0.1〜0.4%。
 - **作業中**: なし（#9 の時点）。
-- まだ無いもの: QNAP 実機での確認・長時間の連続運転・QNAP 実機・無料 LLM の係（予算 800 回・用途ごとの割り当て・モデルの切り替え）・要素の取り出し・イベント・新着の傾向の LLM の解説・一緒に出る分析・ControlDeck との連携（ペアリング・仕事の列・同期）・知識グラフ（分析の画面の「知識の地図」「物のノート」は空き枠だけ）。
-- 既知の小さなずれ: LLM の 1 日の上限の既定は今 300 回（設計は 800 回。v0.2 で変える）。試験で StarletteDeprecationWarning が 1 件出る（動作に影響なし）。
+- まだ無いもの: QNAP 実機での確認・長時間の連続運転・QNAP 実機・**本物の LLM での取り出しの質の評価**・イベント・新着の傾向の LLM の解説・一緒に出る分析・ControlDeck との連携（ペアリング・仕事の列・同期）・知識グラフ（分析の画面の「知識の地図」「物のノート」は空き枠だけ）。
+- 既知の小さなずれ: 古い設定ファイルに保存済みの 1 日 300 回は、そのまま残る（既定の 800 回は新しい設定だけ）。まとめ・一言要約はモデルの順番に乗っていない（固定のモデル）。試験で StarletteDeprecationWarning が 1 件出る（動作に影響なし）。
 
 ## 4. 次にやること（順番）
 1. 開発の PC で動かす（利用者「24 時間も待たなくて良い」〔2026-11-24〕。長時間の運転は並行して、結果を待たずに次へ進む）（`./hub.sh install-service` か `./hub.sh run`、目録から 50〜100 件を有効に）。取得の実績・失敗・書き込みの量・メモリを診断の画面で見る。
 2. QPKG を利用者の QNAP に入れてもらう（`./hub.sh qpkg` の .qpkg を渡す。手順は docs/QPKG.md。型番と CPU も QTS の画面で確認してもらう）。動いたら v0.1 を Release（.qpkg を Release の添付に）。
 3. （済）分析の第 1 版（集計の表・API・画面）。続き: 実データを 1 週間ためてホットトピックの上位が一般語にならないか見る（ストップワードの調整）・集計の表の作り直しが長い（100 万件で約 34 秒）ので、必要なら分割する。
-4. v0.2: 無料 LLM の係（ARCHITECTURE 5.1）・概要と要素の取り出しを 1 回で・粗いイベント・本文の取り出し（Trafilatura）・新着の傾向（7.5）・FTS5 ＋ trigram・zstd・集計の表・100 万件の模擬データでの性能。
-5. 更新の機能（0.1.1）の最初の Release: 司令塔が `./hub.sh release 0.1.1 --notes …` で作る。そのあと実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
+4. v0.2 の後半: （前半の無料 LLM の係・要素の取り出し・物の画面は済）**本物のゲートウェイ・OpenRouter での取り出しの評価**（`./hub.sh llm-try`。30 件のままでよいか・名寄せの精度）・粗いイベント・本文の取り出し（Trafilatura）・新着の傾向（7.5）・FTS5 ＋ trigram・zstd・集計の表・100 万件の模擬データでの性能。
+5. （済）v0.1.1 は Release 済み。残り: 実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
 6. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
+
 
 ## 5. 開発の仕方
 ```
@@ -74,6 +77,13 @@
 - **QPKG**: QDK の QPKG はインストールの成功で終了コード **10** を返す（0 ではない）。QDK はシステム全体に入れる作りなので、手元では podman のコンテナの中で使う（build.sh）。依存の wheel は manylinux2014 だけ（QTS の glibc が古い）。依存を足したら `packaging/qpkg/requirements.lock` も直し、`run-sim.sh` を流す。
 
 - **更新の落とし穴**: 更新の試験用の差し替え（`NEWSHUB_UPDATE_TEST_FEED`）は `NEWSHUB_INSTALL=qpkg-sim` のときだけ効く（本番の qpkg では無視する）。署名の秘密鍵は `~/.keys/qnapnewshub-release.pem`（`NEWSHUB_SIGNING_KEY`）。読むだけ・中身を出さない・コミットしない。版を上げるときは `__init__.py`・`pyproject.toml`・`frontend/package.json`・`package-lock.json` の 4 か所（`./hub.sh release` が確かめる。`qpkg.cfg` の版は build が書く）。
+
+- **要素の取り出し・LLM の係**:
+  - 試験で LLM を模擬するときは `llm._post`（OpenRouter）・`llm._post_gateway`（ゲートウェイ）を差し替え、待ちは `llm._sleep`、モデルの時計は `llm_models._clock`。`llm._sleep` だけ差し替えて 1 分の窓が詰まると、時計が進まず空回りする（`llm.reset_minute_window()`）。
+  - 割り当てを書かない設定は、既定の割合を上限に合わせて縮める。割り当ての合計が上限を超える保存は 422。
+  - 取り出しは必ず `writer.get().stage_extraction`（まとめ書きに乗る）。DB へ直接 Entity を入れない。
+  - ゲートウェイの URL は設定の値だけ。LAN の私的な IP を許すので、**記事の中の URL・取得先の URL から決して呼ばない**。診断の束には URL を出さない。
+  - 古い DB の列・表は `db._LATE_COLUMNS`・`create_all` で足す（`news_items.extract_v`・entities 系の 4 表）。
 
 ## 7. 守ること（要点。全文は AGENTS.md）
 - **公開のリポジトリ**: 鍵・パスワード・トークン・利用者の名前・メール・ホスト名・私的な IP・手元の絶対パスを入れない。push の前に差分を grep で確かめる。試験の見本の値は実行時に組み立てる。

@@ -27,8 +27,9 @@ for (const vp of VIEWPORTS) {
         await expect(page.getByTestId("sources-table")).toContainText("見本の取得先 1");
         await expect(page.getByTestId("heatmap")).toHaveAttribute("data-ready", "true");
         await expect(page.getByTestId("compare-chart")).toHaveAttribute("data-ready", "true");
-        await expect(page.getByTestId("future-slot")).toHaveCount(2);
+        await expect(page.getByTestId("future-slot")).toHaveCount(1);
         await expect(page.getByTestId("future-slot").first()).toContainText("v0.2 以降");
+        await expect(page.getByTestId("entities-link")).toBeVisible();      // 「物のノート」の空き枠は、物のページへのリンクにした
         await expectNoHorizontalOverflow(page);
         await shot(page, `analytics-top-${vp.name}-${scheme}`);
         await page.getByTestId("sec-hot").scrollIntoViewIfNeeded();

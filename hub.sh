@@ -16,6 +16,8 @@
 #   ./hub.sh print-service     単位の中身だけを表示する（何も書かない）
 #   ./hub.sh create-admin   最初の管理者を作る（パスワードは対話で入力）
 #   ./hub.sh set-openrouter-key  OpenRouter の鍵を暗号化して保存
+#   ./hub.sh llm-try --provider gateway|openrouter --base <URL> --model <名前> --items <件数>
+#                           取り出しを 1 回だけ流して、検査の結果・物と facts を表示する（評価用。記事は NEWSHUB_DATA の DB の新しい順。鍵は環境変数 NEWSHUB_LLM_TRY_KEY。何も書かない）
 #   ./hub.sh <cli のコマンド>  python -m qnapnewshub.cli へそのまま渡す
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

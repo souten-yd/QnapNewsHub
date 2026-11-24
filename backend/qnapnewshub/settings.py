@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 
 from qnapnewshub import writer
 from qnapnewshub.config import data_dir
-from qnapnewshub.llm import DEFAULT_DAILY_LIMIT, DEFAULT_MINUTE_LIMIT, DEFAULT_MODEL
+from qnapnewshub.llm import DEFAULT_DAILY_LIMIT, DEFAULT_MINUTE_LIMIT, DEFAULT_MODEL, DEFAULT_GATEWAY, DEFAULT_NIGHT_FROM, DEFAULT_QUOTA, QUOTA_LABELS, default_quota
 from qnapnewshub.sources import ConfigError
 
 WEEKDAYS = ("月", "火", "水", "木", "金", "土", "日")     # 0 = 月曜（datetime.weekday と同じ）
@@ -37,7 +37,10 @@ DEFAULTS: dict = {
     "storage": {"flush_minutes": 30, "max_items": 1000, "max_mb": 128, "log_file": False, "access_log": False},
     # モデルは OpenRouter のモデル名（無料は :free で終わる）。下ごしらえは 30 件ずつ・1 日 daily_limit 回・1 分 minute_limit 回まで（llm.py）
     "llm": {"digest_model": DEFAULT_MODEL, "gist_enabled": False, "gist_model": DEFAULT_MODEL, "digest_focus": "", "prep_enabled": True,
-            "prep_model": DEFAULT_MODEL, "prep_max_per_run": 100, "daily_limit": DEFAULT_DAILY_LIMIT, "minute_limit": DEFAULT_MINUTE_LIMIT},
+            "prep_model": DEFAULT_MODEL, "prep_max_per_run": 100, "daily_limit": DEFAULT_DAILY_LIMIT, "minute_limit": DEFAULT_MINUTE_LIMIT,
+            # 要素の取り出し（下ごしらえと同じ 1 回の呼び出しで）・次のモデル（1 番目は prep_model。空でよい）・用途ごとの割り当て・夜の後回しの仕事
+            "extract_enabled": True, "fallback_models": [], "quota": dict(DEFAULT_QUOTA), "night_from": DEFAULT_NIGHT_FROM, "backfill_enabled": True,
+            "gateway": dict(DEFAULT_GATEWAY)},
 }
 _CLOCK = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
@@ -81,6 +84,74 @@ def _model(value: object, label: str) -> str:
     if not _MODEL.match(text):
         raise ConfigError(f"{label}のモデル名の形が違います")
     return text
+
+
+def _models(value: object) -> list[str]:
+    """次のモデルの並び（最大 4 つ。空の欄は捨て、重複は 1 つにする）。"""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError("次のモデルは一覧です")
+    out: list[str] = []
+    for item in value:
+        if str(item or "").strip():
+            name = _model(item, "次のモデル")
+            if name not in out:
+                out.append(name)
+    if len(out) > 4:
+        raise ConfigError("次のモデルは 4 つまでです")
+    return out
+
+
+def _quota(value: object, daily: int) -> dict:
+    """用途ごとの 1 日の割り当て。合計が 1 日の上限を超えたら断る（黙って縮めない）。無ければ既定の割合を上限に合わせる。"""
+    if value is None:
+        return default_quota(daily)
+    if not isinstance(value, dict):
+        raise ConfigError("用途ごとの割り当ては表です")
+    out = {k: _int(value.get(k, DEFAULT_QUOTA[k]), f"{QUOTA_LABELS[k]}の割り当て", 0, 5000) for k in DEFAULT_QUOTA}
+    if sum(out.values()) > daily:
+        raise ConfigError(f"用途ごとの割り当ての合計（{sum(out.values())} 回）が 1 日の上限（{daily} 回）を超えています")
+    return out
+
+
+def gateway_url(value: object) -> str:
+    """ControlDeck のゲートウェイの基準の URL（例 http://（ControlDeck の PC）:8765/api/v1/llm/v1）。http・https だけ・利用者の入力どおり（LAN の私的な IP も許す）。
+    ユーザー名・パスワード・問い合わせ・# は断る。空は「未設定」。ニュースの取得の SSRF の守り（egress）とは別の道で、設定の値だけを使う。"""
+    from urllib.parse import urlsplit
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > 300 or re.search(r"\s", text):
+        raise ConfigError("ゲートウェイの URL の形が違います")
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        raise ConfigError("ゲートウェイの URL の形が違います") from None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ConfigError("ゲートウェイの URL は http:// か https:// で始めてください")
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise ConfigError("ゲートウェイの URL に、ユーザー名・パスワード・問い合わせ・# は入れられません（鍵は別の欄に入れます）")
+    return text.rstrip("/") if port is None or 1 <= port <= 65535 else ""
+
+
+def _gateway(value: object) -> dict:
+    if value is None:
+        return dict(DEFAULT_GATEWAY)
+    if not isinstance(value, dict):
+        raise ConfigError("ゲートウェイの設定は表です")
+    d = DEFAULT_GATEWAY
+    out = {"enabled": _bool(value, "enabled", d["enabled"]), "base_url": gateway_url(value.get("base_url", "")),
+           "model": _model(value.get("model", d["model"]), "ゲートウェイ"), "first": _bool(value, "first", d["first"]),
+           "batch": _int(value.get("batch", d["batch"]), "ゲートウェイの 1 回の件数", 1, 30),
+           "timeout_seconds": _int(value.get("timeout_seconds", d["timeout_seconds"]), "ゲートウェイの時間切れ（秒）", 30, 1800),
+           "minute_limit": _int(value.get("minute_limit", d["minute_limit"]), "ゲートウェイの 1 分の上限", 1, 60),
+           "cooldown_minutes": _int(value.get("cooldown_minutes", d["cooldown_minutes"]), "つながらないときに飛ばす分", 1, 120)}
+    if out["enabled"] and not out["base_url"]:
+        raise ConfigError("ゲートウェイを使うには URL を入れてください")
+    return out
 
 
 def _focus(value: object) -> str:
@@ -137,7 +208,11 @@ def normalize(raw: object) -> dict:
                   "prep_enabled": _bool(llm, "prep_enabled", True), "prep_model": _model(llm.get("prep_model", DEFAULT_MODEL), "下ごしらえ"),
                   "prep_max_per_run": _int(llm.get("prep_max_per_run", 100), "下ごしらえの 1 回の件数", 1, 200),
                   "daily_limit": _int(llm.get("daily_limit", DEFAULT_DAILY_LIMIT), "1 日の回数の上限", 1, 5000),
-                  "minute_limit": _int(llm.get("minute_limit", DEFAULT_MINUTE_LIMIT), "1 分の回数の上限", 1, 100)}
+                  "minute_limit": _int(llm.get("minute_limit", DEFAULT_MINUTE_LIMIT), "1 分の回数の上限", 1, 100),
+                  "extract_enabled": _bool(llm, "extract_enabled", True), "fallback_models": _models(llm.get("fallback_models", [])),
+                  "quota": _quota(llm.get("quota"), _int(llm.get("daily_limit", DEFAULT_DAILY_LIMIT), "1 日の回数の上限", 1, 5000)),
+                  "night_from": _int(llm.get("night_from", DEFAULT_NIGHT_FROM), "夜の始まりの時", 0, 23), "backfill_enabled": _bool(llm, "backfill_enabled", True),
+                  "gateway": _gateway(llm.get("gateway"))}
     return out
 
 

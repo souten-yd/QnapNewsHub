@@ -3,7 +3,7 @@
 import type { Page, Route } from "@playwright/test";
 import type { UpdateStatus, UpdateRelease } from "../src/api/update";
 import type { AnalyticsFilters, Compare, HotTopics, Overview, Series, SourcesAnalysis } from "../src/api/analytics";
-import type { Digest, NewsHome, NewsItem, NewsPrefs, NewsRuntimeSettings } from "../src/api/news";
+import type { Digest, EntityDetail, EntityRow, NewsHome, NewsItem, NewsPrefs, NewsRuntimeSettings } from "../src/api/news";
 
 const NOW = Date.now();
 const ago = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString();
@@ -19,10 +19,32 @@ const mk = (id: number, over: Partial<NewsItem>): NewsItem => ({
   image_url: null, published_at: ago(id), topics: ["llama.cpp"], state: { ...noState }, channel: "ai", ...over,
 });
 
+export const ENTITIES: EntityRow[] = [
+  { id: 1, name: "llama.cpp", type: "software", first_seen: ago(900), last_seen: ago(1), article_count: 42, period_count: 9 },
+  { id: 2, name: "Qwen 3.5", type: "model", first_seen: ago(300), last_seen: ago(3), article_count: 17, period_count: 6 },
+  { id: 3, name: "Alibaba", type: "org", first_seen: ago(700), last_seen: ago(3), article_count: 11, period_count: 3 },
+  { id: 4, name: "Radeon AI PRO R9700", type: "product", first_seen: ago(200), last_seen: ago(9), article_count: 6, period_count: 2 },
+  { id: 5, name: "量子化", type: "tech", first_seen: ago(800), last_seen: ago(2), article_count: 5, period_count: 4 },
+  { id: 6, name: "EU AI 規則（とても長い名前のついた制度の見本で、320px でも折り返して収まること）", type: "policy", first_seen: ago(500), last_seen: ago(30), article_count: 2, period_count: 0 },
+];
+export const ENTITY_DETAIL: EntityDetail = {
+  id: 2, name: "Qwen 3.5", type: "model", aliases: ["Qwen3.5", "ＱＷＥＮ 3.5"], first_seen: ago(300), last_seen: ago(3), article_count: 17,
+  timeline: [
+    { id: 1, title: "llama.cpp の新しい量子化が入りました", url: "https://news.example.test/a/1", source: "見本ニュース", published_at: ago(3), summary: "Qwen 3.5 の軽い量子化の比較が公開されました。" },
+    { id: 5, title: "新しい GGUF モデルが話題に", url: "https://hf.example.test/m/1", source: "Hugging Face", published_at: ago(80), summary: "小さくて速いモデル。" },
+    { id: 6, title: "NAS で動かす小さなサーバー", url: null, source: "見本ニュース", published_at: ago(200), summary: "" },
+  ],
+  facts: [
+    { id: 1, kind: "release", text: "Qwen 3.5 が公開された", value: "3.5", article_id: 1, article_title: "llama.cpp の新しい量子化が入りました", published_at: ago(3), model: "example/free-model:free", prompt_version: "ex1", ai_extracted: true },
+    { id: 2, kind: "benchmark", text: "128K の文脈で動く", value: "128K", article_id: 5, article_title: "新しい GGUF モデルが話題に", published_at: ago(80), model: "example/free-model:free", prompt_version: "ex1", ai_extracted: true },
+  ],
+  related: [{ id: 3, name: "Alibaba", type: "org", count: 9 }, { id: 1, name: "llama.cpp", type: "software", count: 7 }, { id: 5, name: "量子化", type: "tech", count: 3 }],
+};
+
 export const ITEMS: NewsItem[] = [
-  mk(1, { title: "llama.cpp の新しい量子化が入りました", summary: "GPU が無くても動く軽い量子化。速度と精度の比較が公開されました。", image_url: "https://img.example.test/1.png", topics: ["llama.cpp", "量子化"] }),
+  mk(1, { entities: [{ id: 1, name: "llama.cpp", type: "software" }, { id: 2, name: "Qwen 3.5", type: "model" }, { id: 5, name: "量子化", type: "tech" }], title: "llama.cpp の新しい量子化が入りました", summary: "GPU が無くても動く軽い量子化。速度と精度の比較が公開されました。", image_url: "https://img.example.test/1.png", topics: ["llama.cpp", "量子化"] }),
   mk(2, { title: "画像のない記事: ローカル LLM の運用メモ", summary: "画像の部分は出さず、細い線だけが付きます。", topics: ["運用"] }),
-  mk(3, { kind: "release", source: "llama.cpp", source_key: "llama-cpp", title: "llama.cpp b9000 を公開", summary: "新しい量子化と修正。", topics: ["llama.cpp"] }),
+  mk(3, { entities: [{ id: 1, name: "llama.cpp", type: "software" }], kind: "release", source: "llama.cpp", source_key: "llama-cpp", title: "llama.cpp b9000 を公開", summary: "新しい量子化と修正。", topics: ["llama.cpp"] }),
   mk(4, { kind: "forum", source: "フォーラム", source_key: "forum", title: "24GB でどこまで動くか", summary: "実測の報告が集まっています。", channel: "infra", topics: ["VRAM"] }),
   mk(5, { kind: "model", source: "Hugging Face", source_key: "hf", title: "新しい GGUF モデルが話題に", summary: "小さくて速いモデル。", image_url: "https://img.example.test/2.png", channel: "ai", topics: ["GGUF"] }),
   mk(6, { title: "NAS で動かす小さなサーバー", summary: "非力な機器でニュースを集める話。", channel: "infra", topics: ["NAS"] }),
@@ -72,7 +94,9 @@ export const SETTINGS: NewsRuntimeSettings = {
   feed_refresh_minutes: 15,
   digest_daily: { enabled: true, time: "06:30" }, digest_weekly: { enabled: true, weekday: 0, time: "07:00" }, quiet: { enabled: false, start: "01:00", end: "05:00" },
   rest: { enabled: false, start: "01:00", end: "06:00", mode: "keep_memory" }, storage: { flush_minutes: 30, max_items: 1000, max_mb: 128, log_file: false, access_log: false },
-  llm: { digest_model: "example/free-model:free", gist_enabled: false, gist_model: "example/free-model:free", digest_focus: "", prep_enabled: true, prep_model: "example/free-model:free", prep_max_per_run: 100, daily_limit: 300, minute_limit: 10 },
+  llm: { digest_model: "example/free-model:free", gist_enabled: false, gist_model: "example/free-model:free", digest_focus: "", prep_enabled: true, prep_model: "example/free-model:free", prep_max_per_run: 100, daily_limit: 800, minute_limit: 15,
+    extract_enabled: true, fallback_models: [], quota: { prep: 300, gist: 150, digest: 20, card: 200, trend: 10, spare: 120 }, night_from: 21, backfill_enabled: true,
+    gateway: { enabled: false, base_url: "", model: "auto", first: true, batch: 10, timeout_seconds: 300, minute_limit: 6, cooldown_minutes: 10 } },
 };
 
 const managed = (i: number, over: Record<string, unknown> = {}) => ({
@@ -138,12 +162,12 @@ export interface MockState {
   hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
   /** 画像の無い記事だけの一覧にしたいとき等、一覧を差し替える */
   items: NewsItem[];
-  restActive: boolean; diagProblems: boolean; update: UpdateStatus; analyticsEmpty?: boolean;
+  restActive: boolean; diagProblems: boolean; update: UpdateStatus; analyticsEmpty?: boolean; gatewayKeySet: boolean; gatewayDown: boolean;
 }
 
 export function newState(over: Partial<MockState> = {}): MockState {
   return { authenticated: true, setupNeeded: false, username: "admin", keySet: false, prefs: structuredClone(PREFS), settings: structuredClone(SETTINGS),
-    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, update: structuredClone(UPDATE_BASE), ...over };
+    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, update: structuredClone(UPDATE_BASE), gatewayKeySet: false, gatewayDown: false, ...over };
 }
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -155,8 +179,14 @@ const diagnostics = (state: MockState) => ({
   fetch: { total: 3, stalled: state.diagProblems ? 1 : 0, hit_rate: 80, hits_304: 8, conditional: 10, backoff: 1, sources: [
     { key: "rss:https://feed2.example.test/rss", name: "失敗中の取得先", kind: "rss", ok: false, reason: "http", error: "HTTP 500", last_ok_at: ago(30), last_at: ago(0.2), interval_min: 240, interval_auto: false, backoff: true, hit_rate: null, hits_304: 0, conditional: 0, new_7d: 0, fail_streak: 5, stalled: true, problems: ["失敗が 5 回続いています"], fix: "取得先の管理で URL を確かめるか、無効にしてください" },
     { key: "rss:https://feed1.example.test/rss", name: "見本の取得先 1", kind: "rss", ok: true, reason: "", error: "", last_ok_at: ago(0.2), last_at: ago(0.2), interval_min: 45, interval_auto: true, backoff: false, hit_rate: 80, hits_304: 8, conditional: 10, new_7d: 24, fail_streak: 0, stalled: false, problems: [], fix: "" }] },
-  llm: { day: new Date(NOW).toLocaleDateString("en-CA"), calls: { prep: 12, digest: 2, gist: 0 }, total: 14, daily_limit: 300, minute_limit: 10, failed: 1, last_error: "HTTP 429", key_set: state.keySet,
-    models: [{ model: "example/free-model:free", ok: 12, fail: 2, success_pct: 86, rate_limited: 1, avg_ms: 4200 }], rate_limited: 1, unprocessed: 7, prep_enabled: true, prep_model: "example/free-model:free" },
+  llm: { day: new Date(NOW).toLocaleDateString("en-CA"), calls: { prep: 12, digest: 2, gist: 0 }, total: 14, daily_limit: 800, minute_limit: 15, failed: 1, last_error: "HTTP 429", key_set: state.keySet,
+    models: [{ model: "gateway:auto", ok: 5, fail: 1, success_pct: 83, rate_limited: 0, avg_ms: 38000, ja_pct: 95, quality_fail: 0, paid: false, provider: "gateway", last_ok_at: ago(0.3) },
+      { model: "example/free-model:free", ok: 12, fail: 2, success_pct: 86, rate_limited: 1, avg_ms: 4200, ja_pct: 72, quality_fail: 1, paid: false, provider: "openrouter", last_ok_at: ago(0.1) },
+      { model: "example/second-model:free", ok: 3, fail: 0, success_pct: 100, rate_limited: 0, avg_ms: 6100, ja_pct: 90, quality_fail: 0, paid: false, provider: "openrouter", last_ok_at: ago(2) }], rate_limited: 1, unprocessed: 7, prep_enabled: true, prep_model: "example/free-model:free",
+    quota: state.settings.llm.quota, spare_used: 4, leftover: 730, night_from: 21, extract_enabled: true, extract_waiting: 33,
+    chain: { gateway_down_in_seconds: 420, chain: ["example/free-model:free", "example/second-model:free"], current: "example/second-model:free", index: 1, return_in_seconds: 1500, events: [{ at: ago(0.4), kind: "switch", model: "example/second-model:free", reason: "example/free-model:free が直近 5 回で 3 回失敗（429）" }] },
+    gateway: { enabled: true, base_set: true, key_set: true, calls: 6, model: "auto", batch: 10 },
+    knowledge: { entities: 128, claims: 340, extracted_articles: 410 } },
   storage: {
     io: { rchar: 9_000_000, wchar: 350_000, read_bytes: 4_000_000, write_bytes: 1_048_576, syscw: 900 },
     series: Array.from({ length: 96 }, (_, i) => ({ t: new Date(NOW - (96 - i) * 900_000).toISOString(), write_bytes: i % 24 === 5 ? 524_288 : 0, read_bytes: 0, wchar: 0, cpu_pct: 0.1, rss: 120_000_000 })),
@@ -246,11 +276,27 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("POST", "/news/sources/import/commit")) return json(route, { added: (body as { rows: unknown[] }).rows.length, duplicate: 0, invalid: 0, failed: [], mode: (body as { mode: string }).mode });
     if (is("GET", "/news/sources/manage/detail")) return json(route, { item: managed(1), history: [{ at: ago(0.2), ok: true, status: 200, count: 20, new: 2, ms: 420, error: "", skipped: "" }], articles: [{ id: 1, title: ITEMS[0].title, url: ITEMS[0].url!, published_at: ITEMS[0].published_at }] });
     if (is("GET", "/news/presets")) return json(route, { groups: [{ id: "ai", label: "AI・LLM", hint: "", count: 1 }], items: [{ id: "p1", group: "ai", kind: "rss", name: "見本の目録", value: "https://preset.example.test/rss", lang: "ja", note: "", key: false, verified: "2026-11-24", recommended: true }], verified: "2026-11-24" });
+    if (is("GET", "/news/gateway-key")) return json(route, { set: state.gatewayKeySet });
+    if (is("PUT", "/news/gateway-key")) { state.gatewayKeySet = true; return json(route, { set: true }); }
+    if (is("DELETE", "/news/gateway-key")) { state.gatewayKeySet = false; return json(route, { set: false }); }
+    if (is("POST", "/news/gateway/test")) return json(route, state.gatewayDown ? { ok: false, models: [], ms: 12, error: "ゲートウェイに接続できません: ConnectError" } : { ok: true, models: ["auto", "local/model-a", "local/model-b"], ms: 85, error: "" });
+    if (is("GET", "/entities")) {
+      const q = (url.searchParams.get("q") ?? "").toLowerCase();
+      const type = url.searchParams.get("type") ?? "";
+      const days = Number(url.searchParams.get("days") ?? 0);
+      const items = ENTITIES.filter((e) => (!q || e.name.toLowerCase().includes(q)) && (!type || e.type === type) && (!days || e.period_count > 0));
+      return json(route, { items, total: items.length, types: ["model", "software", "org", "person", "tech", "product", "game", "policy", "place", "other"] });
+    }
+    if (is("GET", /^\/entities\/\d+$/)) return json(route, { ...ENTITY_DETAIL, id: Number(path.split("/")[2]) });
     if (is("GET", "/news/settings")) return json(route, {
       settings: state.settings, weekdays: ["月", "火", "水", "木", "金", "土", "日"], interval_minutes: 30, prep_calls_today: 12, prep_batch: 30,
       rest_state: { enabled: state.settings.rest.enabled, active: state.restActive, mode: state.settings.rest.mode, ends_at: state.restActive ? "2026-11-25T06:00:00" : null },
+      quota_labels: { prep: "下ごしらえと取り出し", gist: "要約", digest: "まとめ", card: "知識カード", trend: "傾向の解説", spare: "予備" },
+      model_chain: { gateway_down_in_seconds: null, chain: ["example/free-model:free"], current: "example/free-model:free", index: 0, return_in_seconds: null, paid: [], events: [] },
+      gateway_key_set: state.gatewayKeySet,
       rest_modes: { keep_memory: "集め続けてメモリに保持", stop_all: "集める・分析・保存をすべて休む", flush_at_limit: "集め続けて上限のときだけ一括で保存" },
-      llm_stats: { day: new Date(NOW).toLocaleDateString("en-CA"), calls: { prep: 12, digest: 2, gist: 0 }, total: 14, daily_limit: state.settings.llm.daily_limit, minute_limit: state.settings.llm.minute_limit, failed: 1, last_error: "混み合っています（429）", key_set: state.keySet },
+      llm_stats: { day: new Date(NOW).toLocaleDateString("en-CA"), calls: { prep: 12, digest: 2, gist: 0 }, total: 14, daily_limit: state.settings.llm.daily_limit, minute_limit: state.settings.llm.minute_limit, failed: 1, last_error: "混み合っています（429）", key_set: state.keySet,
+        quota: state.settings.llm.quota, spare_used: 4, night_from: 21, leftover: 730 },
     });
     if (is("PUT", "/news/settings")) { state.settings = body as NewsRuntimeSettings; return json(route, { settings: state.settings }); }
     if (is("GET", "/news/openrouter-key")) return json(route, { set: state.keySet });
