@@ -12,6 +12,7 @@
 - 設計: [docs/DESIGN.md](docs/DESIGN.md)
 - 計画: [docs/PLAN.md](docs/PLAN.md)
 - 無料の LLM の件数の調査: [docs/research-free-llm-batch.md](docs/research-free-llm-batch.md)
+- 知識化・分析・大きなデータ: [docs/KNOWLEDGE.md](docs/KNOWLEDGE.md)
 - 開発の決まり: [AGENTS.md](AGENTS.md)
 
 状態: バックエンド（取得・保存・認証・下ごしらえ・まとめ・API）まで。画面は次の段です。
