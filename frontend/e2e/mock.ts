@@ -198,6 +198,20 @@ export const LINK_PEERS: LinkStatus["peers"] = [
   { id: 1, name: "古い ControlDeck", fingerprint: "1111-2222-3333-4444-5555", created_at: ago(900), last_seen_at: "", revoked: false },
 ];
 
+/** 知識グラフの見本（点 7・線 6。型・確かさ・状態がそろっている）。 */
+const NODE = (id: number, name: string, type: string, n: number) => ({ id, name, type, article_count: n, sensitivity: "public", last_seen: ago(3) });
+export const KG_NODES = [NODE(1, "llama.cpp", "software", 42), NODE(2, "Qwen 3.5", "model", 17), NODE(3, "Alibaba", "org", 11), NODE(5, "量子化", "tech", 5), NODE(9, "GGUF", "tech", 6), NODE(10, "vLLM", "software", 8),
+  NODE(11, "ROCm（とても長い名前のついた技術の見本で、320px でも折り返して収まること）", "tech", 4)];
+const EDGE = (id: number, source: number, target: number, type: string, confidence: number, status: string, directed: boolean, n: number, last = ago(24)) =>
+  ({ id, source, target, type, directed, confidence, status, evidence_count: n, first_at: ago(900), last_at: last, sensitivity: "public" });
+export const KG_EDGES = [EDGE(1, 2, 3, "part_of", 0.7, "extracted", true, 2), EDGE(2, 1, 2, "supports", 0.8, "extracted", true, 3), EDGE(3, 1, 5, "co_occurs", 0.5, "statistical", false, 12),
+  EDGE(4, 2, 9, "uses", 0.3, "inferred", true, 1, ago(24 * 200)), EDGE(5, 1, 10, "competes", 0.6, "extracted", false, 2), EDGE(6, 10, 9, "supports", 0.4, "extracted", true, 1), EDGE(7, 1, 11, "uses", 0.6, "extracted", true, 1)];
+const KG_HISTORY = { changes: 1, contradictions: 2, series: [{ kind: "price", entries: [
+  { claim_id: 1, t: ago(24 * 40), value: "1000", text: "価格", title: "古い記事", url: "https://news.example.test/a/1", mark: "first", ai_extracted: true },
+  { claim_id: 2, t: ago(24 * 20), value: "1200", text: "価格", title: "値上げの記事", url: "https://news.example.test/a/2", mark: "change", from: "1000", ai_extracted: true },
+  { claim_id: 3, t: ago(24 * 2), value: "1500", text: "価格", title: "A 社の報道", url: "https://news.example.test/a/3", mark: "contradiction", ai_extracted: true },
+  { claim_id: 4, t: ago(24 * 2 - 5), value: "1300", text: "価格", title: "B 社の報道", url: "https://news.example.test/a/4", mark: "contradiction", ai_extracted: true }] }] };
+
 export interface MockState {
   authenticated: boolean; setupNeeded: boolean; setupTokenRequired?: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
   hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
@@ -206,6 +220,8 @@ export interface MockState {
   restActive: boolean; diagProblems: boolean; update: UpdateStatus; analyticsEmpty?: boolean; gatewayKeySet: boolean; gatewayDown: boolean;
   /** ControlDeck との連携（つなぐ画面） */
   link: LinkStatus;
+  /** 知識カードの利用者のメモ（PUT で更新される） */
+  kgNote?: string;
 }
 
 export function newState(over: Partial<MockState> = {}): MockState {
@@ -345,6 +361,33 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
       return json(route, { items, total: items.length, types: ["model", "software", "org", "person", "tech", "product", "game", "policy", "place", "other"] });
     }
     if (is("GET", /^\/entities\/\d+$/)) return json(route, { ...ENTITY_DETAIL, id: Number(path.split("/")[2]) });
+    if (is("GET", /^\/kg\/entities\/\d+\/card$/)) {
+      const id = Number(path.split("/")[3]);
+      const me = KG_NODES.find((n) => n.id === id) ?? KG_NODES[1];
+      const rels = KG_EDGES.filter((e) => e.source === id || e.target === id).map((e) => {
+        const other = KG_NODES.find((n) => n.id === (e.source === id ? e.target : e.source))!;
+        return { ...e, direction: !e.directed ? "both" : e.source === id ? "out" : "in", other: { id: other.id, name: other.name, type: other.type }, status_label: e.status };
+      });
+      return json(route, { id: me.id, name: me.name, type: me.type, sensitivity: "public", ai_use: "allowed",
+        overview: id === 2 ? { text: "Qwen 3.5 は Alibaba の公開モデルで、llama.cpp などの実行環境が対応を進めています。", model: "example/free-model:free", at: ago(10), ai: true } : null,
+        elements: { aliases: ["Qwen3.5"], first_seen: ago(300), last_seen: ago(3), article_count: me.article_count, topics: ["量子化", "GGUF"] },
+        timeline: [], relations: rels, history: id === 2 ? KG_HISTORY : { changes: 0, contradictions: 0, series: [] },
+        claims: [{ id: 1, kind: "release", text: "Qwen 3.5 が公開された", value: "3.5", ai_extracted: true, model: "example/free-model:free", sensitivity: "public",
+                   evidences: [{ document: { id: 1, kind: "news", title: "llama.cpp の新しい量子化が入りました", url: "https://news.example.test/a/1" }, quote: "Qwen 3.5 を公開", start: null, end: null, page: null, quote_hash: "x", grounded: true },
+                               { document: { id: 2, kind: "paper", title: "論文の見本", url: "https://arxiv.example.test/abs/2401.00001" }, quote: "", start: 10, end: 40, page: 3, quote_hash: "", grounded: false }] }],
+        note: { body: state.kgNote ?? "", updated_at: state.kgNote ? ago(0) : "" } });
+    }
+    if (is("PUT", /^\/kg\/entities\/\d+\/note$/)) { state.kgNote = (body as { body: string }).body; return json(route, { body: state.kgNote, updated_at: ago(0) }); }
+    if (is("GET", "/graph/seeds")) return json(route, { items: KG_NODES.slice(0, 3) });
+    if (is("POST", "/graph/neighbors")) {
+      const b = body as { ids: number[]; types?: string[]; min_confidence?: number; limit?: number };
+      const seeds = KG_NODES.filter((n) => b.ids.includes(n.id));
+      const es = KG_EDGES.filter((e) => (b.ids.includes(e.source) || b.ids.includes(e.target)) && (!b.types?.length || b.types.includes(e.type)) && e.confidence >= (b.min_confidence ?? 0)).slice(0, b.limit ?? 60);
+      const known = new Set(b.ids);
+      const nodes = [...new Set(es.flatMap((e) => [e.source, e.target]))].filter((i) => !known.has(i)).map((i) => KG_NODES.find((n) => n.id === i)!);
+      return json(route, { seeds, levels: [{ depth: 1, nodes, edges: es }], truncated: false });
+    }
+    if (is("POST", "/kg/export")) return route.fulfill({ status: 200, contentType: "application/zip", headers: { "X-Export-Files": "3" }, body: Buffer.from("PK\x05\x06" + "\0".repeat(18), "binary") });
     if (is("GET", "/news/settings")) return json(route, {
       settings: state.settings, weekdays: ["月", "火", "水", "木", "金", "土", "日"], interval_minutes: 30, prep_calls_today: 12, prep_batch: 30,
       rest_state: { enabled: state.settings.rest.enabled, active: state.restActive, mode: state.settings.rest.mode, ends_at: state.restActive ? "2026-11-25T06:00:00" : null },

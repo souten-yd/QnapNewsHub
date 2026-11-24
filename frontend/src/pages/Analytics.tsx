@@ -317,15 +317,6 @@ function ComparePanel({ f }: { f: Filters }) {
   );
 }
 
-function Future({ title, text }: { title: string; text: string }) {
-  return (
-    <div className="min-w-0 rounded-2xl border border-dashed border-zinc-300 p-3 dark:border-zinc-700" data-testid="future-slot">
-      <div className="flex items-center gap-2"><h2 className="text-sm font-bold">{title}</h2><span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[10px] font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">v0.2 以降</span></div>
-      <p className="mt-1 text-xs text-zinc-500">{text}（まだ作っていません）</p>
-    </div>
-  );
-}
-
 export default function AnalyticsPage() {
   const [range, setRange] = useState<Range>("7d");
   const [kind, setKind] = useState("");
@@ -356,7 +347,10 @@ export default function AnalyticsPage() {
       <SourcesPanel f={f} range={range} />
       <ComparePanel f={f} />
       <div className="grid gap-2 md:grid-cols-2">
-        <Future title="知識の地図" text="記事から取り出した物（モデル・会社・技術）のつながりを地図で見る" />
+        <Link to="/map" data-testid="map-link" className="block min-w-0 rounded-2xl border border-zinc-200 p-3 hover:border-accent-600 dark:border-zinc-800">
+          <h2 className="text-sm font-bold">知識の地図 →</h2>
+          <p className="mt-1 text-xs text-zinc-500">物（モデル・会社・技術）のつながりを地図で見る。点を選ぶとカード、周りから段階的に広げる</p>
+        </Link>
         <Link to="/entities" data-testid="entities-link" className="block min-w-0 rounded-2xl border border-zinc-200 p-3 hover:border-accent-600 dark:border-zinc-800">
           <h2 className="text-sm font-bold">物 →</h2>
           <p className="mt-1 text-xs text-zinc-500">記事から AI が取り出した物（モデル・会社・技術）の一覧と、物ごとの年表・facts を見る</p>

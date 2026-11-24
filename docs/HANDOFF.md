@@ -33,12 +33,13 @@
 | v0.2 後半の一部（feat/events-trends） | イベントへの粗いまとめ（`events.py`・表 events／event_articles・まとめ書きで増分）・イベントの画面・ニュースの「ほか N 件」・イベントの要約（用途 event・既定 100）・新着の傾向（分析の節）と「今日の傾向」の解説（用途 trend）・物のホットトピック。ARCHITECTURE 4・7.5 の「実装と違った点」・DESIGN 11 章 |
 | v0.3 ニュースハブ側（feat/link-controldeck） | **ControlDeck とつなぐ**: ペアリング（6 桁・10 分・総当たり制限・`link.py`）・scope=link のトークン（管理 API 不可。試験が全ルートを調べる）・封じた鍵の受け取り（ECIES・許可は openrouter だけ）・`GET /changes`（trigger の `change_log`・`changes.py`）・仕事の列（`jobs.py`。lease・冪等・期限切れは claim で列へ。作り手は claim のとき）・画像の受け取り（`artifacts.py`。形の検査・hash の重複・AI 生成の印）・調査の記録・つなぐ画面（`LinkCard.tsx`）・診断の「つないだ ControlDeck」。ControlDeck 側は別の PR。DESIGN 3 章・ARCHITECTURE 5 章の「実装と違った点」 |
 | v0.2 後半（feat/search-storage） | **日本語の全文検索**（trigram＋英語 porter の 2 つの索引・BM25・短い語は LIKE・古い DB はバッチで作り直し）・**本文の取り出し**（Trafilatura・robots・Zstandard の BLOB・1 日 200 件・1 分 6 件・取れない記事は二度と試さない・下ごしらえは本文の頭 1,500 文字）・**保存の圧縮**（1 年より古い記事の抜粋を圧縮・索引から外す）・性能の実測（`backend/tools/bench_search.py`）・画面（「本文あり」の印・設定・診断）。ARCHITECTURE 8・9 章の「実装と違った点」・DESIGN 12 章 |
+| v0.5 知識グラフ（feat/knowledge-graph） | **統合の土台として汎用に**: 表 documents・news_documents（記事の対応）・evidences・relationships・entity_notes・entity_cards（`kg.py`・`kg_view.py`・`kg_job.py`・`kg_router.py`）・機密の区分の引き継ぎ（既定は public だけ・confidential は管理者だけ）・LLM の型つきの関係（下ごしらえの同じ 1 回の呼び出しに relations。引用が原文に無ければ「推測」）・co_occurs の集計（夜・回数 3・比 2）・履歴と矛盾（読むときに計算）・知識カード（概要は夜に変化のあった物だけ・メモは別の表に即時保存）・知識の地図（Cytoscape.js 3.33.1・`POST /graph/neighbors`）・Obsidian の書き出し（zip）。試験 351 件・性能 P95 216 ms 以下（10 万件の模擬）。ARCHITECTURE 6 章・DESIGN 13 章 |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
-- 試験: backend 245 件・E2E 135 件（分析の第 1 版の時点）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
+- 試験: backend 351 件（v0.5 の時点）・E2E 211 件（v0.5 で `knowledge.spec.ts` 20 件を足した）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
 - 実測（開発の PC）: 待機中の書き込み 0 バイト／10 分、お休み中も 0、常駐 114〜190MB、待機 CPU 0.1〜0.4%。
 - **作業中**: なし（#9 の時点）。
-- まだ無いもの: **本物の ControlDeck とのつなぎ（ControlDeck 側の PR のあと）**・QNAP 実機での確認・長時間の連続運転・QNAP 実機・**本物の LLM での取り出しの質の評価**・本物の LLM でのイベントの要約・解説の質・イベントのしきい値の実データでの調整・一緒に出る分析・知識グラフ（分析の画面の「知識の地図」「物のノート」は空き枠だけ）。
+- まだ無いもの: **本物の ControlDeck とのつなぎ（ControlDeck 側の PR のあと）**・QNAP 実機での確認・長時間の連続運転・QNAP 実機・**本物の LLM での取り出しの質の評価**・本物の LLM でのイベントの要約・解説の質・イベントのしきい値の実データでの調整・一緒に出る分析（v0.5 で集計は済み）・知識グラフ（v0.5 で作った。実データ・本物の LLM での質は未）（分析の画面の「知識の地図」「物のノート」は空き枠だけ）。
 - 既知の小さなずれ: 古い設定ファイルに保存済みの 1 日 300 回は、そのまま残る（既定の 800 回は新しい設定だけ）。まとめ・一言要約はモデルの順番に乗っていない（固定のモデル）。試験で StarletteDeprecationWarning が 1 件出る（動作に影響なし）。
 
 ## 4. 次にやること（順番）
@@ -50,7 +51,8 @@
 4. v0.2 の後半: （前半の無料 LLM の係・要素の取り出し・物の画面は済。**検索（trigram＋英語）・本文の取り出し（Trafilatura）・zstd・保存の圧縮・性能の実測は済〔10 万件・100 万件の温まった P95 は 1 秒以内。DESIGN 12〕**〔feat/search-storage〕）残り: **本物のゲートウェイ・OpenRouter での取り出しの評価**（`./hub.sh llm-try`。20 件のままでよいか・名寄せの精度）・粗いイベント・新着の傾向（7.5）。
 5. （済）v0.1.1 は Release 済み。残り: 実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
 6. v0.3 の続き: **ControlDeck 側**（ControlDeck のリポジトリ・その決まりの関門と PR）。つなぐ画面・`/changes` の取り込み・仕事を借りる係（埋め込み・要約・取り出し・画像）・鍵を封じて渡す（`link.seal()` が見本）・画像を PUT する。つないだら本物同士で「止めていた間の記事が後でまとめて分析される」を確かめる。
-7. v0.4 以降は PLAN.md の順。
+7. （済）v0.5 知識グラフ（feat/knowledge-graph・2026-11-25）。残り: **本物の LLM で 20 件を 1 回流し、relations を足した出力が上限に収まるか（finish_reason）・引用が原文に出る率・推測の割合を見る**／実データで co_occurs のしきい値と、物の別名寄せの要否を見る／カードの概要の質。続きは v0.6（検索の統合: 局所 PageRank・`/research`。neighbors は済み）。
+8. v0.4・v0.6 以降は PLAN.md の順。
 
 
 ## 5. 開発の仕方
@@ -76,6 +78,10 @@
 - **書き込み**: 永続化は必ず `writer.py`（Write Coordinator）を通す。直接 INSERT/UPDATE を足すと、まとめ書き・お休み・診断が崩れる。試験で保存を待つときは `writer.flush("test")`。
 - **未保存**: バッファにある記事は `persisted:false`。ControlDeck への差分は保存済みだけ（`store.changes_persisted`）。
 - **E2E の模擬**: `frontend/e2e/mock.ts` の値（お休みの終わり 06:00 など）は固定の見本。撮影の数字は実データではない。
+- **claims.article_id は NULL 可になった（v0.5）**: 古いファイルは開いたとき 1 回だけ表が作り直される（`db._rebuild_claims`）。`Claim` を記事と inner join するコードは、記事の無い文書の主張を落とす（物のページの facts はそれで良い＝公開のニュースだけ）。新しく claims を読むコードは `sensitivity` で絞ること。
+- **派生データの区分（v0.5）**: 主張・関係・物・カードを新しく作る経路は、必ず `kg.inherit` で文書から区分を引き継ぐ。読む API は `scopes_for`（confidential は session だけ）を通す。LLM に送る材料は public かつ allowed だけ（`kg_job.targets`）。ここを緩めない。
+- **LLM の出力の上限**: `prep.TOKENS_PER_ITEM`（600）× 件数。relations を足すと 20 件は上限ぎりぎり。件数を増やす・出力の項目を足すときは、DESIGN 13 章の見積もりをやり直す（30 件は 2026-11-24 に切れた）。
+- **co_occurs の行の id は夜ごとに変わる**（置き換え）。id を覚えておく使い方をしない（物の id と型で引く）。
 - **作業の場所**: 子エージェントが `QnapNewsHub` の checkout で作業している間に docs を直すときは、`git worktree add ../QnapNewsHub-xxx origin/main` で別の場所を作り、終わったら `git worktree remove` する。
 
 - **子エージェントの利用の上限**: 上限で途中で止まると、コミットされていない変更が作業の場所に残る。引き継ぐときは `git status` と `./hub.sh test` で状態を見てから続ける。

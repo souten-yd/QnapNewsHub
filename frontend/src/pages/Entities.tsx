@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ENTITY_TYPE_LABEL, relativeTime, useEntities, useEntity, type EntityRow, type EntityType } from "../api/news";
+import KnowledgeCard from "../features/knowledge/KnowledgeCard";
 import { Card, field } from "../features/news/settingsUi";
 
 /** 物（/entities）: 要素の取り出し（AI。無料 LLM）で記事から取れた、モデル・ソフト・組織などの一覧。名前の検索・種類・期間で絞る。
@@ -87,6 +88,8 @@ export function EntityPage() {
         </p>
         {d.aliases.length > 0 && <p className="mt-1 text-xs text-zinc-500">別の表記: {d.aliases.join("、")}</p>}
       </header>
+
+      <KnowledgeCard id={id} />
 
       <Card id="entity-facts" title={`facts（${AI_MARK}）`} hint="記事の題・抜粋に書かれていることだけを AI が取り出したものです。確かめた事実ではないので、元の記事で確かめてください。">
         {d.facts.length === 0 ? <p className="text-xs text-zinc-500" data-testid="entity-no-facts">取り出した fact はありません。</p> : (

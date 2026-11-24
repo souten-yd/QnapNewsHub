@@ -153,6 +153,9 @@ class Entity(Base):
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     article_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    # 機密の区分（kg.py）: 公開の文書に出たことがある物は public。機密の文書だけから作られた物は confidential（AI_USE は local_only 以上）
+    sensitivity: Mapped[str] = mapped_column(String(12), default="public", server_default="public")
+    ai_use: Mapped[str] = mapped_column(String(12), default="allowed", server_default="allowed")
 
 
 class EntityAlias(Base):
@@ -182,7 +185,8 @@ class Claim(Base):
     __tablename__ = "claims"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    article_id: Mapped[int] = mapped_column(ForeignKey("news_items.id", ondelete="CASCADE"), index=True)
+    # ニュース以外の文書（v0.5 の documents）から作った主張は article_id が NULL で document_id だけ（既存の DB は _rebuild_claims で NULL を許す形へ 1 回だけ作り直す）
+    article_id: Mapped[int | None] = mapped_column(ForeignKey("news_items.id", ondelete="CASCADE"), nullable=True, index=True)
     entity_id: Mapped[int | None] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(16), default="other")
     text: Mapped[str] = mapped_column(Text, default="")
@@ -192,6 +196,117 @@ class Claim(Base):
     prompt_version: Mapped[str] = mapped_column(String(16), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ai_extracted: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # 出どころの文書（documents）と、そこから引き継いだ機密の区分（kg.inherit）。根拠は evidences を複数持てる
+    document_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    sensitivity: Mapped[str] = mapped_column(String(12), default="public", server_default="public")
+    ai_use: Mapped[str] = mapped_column(String(12), default="allowed", server_default="allowed")
+
+
+class Document(Base):
+    """文書（統合ナレッジ基盤の正本の単位。ARCHITECTURE 3 章・ControlDeck の PLAN-integrated-knowledge 4 章）。種類 kind は kg.DOC_KINDS。
+    ident は正規化した識別子（kg.normalize_ident: url:・doi:・arxiv:・repo:（リポジトリ＋SHA）・patent:・standard:）で 1 つだけ。
+    sensitivity（public・confidential）と ai_use（allowed・local_only・prohibited）は、この文書から作った主張・関係・カードへ引き継ぐ。ニュースの記事は news_documents で対応づける。"""
+
+    __tablename__ = "documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(12), index=True)
+    ident: Mapped[str] = mapped_column(String(1100), unique=True)
+    title: Mapped[str] = mapped_column(String(400), default="")
+    url: Mapped[str] = mapped_column(String(1000), default="")
+    source: Mapped[str] = mapped_column(String(120), default="")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    version: Mapped[str] = mapped_column(String(64), default="")
+    sensitivity: Mapped[str] = mapped_column(String(12), default="confidential", server_default="confidential", index=True)
+    ai_use: Mapped[str] = mapped_column(String(12), default="local_only", server_default="local_only")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NewsDocument(Base):
+    """ニュースの記事 → 文書の対応（既存の news_items を壊さずに documents へ結ぶ。重複した記事は同じ文書を指す）。kg.sync_documents が冪等に作る。"""
+
+    __tablename__ = "news_documents"
+
+    news_item_id: Mapped[int] = mapped_column(ForeignKey("news_items.id", ondelete="CASCADE"), primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+
+
+class Evidence(Base):
+    """主張・関係の根拠。文書の中の位置（文字の範囲 start〜end・ページ page。分かるときだけ）と、引用の短い原文 quote・その hash。
+    claim_id か relationship_id のどちらかに付く（1 つの主張・関係が根拠を複数持てる）。grounded は原文に照合できたか、confidence はその根拠の確かさ。"""
+
+    __tablename__ = "evidences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    claim_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    relationship_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quote: Mapped[str] = mapped_column(String(300), default="")
+    quote_hash: Mapped[str] = mapped_column(String(64), default="")
+    grounded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Relationship(Base):
+    """物どうしの関係。type は kg.REL_TYPES。directed=False（co_occurs・competes・contradicts）は subject_id < object_id にそろえる。同じ（主語・目的語・型）は 1 行。
+    status: extracted（原文に引用で照合できた AI の取り出し）・inferred（根拠の照合が無い推測。確かさは低く、確定にしない）・statistical（一緒に出る集計）・confirmed（人が根拠つきで確認）。
+    activity_*（W3C PROV の最小）は、最後に生成した活動の model・版・人。stat_ratio は co_occurs の期待値の比。sensitivity・ai_use は根拠の文書から引き継ぐ。"""
+
+    __tablename__ = "relationships"
+    __table_args__ = (UniqueConstraint("subject_id", "object_id", "type", name="uq_relationship"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"))
+    object_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"))
+    type: Mapped[str] = mapped_column(String(12))
+    directed: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(12), default="inferred")
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    stat_n: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    stat_ratio: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    first_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activity_model: Mapped[str] = mapped_column(String(200), default="")
+    activity_version: Mapped[str] = mapped_column(String(16), default="")
+    activity_by: Mapped[str] = mapped_column(String(80), default="")
+    sensitivity: Mapped[str] = mapped_column(String(12), default="public", server_default="public")
+    ai_use: Mapped[str] = mapped_column(String(12), default="allowed", server_default="allowed")
+
+
+# 地図の段ごとのまとめ取り（neighbors）は、物から出る辺・入る辺を確かさの順に上限つきで読む
+Index("ix_rel_subject", Relationship.subject_id, Relationship.confidence)
+Index("ix_rel_object", Relationship.object_id, Relationship.confidence)
+Index("ix_rel_type", Relationship.type)
+
+
+class EntityNote(Base):
+    """利用者のメモ（物ごと）。AI の部分（entity_cards）とは別の表に持ち、再分析・カードの作り直しでは触れない。保存は即時。"""
+
+    __tablename__ = "entity_notes"
+
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True)
+    body: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_by: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class EntityCard(Base):
+    """知識カードの AI の部分（概要）。sig は概要を作ったときの材料の指紋（変化があったときだけ作り直す）。tried_sig・tries は、作れなかった材料の指紋と失敗の回数（同じ材料では 3 回で諦める）。古い概要は、新しいものが作れるまで残す。"""
+
+    __tablename__ = "entity_cards"
+
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    sig: Mapped[str] = mapped_column(String(40), default="")
+    tried_sig: Mapped[str] = mapped_column(String(40), default="")
+    tries: Mapped[int] = mapped_column(Integer, default=0)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class NewsFetchLog(Base):
@@ -436,9 +551,12 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "image_ai", "BOOLEAN NOT NULL DEFAULT 0"),
                                         ("ana_count", "lag_sum", "BIGINT NOT NULL DEFAULT 0"), ("ana_count", "lag_n", "INTEGER NOT NULL DEFAULT 0"),
                                         ("ana_count", "lag_fast", "INTEGER NOT NULL DEFAULT 0"),
-                                        ("news_items", "body_state", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "cold", "INTEGER NOT NULL DEFAULT 0")]
+                                        ("news_items", "body_state", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "cold", "INTEGER NOT NULL DEFAULT 0"),
+                                        ("claims", "document_id", "INTEGER"), ("claims", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"),
+                                        ("claims", "ai_use", "VARCHAR(12) NOT NULL DEFAULT 'allowed'"),
+                                        ("entities", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"), ("entities", "ai_use", "VARCHAR(12) NOT NULL DEFAULT 'allowed'")]
 # 後から足した索引（既にあるファイルにも足す）
-_LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at")]
+_LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id")]
 
 _engines: dict[str, Engine] = {}
 _lock = threading.Lock()
@@ -446,6 +564,24 @@ _lock = threading.Lock()
 
 def path() -> Path:
     return data_dir() / "news" / "news.sqlite3"
+
+
+def _rebuild_claims(conn) -> None:
+    """claims.article_id の NOT NULL を外す（ニュース以外の文書の主張は記事が無い）。SQLite は列の制約を変えられないので、表を作り直して写す。
+    作り直しは article_id が NOT NULL の古い形のときだけ（1 回だけ。冪等）。claims を参照する外部キーは無い（evidences.claim_id は整数だけ）。"""
+    info = {r[1]: r for r in conn.execute(text("PRAGMA table_info(claims)")).all()}
+    if not info or not info["article_id"][3]:
+        return
+    cols = [c for c in info if c in {"id", "article_id", "entity_id", "kind", "text", "value", "source_article_id", "model", "prompt_version", "created_at", "ai_extracted",
+                                    "document_id", "sensitivity", "ai_use"}]
+    conn.execute(text("ALTER TABLE claims RENAME TO claims_old"))
+    conn.execute(text("DROP INDEX IF EXISTS ix_claims_article_id"))
+    conn.execute(text("DROP INDEX IF EXISTS ix_claims_entity_id"))
+    conn.execute(text("DROP INDEX IF EXISTS ix_claims_document_id"))
+    Claim.__table__.create(conn)
+    names = ", ".join(cols)
+    conn.execute(text(f"INSERT INTO claims ({names}) SELECT {names} FROM claims_old"))
+    conn.execute(text("DROP TABLE claims_old"))
 
 
 def _add_missing_columns(conn) -> None:
@@ -457,6 +593,7 @@ def _add_missing_columns(conn) -> None:
     for table, column in _LATE_INDEXES:
         if column in {c["name"] for c in have.get_columns(table)}:
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} ON {table} ({column})"))
+    _rebuild_claims(conn)
 
 
 def _cache_kb() -> int:

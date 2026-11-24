@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from qnapnewshub.db import ArticleEntity, Claim, Entity, EntityAlias, NewsItem
+from qnapnewshub.db import ArticleEntity, Claim, Entity, EntityAlias, Evidence, NewsItem
 from qnapnewshub.extract import ENTITY_TYPES, normalize_key
 
 _UTC = timezone.utc
@@ -65,6 +65,13 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
     touched: set[int] = set()
     cache: dict[str, Entity] = {}
     done = 0
+    from qnapnewshub import kg
+
+    kg.sync_documents(db, ids)      # 記事 → 文書の対応（冪等）。主張・関係はその文書の機密の区分を引き継ぐ
+    docs = kg.docs_of_articles(db, ids)
+    old_rels = kg.drop_article_evidence(db, [d[0] for a, d in docs.items() if a in meta])      # 再取り出しの前の関係の根拠を消す（人が入れたものは残す）
+    rel_work: list[tuple] = []
+    new_claims: list[tuple[Claim, int | None]] = []
     for article_id, data in staged.items():
         if article_id not in published:
             continue
@@ -72,7 +79,10 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
         old = list(db.scalars(select(ArticleEntity.entity_id).where(ArticleEntity.article_id == article_id)))
         touched.update(old)
         db.execute(delete(ArticleEntity).where(ArticleEntity.article_id == article_id))
+        db.execute(delete(Evidence).where(Evidence.claim_id.in_(select(Claim.id).where(Claim.article_id == article_id, Claim.ai_extracted.is_(True)))))
         db.execute(delete(Claim).where(Claim.article_id == article_id, Claim.ai_extracted.is_(True)))
+        doc = docs.get(article_id)
+        sens, use = kg.inherit([(doc[1], doc[2])]) if doc else ("public", "allowed")
         linked: dict[str, Entity] = {}
         for row in data.get("entities", []):
             ent = _get_or_create(db, row["name"], row["type"], when, cache)
@@ -85,9 +95,22 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
                 ent = _get_or_create(db, fact["about"], "other", when, cache)
                 if ent is not None:
                     linked[ent.key] = ent
-            db.add(Claim(article_id=article_id, entity_id=ent.id if ent else None, kind=fact["kind"], text=fact["text"], value=fact.get("value", ""),
-                         source_article_id=article_id, model=str(data.get("model", ""))[:200], prompt_version=str(data.get("version", ""))[:16],
-                         created_at=data.get("at") or datetime.now(_UTC), ai_extracted=True))
+            claim = Claim(article_id=article_id, entity_id=ent.id if ent else None, kind=fact["kind"], text=fact["text"], value=fact.get("value", ""),
+                          source_article_id=article_id, model=str(data.get("model", ""))[:200], prompt_version=str(data.get("version", ""))[:16],
+                          created_at=data.get("at") or datetime.now(_UTC), ai_extracted=True, document_id=doc[0] if doc else None, sensitivity=sens, ai_use=use)
+            db.add(claim)
+            new_claims.append((claim, doc[0] if doc else None))
+        for rel in data.get("relations", []):
+            ends = []
+            for name in (rel["subject"], rel["object"]):
+                e = linked.get(normalize_key(name))
+                if e is None and len(linked) < MAX_ENTITIES_PER_ARTICLE:
+                    e = _get_or_create(db, name, "other", when, cache)
+                    if e is not None:
+                        linked[e.key] = e
+                ends.append(e)
+            if all(ends):
+                rel_work.append((article_id, rel, ends[0], ends[1], str(data.get("model", "")), str(data.get("version", ""))))
         for ent in linked.values():
             db.add(ArticleEntity(article_id=article_id, entity_id=ent.id))
             touched.add(ent.id)
@@ -102,6 +125,10 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
         for ent in db.scalars(select(Entity).where(Entity.id.in_(chunk))):
             ent.article_count = int(counts.get(ent.id, 0))
     db.flush()
+    for claim, doc_id in new_claims:      # 主張の根拠（文書。位置・引用は取り出し元に無いので持たない）
+        if doc_id is not None:
+            db.add(kg.evidence_row(doc_id, claim_id=claim.id))
+    kg.apply_article_relations(db, rel_work, docs, old_rels)
     from qnapnewshub import analytics
 
     analytics.apply_entity_deltas(db, deltas)
