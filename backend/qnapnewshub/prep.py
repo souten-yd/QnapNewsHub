@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from qnapnewshub import db as news_db
-from qnapnewshub import llm, settings
+from qnapnewshub import llm, rest, settings, writer
 from qnapnewshub.db import NewsItem
 from qnapnewshub.topics import extract_topics
 
@@ -39,6 +39,10 @@ STRICT = ("\n\n【重要】前の返事では、記事の概要 ja が日本語�
           "（英語のまま返してはいけません）。固有名詞・製品名はそのままでよいですが、文は日本語です。")
 _JAPANESE = re.compile(r"[぀-ヿ一-鿿]")
 _FENCE = re.compile(r"```(?:json)?", re.IGNORECASE)
+
+
+def utc_n(value: datetime) -> datetime:
+    return (value.astimezone(timezone.utc) if value.tzinfo else value).replace(tzinfo=None)
 
 
 def calls_today() -> int:
@@ -106,32 +110,25 @@ def parse(text: str, count: int) -> dict[int, dict]:
 # ---- 保存 ----
 
 def _apply(ids: list[int], parsed: dict[int, dict]) -> int:
-    with news_db.session() as db:
-        done = 0
-        for n, got in parsed.items():
-            row = db.get(NewsItem, ids[n - 1])
-            if row is None:
-                continue
-            if got["ja"]:
-                row.summary_ja = got["ja"]
-            if got["img"]:
-                row.img_prompt = got["img"]
-            if got["topics"]:
-                have = [t for t in json.loads(row.topics or "[]") if isinstance(t, str)]
-                row.topics = json.dumps(list(dict.fromkeys(have + got["topics"] + extract_topics(*got["topics"])))[:12], ensure_ascii=False)
-            row.prep_tries = PREP_DONE
-            done += 1
-        db.commit()
-        return done
+    """結果はバッファへ（DB へは Write Coordinator がまとめて書く）。"""
+    coord = writer.get()
+    done = 0
+    for n, got in parsed.items():
+        sets: dict = {"prep_tries": PREP_DONE}
+        if got["ja"]:
+            sets["summary_ja"] = got["ja"]
+        if got["img"]:
+            sets["img_prompt"] = got["img"]
+        topics = [*got["topics"], *extract_topics(*got["topics"])] if got["topics"] else []
+        coord.patch_item(ids[n - 1], set=sets, topics=topics)
+        done += 1
+    return done
 
 
 def _mark_failed(ids: list[int]) -> None:
-    with news_db.session() as db:
-        for item_id in ids:
-            row = db.get(NewsItem, item_id)
-            if row is not None and row.prep_tries < PREP_DONE:
-                row.prep_tries += 1
-        db.commit()
+    coord = writer.get()
+    for item_id in ids:
+        coord.patch_item(item_id, tries=1)
 
 
 def _retry_candidates(skip: set[int], limit: int) -> list[dict]:
@@ -140,9 +137,13 @@ def _retry_candidates(skip: set[int], limit: int) -> list[dict]:
 
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=RETRY_WINDOW_DAYS)
     with news_db.session() as db:
+        coord = writer.get()
         rows = db.scalars(select(NewsItem).where(NewsItem.prep_tries < MAX_TRIES, NewsItem.kind != "event",
-                                                 NewsItem.published_at >= since).order_by(NewsItem.published_at.desc()).limit(limit + len(skip)))
-        return [store.item_dict(r) for r in rows if r.id not in skip][:limit]
+                                                 NewsItem.published_at >= since).order_by(NewsItem.published_at.desc()).limit(limit + len(skip) + 200))
+        out = [coord.effective(r) for r in rows]      # まだ書いていない結果（済み・失敗の回数）を重ねてから選ぶ
+        pend = [p for p in coord.pending_items() if p.kind != "event" and (p.prep_tries or 0) < MAX_TRIES and utc_n(p.published_at) >= since]
+        merged = sorted([*[r for r in out if (r.prep_tries or 0) < MAX_TRIES], *pend], key=lambda r: utc_n(r.published_at), reverse=True)
+        return [store.item_dict(r) for r in merged if r.id not in skip][:limit]
 
 
 # ---- 実行 ----
@@ -175,7 +176,7 @@ async def run(items: list[dict]) -> dict:
     """items（store.item_dict の形。新しい・抜粋が変わった記事）と、前に失敗した記事を 30 件ずつ 1 回の呼び出しで下ごしらえする。
     {"done": 件数, "calls": 呼び出し回数, "error": 理由 or ""}。設定が切・対象が無ければ何もしない（呼び出しも 0 回）。"""
     cfg = settings.load()["llm"]
-    if not cfg["prep_enabled"]:
+    if not cfg["prep_enabled"] or rest.blocks_analysis():
         return {"done": 0, "calls": 0, "error": ""}
     limit = cfg["prep_max_per_run"]
     todo = [i for i in items if i["kind"] != "event"]

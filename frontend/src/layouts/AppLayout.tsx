@@ -18,6 +18,7 @@ const IconMenu = () => icon(<><path d="M4 6h16" /><path d="M4 12h16" /><path d="
 const NAV: { to: string; label: string; end?: boolean; icon: ReactNode }[] = [
   { to: "/", label: "ニュース", end: true, icon: icon(<><path d="M4 5h13a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2z" /><path d="M8 9h7" /><path d="M8 13h7" /></>) },
   { to: "/sources", label: "取得先の管理", icon: icon(<><path d="M4 11a9 9 0 0 1 9 9" /><path d="M4 4a16 16 0 0 1 16 16" /><circle cx="5" cy="19" r="1" /></>) },
+  { to: "/diagnostics", label: "診断", icon: icon(<><path d="M3 12h4l3-8 4 16 3-8h4" /></>) },
   { to: "/settings", label: "設定", icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" /></>) },
 ];
 const THEMES: [Theme, string][] = [["system", "自動"], ["light", "ライト"], ["dark", "ダーク"]];

@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from qnapnewshub import channels as channels_mod
-from qnapnewshub import feedgen, fetchlog, probe, sourcemgr, digest, home, llm, prefs, prep, presets, profile, service, sources, store
+from qnapnewshub import rest, writer, feedgen, fetchlog, probe, sourcemgr, digest, home, llm, prefs, prep, presets, profile, service, sources, store
 from qnapnewshub.auth import AuthUser as User
 from qnapnewshub.auth import current_user as get_current_user
 from qnapnewshub.auth import require_admin
@@ -21,6 +21,13 @@ from qnapnewshub import settings as news_settings
 from qnapnewshub.db import NewsItem
 
 router = APIRouter(prefix="/news", tags=["news"])
+
+
+def _forget(keys: list[str]) -> None:
+    from qnapnewshub import db as news_db
+
+    with news_db.session() as session:
+        fetchlog.forget(session, keys)
 
 
 class ActionBody(BaseModel):
@@ -97,7 +104,7 @@ def mute_topic(body: MuteBody, user: User = Depends(get_current_user), db: Sessi
 
 @router.post("/items/{item_id}/action")
 def item_action(item_id: int, body: ActionBody, user: User = Depends(get_current_user), db: Session = Depends(get_news_db)):
-    state = store.set_action(db, user.id, item_id, body.action, body.on)
+    state = store.set_action_now(user.id, item_id, body.action, body.on)
     if state is None:
         raise HTTPException(status_code=404, detail="記事が見つかりません")
     return {"state": state}
@@ -228,7 +235,7 @@ async def manage_bulk(body: BulkBody, user: User = Depends(require_admin), db: S
     except sources.ConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if body.action == "delete":
-        fetchlog.forget(db, body.keys)
+        writer.run("fetchlog.forget", lambda: _forget(body.keys))
     return {"count": len(body.keys), "items": _manage_rows(db), "enabled": saved["enabled"]}
 
 
@@ -334,7 +341,8 @@ def get_settings(user: User = Depends(get_current_user)):
     settings = news_settings.load()
     cfg = settings["llm"]
     return {"settings": settings, "weekdays": list(news_settings.WEEKDAYS), "interval_minutes": channels_mod.load()["interval_minutes"],
-            "prep_calls_today": prep.calls_today(), "llm_stats": llm.stats(cfg["daily_limit"], cfg["minute_limit"]), "prep_batch": prep.BATCH}
+            "prep_calls_today": prep.calls_today(), "llm_stats": llm.stats(cfg["daily_limit"], cfg["minute_limit"]), "prep_batch": prep.BATCH,
+            "rest_state": rest.state(), "rest_modes": rest.MODE_LABELS}
 
 
 @router.put("/settings")

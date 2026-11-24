@@ -8,7 +8,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from qnapnewshub import channels, fetchlog, gist, images, prep, settings, sources, store
+from qnapnewshub import channels, fetchlog, gist, images, metrics, prep, rest, settings, sources, store, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsItem
 
@@ -56,10 +56,10 @@ async def _fetch_one(source: sources.Source, gate: asyncio.Semaphore) -> tuple[s
 
 
 def _save(items: list[dict]) -> dict:
-    with news_db.session() as db:
-        result = store.upsert_items(db, items) if items else {"new": 0, "updated": 0, "changed": []}
-        result["pruned"] = store.prune(db, channels.load()["archive_keep"])
-        return result
+    """記事をバッファへ積む（DB へは Write Coordinator が後でまとめて書く。古い記事の削除も、そのまとめ書きの中）。"""
+    result = store.stage_items(items) if items else {"new": 0, "updated": 0, "changed": [], "new_ids": [], "new_urls": []}
+    result["pruned"] = 0
+    return result
 
 
 def _log_results(results: list, new_urls: list[str]) -> None:
@@ -71,10 +71,9 @@ def _log_results(results: list, new_urls: list[str]) -> None:
         rows.append({"source_key": source.key, "at": at, "ok": info["ok"], "status": info.get("status"), "count": info["count"],
                      "new": sum(1 for i in got if i["url"] in fresh), "ms": info.get("ms", 0), "error": info["error"], "skipped": info["skipped"]})
     try:
-        with news_db.session() as db:
-            fetchlog.record(db, rows)
+        writer.get().stage_fetchlog(rows)
     except Exception:  # noqa: BLE001
-        logger.exception("取得の履歴を書けませんでした")
+        logger.exception("取得の履歴を積めませんでした")
 
 
 def _reload(ids: list[int]) -> list[dict]:
@@ -105,6 +104,10 @@ async def refresh(*, force: bool = False, channel_ids: list[str] | None = None, 
     channel_ids を渡すと、そのチャンネルの検索（source_key が search:<id>:）だけを取り直す（チャンネルの語を変えた直後。ほかのソースの状態は触らない）。
     keys を渡すと、その source_key のソースだけ取る（見張りが、間隔の来たものだけ取るとき。ほかのソースの状態は触らない）。
     {"started": bool, "reason": ..., "new": 件数, "failed": 失敗したソース数}。"""
+    if rest.blocks_fetch():
+        return {"started": False, "reason": "rest"}
+    if writer.get().memory_full():
+        return {"started": False, "reason": "memory_full"}
     if not _running.acquire(blocking=False):
         return {"started": False, "reason": "running"}
     try:
@@ -123,8 +126,9 @@ async def refresh(*, force: bool = False, channel_ids: list[str] | None = None, 
         results = await asyncio.gather(*[_fetch_one(s, gate) for s in listing])
         items = [item for _, got, _ in results for item in got]
         saved = await asyncio.to_thread(_save, items)
+        resting = rest.blocks_analysis()      # お休み中は、画像・一言要約・下ごしらえをしない（書き込みも通信も増やさない）
         try:     # 画像の無い新着へ、記事のページの og:image を付ける（失敗しても取得は成功）
-            saved["images"] = await images.fill(saved.get("new_ids", []))
+            saved["images"] = {"tried": 0, "found": 0, "logos": 0} if resting else await images.fill(saved.get("new_ids", []))
         except Exception as exc:  # noqa: BLE001
             logger.warning("記事の画像の取得に失敗しました: %s", exc)
         # 設定から外したソースの状態は残さない
@@ -143,7 +147,8 @@ async def refresh(*, force: bool = False, channel_ids: list[str] | None = None, 
             info["last_error"] = (_status.get(source.key) or {}).get("last_error", "") if info["ok"] else info["error"]
             _status[source.key] = info
         _last.update(finished=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), new=saved["new"])
-        after = await _after_save(saved)
+        metrics.note_fetch(results)
+        after = {"gist": {"done": 0, "error": ""}, "prep": {"done": 0, "calls": 0, "error": ""}} if resting else await _after_save(saved)
         _last.update(gist=after["gist"], prep=after["prep"])
         return {"started": True, "reason": "", "new": saved["new"], "updated": saved["updated"], "pruned": saved["pruned"], "after": after,
                 "failed": sum(1 for _, _, i in results if not i["ok"])}
@@ -177,7 +182,7 @@ async def news_loop() -> None:
         if os.environ.get("NEWSHUB_AUTO") != "0":
             try:
                 conf = settings.load()
-                if not settings.in_quiet(conf, datetime.now()):
+                if not settings.in_quiet(conf, datetime.now()) and not rest.blocks_fetch():
                     listing = sources.build_sources(sources.load_config(), channels.load()["channels"])
                     due = due_keys(listing, _last_fetch, time.monotonic(), channels.load()["interval_minutes"])
                     if due:
@@ -187,7 +192,7 @@ async def news_loop() -> None:
             except Exception:  # noqa: BLE001 - 1 回の失敗で見張りを止めない
                 logger.exception("ニュースの取得に失敗しました")
             try:
-                for row in await digest.run_due():
+                for row in ([] if rest.blocks_analysis() else await digest.run_due()):
                     logger.info("ニュースのまとめを作りました: %s %s", row.get("period"), row.get("day"))
             except Exception:  # noqa: BLE001
                 logger.exception("ニュースのまとめを作れませんでした")

@@ -8,6 +8,7 @@ import json
 import os
 import threading
 
+from qnapnewshub import writer
 from qnapnewshub.config import DEFAULT_HOST, DEFAULT_PORT, data_dir
 from qnapnewshub.sources import ConfigError
 
@@ -49,9 +50,5 @@ def load() -> dict:
 def save(raw: object) -> dict:
     cfg = normalize(raw)
     with _lock:
-        tmp = _path().with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(cfg, handle, indent=1)
-        os.replace(tmp, _path())
+        writer.write_file(_path(), json.dumps(cfg, indent=1), name="hubconf.save")
     return cfg

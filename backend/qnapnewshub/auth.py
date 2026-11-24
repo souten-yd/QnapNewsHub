@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request, Response
 
+from qnapnewshub import writer
 from qnapnewshub.config import data_dir
 
 logger = logging.getLogger("qnapnewshub.auth")
@@ -72,6 +73,7 @@ def _db() -> sqlite3.Connection:
             os.close(fd)
             conn = sqlite3.connect(path, timeout=10, isolation_level=None)
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA wal_autocheckpoint=0")      # checkpoint は Write Coordinator が行う
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript("""
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, pw_hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
@@ -122,19 +124,23 @@ def has_users() -> bool:
 def create_admin(username: str, password: str) -> int:
     """最初の管理者を作る。すでに利用者がいれば PermissionError。"""
     check_new_credentials(username, password)
-    conn = _db()
-    with _lock:
-        if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():
-            raise PermissionError("管理者はすでにいます")
-        cur = conn.execute("INSERT INTO users (username, pw_hash, created_at) VALUES (?, ?, ?)", (username, hash_password(password), _iso(_now())))
-        return int(cur.lastrowid)
+    pw = hash_password(password)
+
+    def do() -> int:
+        conn = _db()
+        with _lock:
+            if conn.execute("SELECT 1 FROM users LIMIT 1").fetchone():
+                raise PermissionError("管理者はすでにいます")
+            cur = conn.execute("INSERT INTO users (username, pw_hash, created_at) VALUES (?, ?, ?)", (username, pw, _iso(_now())))
+            return int(cur.lastrowid)
+    return writer.run("auth.create_admin", do)
 
 
 def create_user(username: str, password: str) -> int:
     """利用者を足す（管理者。いまは API に出さない: 最初の管理者は create_admin。複数の利用者の管理画面は後の段）。"""
     check_new_credentials(username, password)
-    cur = _db().execute("INSERT INTO users (username, pw_hash, created_at) VALUES (?, ?, ?)", (username, hash_password(password), _iso(_now())))
-    return int(cur.lastrowid)
+    pw = hash_password(password)
+    return writer.run("auth.create_user", lambda: int(_db().execute("INSERT INTO users (username, pw_hash, created_at) VALUES (?, ?, ?)", (username, pw, _iso(_now()))).lastrowid))
 
 
 def _throttled(ip: str) -> bool:
@@ -161,14 +167,16 @@ def login(username: str, password: str, ip: str) -> tuple[str, AuthUser]:
         raise PermissionError("利用者名かパスワードが違います")
     token = secrets.token_urlsafe(32)
     now = _now()
-    _db().execute("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-                  (_sha(token), row[0], _iso(now), _iso(now + timedelta(days=SESSION_DAYS))))
-    _db().execute("DELETE FROM sessions WHERE expires_at < ?", (_iso(now),))
+    def save() -> None:
+        _db().execute("INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                      (_sha(token), row[0], _iso(now), _iso(now + timedelta(days=SESSION_DAYS))))
+        _db().execute("DELETE FROM sessions WHERE expires_at < ?", (_iso(now),))
+    writer.run("auth.login", save)
     return token, AuthUser(row[0], row[1], "session")
 
 
 def logout(token: str) -> None:
-    _db().execute("DELETE FROM sessions WHERE token_hash = ?", (_sha(token),))
+    writer.run("auth.logout", lambda: _db().execute("DELETE FROM sessions WHERE token_hash = ?", (_sha(token),)))
 
 
 def session_user(token: str) -> AuthUser | None:
@@ -185,18 +193,19 @@ def create_token(user_id: int, name: str) -> dict:
     if not name:
         raise ValueError("トークンの名前を入れてください")
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
-    cur = _db().execute("INSERT INTO api_tokens (user_id, name, token_hash, hint, created_at) VALUES (?, ?, ?, ?, ?)",
-                        (user_id, name, _sha(token), token[:9] + "…", _iso(_now())))
+    cur = writer.run("auth.create_token", lambda: _db().execute("INSERT INTO api_tokens (user_id, name, token_hash, hint, created_at) VALUES (?, ?, ?, ?, ?)",
+                                                                 (user_id, name, _sha(token), token[:9] + "…", _iso(_now()))))
     return {"id": int(cur.lastrowid), "name": name, "token": token, "hint": token[:9] + "…"}
 
 
 def list_tokens() -> list[dict]:
     rows = _db().execute("SELECT id, name, hint, created_at, last_used_at, revoked_at FROM api_tokens ORDER BY id DESC").fetchall()
-    return [{"id": r[0], "name": r[1], "hint": r[2], "created_at": r[3], "last_used_at": r[4] or "", "revoked": bool(r[5])} for r in rows]
+    staged = writer.get().buf.token_used      # まだ書いていない最終使用の時刻があれば、それが新しい
+    return [{"id": r[0], "name": r[1], "hint": r[2], "created_at": r[3], "last_used_at": staged.get(r[0]) or r[4] or "", "revoked": bool(r[5])} for r in rows]
 
 
 def revoke_token(token_id: int) -> bool:
-    cur = _db().execute("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", (_iso(_now()), token_id))
+    cur = writer.run("auth.revoke_token", lambda: _db().execute("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", (_iso(_now()), token_id)))
     return cur.rowcount > 0
 
 
@@ -208,8 +217,21 @@ def token_user(token: str) -> AuthUser | None:
                        (_sha(token),)).fetchone()
     if not row:
         return None
-    conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", (_iso(_now()), row[0]))
+    writer.get().stage_token_used(row[0], _iso(_now()))      # 最終使用の時刻は、まとめ書きのときに（API を呼ぶたびに書かない）
     return AuthUser(row[1], row[2], "token")
+
+
+def apply_token_used(rows: dict[int, str]) -> None:
+    """まとめ書きから（書き手のスレッド）: トークンの最終使用の時刻。"""
+    conn = _db()
+    for token_id, at in rows.items():
+        conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", (at, token_id))
+
+
+def checkpoint() -> None:
+    """認証 DB の WAL を戻す（書き手のスレッドで）。ファイルが無ければ何もしない。"""
+    if (data_dir() / "auth.sqlite3-wal").exists():
+        _db().execute("PRAGMA wal_checkpoint(PASSIVE)")
 
 
 # ---- FastAPI の依存 ----

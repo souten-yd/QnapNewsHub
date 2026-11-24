@@ -21,6 +21,7 @@ from email.utils import parsedate_to_datetime
 from typing import Awaitable, Callable
 from urllib.parse import quote, urljoin, urlsplit
 
+from qnapnewshub import writer
 from qnapnewshub import net
 from qnapnewshub.config import data_dir
 
@@ -198,21 +199,17 @@ def load_config() -> dict:
         return normalize(DEFAULT_CONFIG)
     if _migrate_own_repo(cfg):
         try:
-            save_config(cfg)
+            save_config(cfg, user=False)
         except OSError:
             logger.warning("ニュースのソースの設定を書き戻せませんでした")
     return cfg
 
 
-def save_config(raw: object) -> dict:
+def save_config(raw: object, user: bool = True) -> dict:
     cfg = normalize(raw)
     if MIGRATION_OWN_REPO not in cfg["migrated"]:      # 利用者が保存した後は、足した自分のリポジトリを勝手に外さない
         cfg["migrated"] = [*cfg["migrated"], MIGRATION_OWN_REPO]
-    path = _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(path)
+    writer.write_file(_path(), json.dumps(cfg, ensure_ascii=False, indent=1), name="sources.save", mode=0o644, user=user)
     return cfg
 
 

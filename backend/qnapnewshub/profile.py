@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from qnapnewshub import writer
 from qnapnewshub.config import data_dir
 from qnapnewshub.db import NewsAction, NewsItem
 from qnapnewshub import channels as ch
@@ -77,13 +78,7 @@ def set_muted(user_id: int, topic: str, muted: bool) -> list[str]:
         if muted and topic:
             current.append(topic)
         everything[str(user_id)] = current[-200:]
-        path = _muted_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(everything, handle, ensure_ascii=False)
-        os.replace(tmp, path)
+        writer.write_file(_muted_path(), json.dumps(everything, ensure_ascii=False), name="profile.mute")
     return everything[str(user_id)]
 
 

@@ -140,6 +140,7 @@ def _open(file: Path) -> Engine:
         cur = dbapi.cursor()
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA wal_autocheckpoint=0")      # checkpoint は Write Coordinator が、まとめ書きの直後にだけ行う
         cur.execute("PRAGMA busy_timeout=10000")
         cur.execute("PRAGMA foreign_keys=ON")
         cur.close()

@@ -11,6 +11,7 @@ import json
 import logging
 import re
 
+from qnapnewshub import rest, writer
 from qnapnewshub import db as news_db
 from qnapnewshub import llm, settings
 from qnapnewshub.db import NewsItem
@@ -46,28 +47,21 @@ def _prompt(items: list[dict]) -> str:
 
 
 def _apply(ids: list[int], parsed: dict[int, tuple[str, list[str]]]) -> int:
-    with news_db.session() as db:
-        done = 0
-        for n, (gist, words) in parsed.items():
-            row = db.get(NewsItem, ids[n - 1])
-            if row is None or not gist:
-                continue
-            try:
-                have = [t for t in json.loads(row.topics or "[]") if isinstance(t, str)]
-            except ValueError:
-                have = []
-            row.gist = gist[:GIST_CHARS * 2]
-            row.topics = json.dumps(list(dict.fromkeys(have + words + extract_topics(*words)))[:12], ensure_ascii=False)
-            done += 1
-        db.commit()
-        return done
+    """結果はバッファへ（Write Coordinator がまとめて書く）。"""
+    done = 0
+    for n, (gist, words) in parsed.items():
+        if not gist:
+            continue
+        writer.get().patch_item(ids[n - 1], set={"gist": gist[:GIST_CHARS * 2]}, topics=[*words, *extract_topics(*words)])
+        done += 1
+    return done
 
 
 async def enrich(items: list[dict]) -> dict:
     """items（store.item_dict の形）に付ける。{"done": 付けた件数, "error": 理由 or ""}。設定が切なら何もしない。"""
     cfg = settings.load()["llm"]
     items = [i for i in items if i["kind"] != "event"][:MAX_PER_RUN]
-    if not cfg["gist_enabled"] or not items:
+    if not cfg["gist_enabled"] or not items or rest.blocks_analysis():
         return {"done": 0, "error": ""}
     done = 0
     for start in range(0, len(items), BATCH):

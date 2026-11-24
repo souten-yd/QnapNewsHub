@@ -17,6 +17,7 @@ import re
 import threading
 from datetime import datetime, timedelta
 
+from qnapnewshub import writer
 from qnapnewshub.config import data_dir
 from qnapnewshub.llm import DEFAULT_DAILY_LIMIT, DEFAULT_MINUTE_LIMIT, DEFAULT_MODEL
 from qnapnewshub.sources import ConfigError
@@ -30,6 +31,10 @@ DEFAULTS: dict = {
     "digest_daily": {"enabled": True, "time": "06:30"},
     "digest_weekly": {"enabled": True, "weekday": 0, "time": "07:00"},
     "quiet": {"enabled": False, "start": "01:00", "end": "05:00"},
+    # お休みモード（rest.py）。既定は切。休止中の動き: keep_memory / stop_all / flush_at_limit
+    "rest": {"enabled": False, "start": "01:00", "end": "06:00", "mode": "keep_memory"},
+    # 保存とログ（Write Coordinator・writer.py）。log_file・access_log は再起動で効く
+    "storage": {"flush_minutes": 30, "max_items": 1000, "max_mb": 128, "log_file": False, "access_log": False},
     # モデルは OpenRouter のモデル名（無料は :free で終わる）。下ごしらえは 30 件ずつ・1 日 daily_limit 回・1 分 minute_limit 回まで（llm.py）
     "llm": {"digest_model": DEFAULT_MODEL, "gist_enabled": False, "gist_model": DEFAULT_MODEL, "digest_focus": "", "prep_enabled": True,
             "prep_model": DEFAULT_MODEL, "prep_max_per_run": 100, "daily_limit": DEFAULT_DAILY_LIMIT, "minute_limit": DEFAULT_MINUTE_LIMIT},
@@ -115,6 +120,17 @@ def normalize(raw: object) -> dict:
     quiet = _table(raw, "quiet")
     start, end = _clock(quiet.get("start", "01:00"), "取得しない時間帯の開始"), _clock(quiet.get("end", "05:00"), "取得しない時間帯の終わり")
     out["quiet"] = {"enabled": _bool(quiet, "enabled", False), "start": start, "end": end}
+    rest_in = _table(raw, "rest")
+    mode = str(rest_in.get("mode", "keep_memory"))
+    if mode not in ("keep_memory", "stop_all", "flush_at_limit"):
+        raise ConfigError("お休みモードの動きは keep_memory・stop_all・flush_at_limit のどれかです")
+    out["rest"] = {"enabled": _bool(rest_in, "enabled", False), "start": _clock(rest_in.get("start", "01:00"), "お休みの開始"),
+                   "end": _clock(rest_in.get("end", "06:00"), "お休みの終わり"), "mode": mode}
+    st = _table(raw, "storage")
+    out["storage"] = {"flush_minutes": _int(st.get("flush_minutes", 30), "まとめ書きの間隔（分）", 1, 1440),
+                      "max_items": _int(st.get("max_items", 1000), "まとめ書きの件数の上限", 10, 100000),
+                      "max_mb": _int(st.get("max_mb", 128), "まとめ書きの容量の上限（MB）", 1, 2048),
+                      "log_file": _bool(st, "log_file", False), "access_log": _bool(st, "access_log", False)}
     llm = _table(raw, "llm")
     out["llm"] = {"digest_model": _model(llm.get("digest_model", DEFAULT_MODEL), "まとめ"), "gist_enabled": _bool(llm, "gist_enabled", False),
                   "gist_model": _model(llm.get("gist_model", DEFAULT_MODEL), "一言要約"), "digest_focus": _focus(llm.get("digest_focus", "")),
@@ -135,13 +151,10 @@ def load() -> dict:
 def save(raw: object) -> dict:
     cfg = normalize(raw)
     with _lock:
-        path = _path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(cfg, handle, ensure_ascii=False, indent=1)
-        os.replace(tmp, path)
+        writer.write_file(_path(), json.dumps(cfg, ensure_ascii=False, indent=1), name="settings.save")
+    from qnapnewshub import rest
+
+    rest.invalidate()
     return cfg
 
 

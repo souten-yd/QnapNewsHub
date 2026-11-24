@@ -111,13 +111,15 @@ export interface NewsRuntimeSettings {
   digest_daily: { enabled: boolean; time: string };
   digest_weekly: { enabled: boolean; weekday: number; time: string };
   quiet: { enabled: boolean; start: string; end: string };
+  rest: { enabled: boolean; start: string; end: string; mode: "keep_memory" | "stop_all" | "flush_at_limit" };
+  storage: { flush_minutes: number; max_items: number; max_mb: number; log_file: boolean; access_log: boolean };
   llm: { digest_model: string; gist_enabled: boolean; gist_model: string; digest_focus: string; prep_enabled: boolean; prep_model: string; prep_max_per_run: number; daily_limit: number; minute_limit: number };
 }
 /** 今日の LLM の呼び出し（backend の llm.stats）。鍵の本文は含まない（key_set は入っているかだけ）。 */
 export interface LlmStats {
   day: string; calls: Record<string, number>; total: number; daily_limit: number; minute_limit: number; failed: number; last_error: string; key_set: boolean;
 }
-export interface NewsSettingsResponse { settings: NewsRuntimeSettings; weekdays: string[]; interval_minutes: number; prep_calls_today?: number; llm_stats: LlmStats; prep_batch: number }
+export interface NewsSettingsResponse { settings: NewsRuntimeSettings; weekdays: string[]; interval_minutes: number; prep_calls_today?: number; llm_stats: LlmStats; prep_batch: number; rest_state?: { enabled: boolean; active: boolean; mode: string; ends_at: string | null }; rest_modes?: Record<string, string> }
 /** 日刊・週刊のまとめ。body が空で error があるのは「作らなかった」回（外部への送信が許可されていない等）。fallback は LLM なしの見出しの一覧。 */
 export interface Digest {
   id: number; period: "daily" | "weekly"; label: string; day: string; body: string; model: string; created_at: string;

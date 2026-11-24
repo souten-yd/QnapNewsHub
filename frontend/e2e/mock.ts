@@ -69,6 +69,7 @@ export const PREFS: NewsPrefs = {
 export const SETTINGS: NewsRuntimeSettings = {
   feed_refresh_minutes: 15,
   digest_daily: { enabled: true, time: "06:30" }, digest_weekly: { enabled: true, weekday: 0, time: "07:00" }, quiet: { enabled: false, start: "01:00", end: "05:00" },
+  rest: { enabled: false, start: "01:00", end: "06:00", mode: "keep_memory" }, storage: { flush_minutes: 30, max_items: 1000, max_mb: 128, log_file: false, access_log: false },
   llm: { digest_model: "example/free-model:free", gist_enabled: false, gist_model: "example/free-model:free", digest_focus: "", prep_enabled: true, prep_model: "example/free-model:free", prep_max_per_run: 100, daily_limit: 300, minute_limit: 10 },
 };
 
@@ -82,16 +83,37 @@ export interface MockState {
   hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
   /** 画像の無い記事だけの一覧にしたいとき等、一覧を差し替える */
   items: NewsItem[];
+  restActive: boolean; diagProblems: boolean;
 }
 
 export function newState(over: Partial<MockState> = {}): MockState {
   return { authenticated: true, setupNeeded: false, username: "admin", keySet: false, prefs: structuredClone(PREFS), settings: structuredClone(SETTINGS),
-    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, ...over };
+    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, ...over };
 }
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 // 1x1 の PNG（画像のある記事の見本）
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+
+const diagnostics = (state: MockState) => ({
+  generated_at: ago(0),
+  fetch: { total: 3, stalled: state.diagProblems ? 1 : 0, sources: [
+    { key: "rss:https://feed2.example.test/rss", name: "失敗中の取得先", kind: "rss", ok: false, reason: "http", error: "HTTP 500", last_ok_at: ago(30), last_at: ago(0.2), interval_min: 30, new_7d: 0, fail_streak: 5, stalled: true, problems: ["失敗が 5 回続いています"], fix: "取得先の管理で URL を確かめるか、無効にしてください" },
+    { key: "rss:https://feed1.example.test/rss", name: "見本の取得先 1", kind: "rss", ok: true, reason: "", error: "", last_ok_at: ago(0.2), last_at: ago(0.2), interval_min: 30, new_7d: 24, fail_streak: 0, stalled: false, problems: [], fix: "" }] },
+  llm: { day: new Date(NOW).toLocaleDateString("en-CA"), calls: { prep: 12, digest: 2, gist: 0 }, total: 14, daily_limit: 300, minute_limit: 10, failed: 1, last_error: "HTTP 429", key_set: state.keySet,
+    models: [{ model: "example/free-model:free", ok: 12, fail: 2, success_pct: 86, rate_limited: 1, avg_ms: 4200 }], rate_limited: 1, unprocessed: 7, prep_enabled: true, prep_model: "example/free-model:free" },
+  storage: {
+    io: { rchar: 9_000_000, wchar: 350_000, read_bytes: 4_000_000, write_bytes: 1_048_576, syscw: 900 },
+    series: Array.from({ length: 96 }, (_, i) => ({ t: new Date(NOW - (96 - i) * 900_000).toISOString(), write_bytes: i % 24 === 5 ? 524_288 : 0, read_bytes: 0, wchar: 0, cpu_pct: 0.1, rss: 120_000_000 })),
+    last_flush: null, last_flush_at: ago(0.4), next_flush_at: new Date(NOW + 1_200_000).toISOString(), flush_minutes: 30, limits: { items: 1000, mb: 128 },
+    unsaved: { items: 12, updates: 3, patches: 5, fetchlog: 4, states: 1, total: 25, bytes: 20_000, inflight: 0 }, flush_failures: 0, last_error: "",
+    files: { db: 8_388_608, wal: 262_144, auth_db: 20_480, auth_wal: 0 }, disk: { free: 200_000_000_000, total: 500_000_000_000 },
+    rest: { enabled: state.settings.rest.enabled, active: state.restActive, mode: state.settings.rest.mode, start: "01:00", end: "06:00", ends_at: state.restActive ? "2026-11-25T06:00:00" : null },
+    rest_writes: state.restActive ? [{ at: ago(0.1), name: "prefs.save", user: true }] : [], rest_app_writes: 0, writes_by_name: { "prefs.save": 1 }, flush_history: [],
+  },
+  machine: { cpu_pct: 0.2, load: [0.1, 0.2, 0.2], rss: 126_000_000, uptime_seconds: 93_000, version: "0.1.0", python: "3.12", cpus: 2 },
+  problems: state.diagProblems ? [{ area: "fetch", level: "warn", text: "取得が止まった可能性のある取得先が 1 件あります" }] : [],
+});
 
 export async function mockApi(page: Page, state: MockState): Promise<void> {
   await page.route("https://img.example.test/**", (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
@@ -161,6 +183,8 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("GET", "/news/presets")) return json(route, { groups: [{ id: "ai", label: "AI・LLM", hint: "", count: 1 }], items: [{ id: "p1", group: "ai", kind: "rss", name: "見本の目録", value: "https://preset.example.test/rss", lang: "ja", note: "", key: false, verified: "2026-11-24", recommended: true }], verified: "2026-11-24" });
     if (is("GET", "/news/settings")) return json(route, {
       settings: state.settings, weekdays: ["月", "火", "水", "木", "金", "土", "日"], interval_minutes: 30, prep_calls_today: 12, prep_batch: 30,
+      rest_state: { enabled: state.settings.rest.enabled, active: state.restActive, mode: state.settings.rest.mode, ends_at: state.restActive ? "2026-11-25T06:00:00" : null },
+      rest_modes: { keep_memory: "集め続けてメモリに保持", stop_all: "集める・分析・保存をすべて休む", flush_at_limit: "集め続けて上限のときだけ一括で保存" },
       llm_stats: { day: new Date(NOW).toLocaleDateString("en-CA"), calls: { prep: 12, digest: 2, gist: 0 }, total: 14, daily_limit: state.settings.llm.daily_limit, minute_limit: state.settings.llm.minute_limit, failed: 1, last_error: "混み合っています（429）", key_set: state.keySet },
     });
     if (is("PUT", "/news/settings")) { state.settings = body as NewsRuntimeSettings; return json(route, { settings: state.settings }); }
@@ -170,6 +194,12 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("POST", "/news/refresh")) return json(route, { started: true, reason: "", new: 2, failed: 0 });
     if (is("PUT", "/news/channels")) return json(route, body);
 
+    if (is("GET", "/diagnostics")) return json(route, diagnostics(state));
+    if (is("GET", "/diagnostics/notice")) return json(route, state.diagProblems ? { message: "取得が止まった可能性のある取得先が 1 件あります", level: "warn", count: 1 } : { message: null, level: null, count: 0 });
+    if (is("POST", "/diagnostics/selfcheck")) return json(route, { at: ago(0), ok: false, checks: [
+      { name: "DB の整合（PRAGMA quick_check）", ok: true, detail: "ok", fix: "" }, { name: "全文検索（FTS）の整合", ok: true, detail: "記事 6 件・索引 6 件", fix: "" },
+      { name: "LLM の鍵", ok: state.keySet, detail: state.keySet ? "入っています" : "未設定です", fix: "設定の AI の欄で OpenRouter の鍵を入れてください" }, { name: "時計", ok: true, detail: "ずれなし", fix: "" }] });
+    if (is("POST", "/diagnostics/flush")) return json(route, { ok: true, reason: "manual", items: 0 });
     state.unhandled.push(`${method} ${path}`);
     return json(route, { detail: "模擬にない API です" }, 404);
   });
