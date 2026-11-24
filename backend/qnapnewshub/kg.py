@@ -131,6 +131,10 @@ def _canon_url(url: str) -> str:
 
 # ---- 文書 ----
 
+def part_ids(ids: list[int]) -> list[int]:
+    return [int(x) for x in ids[:2000]]
+
+
 def sync_documents(db: Session, ids: list[int] | None = None, *, full: bool = False) -> int:
     """ニュースの記事を documents へ対応づける（冪等。同じ識別子の記事は同じ文書を指す）。ids を渡せばその記事だけ、
     渡さなければ前回の続き（news_meta の kg_doc_hi より大きい id）、full なら全部（抜けの点検）。新しく対応づけた記事の数を返す。コミットは呼ぶ側。"""
@@ -147,6 +151,10 @@ def sync_documents(db: Session, ids: list[int] | None = None, *, full: bool = Fa
             cond = f"n.id IN ({','.join(str(x) for x in part)})"
             db.execute(text(ins_doc.format(cond=cond)), {"now": now})
             done += db.execute(text(ins_map.format(cond=cond))).rowcount or 0
+        if done:      # 新しく対応づけた記事の文書を、いまの状態の段（L1〜L3）へ
+            from qnapnewshub import docstore
+
+            docstore.news_tiers(db, part_ids(ids))
         return done
     hi_row = db.get(NewsMeta, _DOC_HI)
     hi = 0 if full or hi_row is None else int(hi_row.value or 0)
@@ -160,6 +168,10 @@ def sync_documents(db: Session, ids: list[int] | None = None, *, full: bool = Fa
         db.add(NewsMeta(key=_DOC_HI, value=str(top)))
     else:
         hi_row.value = str(top)
+    if done or full:      # 新しい文書（と、前回までの段の取りこぼし）を、いまの状態の段へ（冪等）
+        from qnapnewshub import docstore
+
+        docstore.news_tiers(db)
     return done
 
 

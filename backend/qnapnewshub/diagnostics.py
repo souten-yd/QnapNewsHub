@@ -206,6 +206,15 @@ def link_section(db) -> dict:
             "artifacts": int(db.scalar(select(func.count()).select_from(Artifact)) or 0), "research": int(db.scalar(select(func.count()).select_from(ResearchRecord)) or 0)}
 
 
+def connector_section(db) -> dict:
+    """connector（収集の枠組み。v0.7）: 入の数・予算で止まったもの・最後の失敗・未確認なのに入のもの・文書の段の数。読むだけ。"""
+    from qnapnewshub import connectors, docstore
+
+    out = connectors.diagnostics()
+    out["tiers"] = docstore.tier_counts(db)
+    return out
+
+
 def problems(section: dict) -> list[dict]:
     """自動の判定（level: error / warn）。ホームの一行の知らせもここから。"""
     out: list[dict] = []
@@ -243,13 +252,20 @@ def problems(section: dict) -> list[dict]:
     up = section.get("update") or {}
     if up.get("last") and not up["last"]["ok"]:
         out.append({"area": "update", "level": "warn", "text": up["last"]["message"]})
+    cn = section.get("connectors") or {}
+    for stop in cn.get("budget_stops", []):
+        out.append({"area": "connectors", "level": "warn", "text": f"{stop['label']}: {stop['reason']}"})
+    for bad in cn.get("failing", []):
+        out.append({"area": "connectors", "level": "warn", "text": f"{bad['label']} の取得に失敗しました（{bad['error'][:80]}）"})
+    for unc in cn.get("unconfirmed_on", []):
+        out.append({"area": "connectors", "level": "warn", "text": f"{unc['label']} は利用条件が未確認のまま入になっています"})
     if m["rss"] > RSS_TARGET:
         out.append({"area": "machine", "level": "warn", "text": "常駐のメモリが目標の 512MB を超えています"})
     return out
 
 
 def build(db) -> dict:
-    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary(), "search": search_section(db), "link": link_section(db)}
+    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary(), "search": search_section(db), "link": link_section(db), "connectors": connector_section(db)}
     section["problems"] = problems(section)
     return section
 

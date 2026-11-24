@@ -54,13 +54,14 @@ class _Buf:
         self.event_summaries: dict[int, dict] = {}     # イベントの id -> 要約（events.apply_summaries が書く）。{"tries": 1} は失敗の記録
         self.trend_notes: list[dict] = []              # 「今日の傾向」の解説（trend.save_note が書く）
         self.bodies: dict[int, dict] = {}              # 記事の id -> 本文の取り出しの結果（bodies.apply が書く。state 1 は圧縮した本文・2 は取れない理由）
+        self.connectors: list[dict] = []               # connector の結果（文書・辺・Metric。docstore.apply が書く）
         self.bytes = 0
 
     def empty(self) -> bool:
-        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes or self.bodies)
+        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes or self.bodies or self.connectors)
 
     def count(self) -> int:
-        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes or self.bodies)
+        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes or self.bodies) + len(self.connectors)
 
 
 def merge_patch(old: dict | None, new: dict) -> dict:
@@ -319,6 +320,16 @@ class Coordinator:
         with self.lock:
             return sum(1 for b in (self.inflight, self.buf) for r in b.bodies.values() if r["at"] >= since)
 
+    def stage_connector(self, batch: dict) -> None:
+        """connector の結果（{connector, docs, links, metrics}）を積む。まとめ書きの 1 トランザクションで文書・辺・Metric になる（docstore.apply）。"""
+        with self.lock:
+            self.buf.connectors.append(batch)
+        self._touch(300 + 400 * len(batch.get("docs", [])) + 200 * (len(batch.get("metrics", [])) + len(batch.get("links", []))))
+
+    def pending_connector_docs(self) -> int:
+        with self.lock:
+            return sum(len(b.get("docs", [])) for buf in (self.inflight, self.buf) for b in buf.connectors)
+
     def stage_token_used(self, token_id: int, at: str) -> None:
         with self.lock:
             self.buf.token_used[token_id] = at
@@ -395,7 +406,7 @@ class Coordinator:
         with self.lock:
             b = self.buf
             return {"items": len(b.new), "updates": len(b.updates), "patches": len(b.patches), "fetchlog": len(b.fetchlog),
-                    "states": len(b.states), "extractions": len(b.extractions), "bodies": len(b.bodies), "total": b.count(), "bytes": b.bytes, "inflight": self.inflight.count()}
+                    "states": len(b.states), "extractions": len(b.extractions), "bodies": len(b.bodies), "connectors": len(b.connectors), "total": b.count(), "bytes": b.bytes, "inflight": self.inflight.count()}
 
     def unsaved_total(self) -> int:
         with self.lock:
@@ -454,6 +465,13 @@ class Coordinator:
                         bodies.apply(db, snap.bodies)
                     if snap.fetchlog:
                         fetchlog.record(db, snap.fetchlog, commit=False)
+                    from qnapnewshub import docstore
+
+                    if snap.connectors:      # connector の結果（論文・リポジトリ・モデル・L0 の URL・Metric）と、昇格の規則
+                        docstore.apply(db, snap.connectors)
+                    tiered = set(snap.bodies) | set(snap.extractions) | {i for i, p in snap.patches.items() if "extract_v" in (p.get("set") or {})}
+                    if tiered:      # ニュースの文書の段（本文を取り出せた→L2・要素の取り出しが済んだ→L3）
+                        docstore.news_tiers(db, sorted(tiered))
                     if snap.event_summaries:
                         from qnapnewshub import events as events_mod
 
@@ -533,6 +551,7 @@ class Coordinator:
         for k, v in older.event_summaries.items():
             into.event_summaries.setdefault(k, v)
         into.trend_notes[:0] = older.trend_notes
+        into.connectors[:0] = older.connectors
         for k, v in older.bodies.items():
             into.bodies.setdefault(k, v)
         for k, v in older.token_used.items():
