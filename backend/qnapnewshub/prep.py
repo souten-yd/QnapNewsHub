@@ -182,7 +182,7 @@ def _apply(ids: list[int], parsed: dict[int, dict], model: str = "") -> int:
             sets["summary_ja"] = got["ja"]
         if got["img"]:
             sets["img_prompt"] = got["img"]
-        topics = [*got["topics"], *extract_topics(*got["topics"])] if got["topics"] else []
+        topics = [*got["topics"], *extract_topics(" ".join(got["topics"]))] if got["topics"] else []
         _stage_extract(ids[n - 1], got, model or got.get("model", ""), sets)
         coord.patch_item(ids[n - 1], set=sets, topics=topics)
         done += 1

@@ -52,7 +52,7 @@ def _apply(ids: list[int], parsed: dict[int, tuple[str, list[str]]]) -> int:
     for n, (gist, words) in parsed.items():
         if not gist:
             continue
-        writer.get().patch_item(ids[n - 1], set={"gist": gist[:GIST_CHARS * 2]}, topics=[*words, *extract_topics(*words)])
+        writer.get().patch_item(ids[n - 1], set={"gist": gist[:GIST_CHARS * 2]}, topics=[*words, *extract_topics(" ".join(words))])
         done += 1
     return done
 
