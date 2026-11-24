@@ -33,8 +33,9 @@ from qnapnewshub.topics import extract_topics
 logger = logging.getLogger("qnapnewshub.prep")
 
 # 1 回の件数。2026-11-24 の実測（docs/research-free-llm-batch.md の追記）: 要素の取り出し（entities・facts）を足すと 1 件あたり
-# 約 400 トークンの出力になり、30 件では出力の上限で JSON が切れた（Nemotron・DeepSeek Flash とも）。15 件なら形は崩れない。
-BATCH = 15
+# 約 400 トークンの出力になり、30 件では出力の上限で JSON が切れた（Nemotron・DeepSeek Flash とも）。20 件なら形は崩れない。
+# 利用者（2026-11-24）「20 件で良いよ」。
+BATCH = 20
 TOKENS_PER_ITEM = 500          # 出力の上限 = 件数 × これ（最小 2,000・最大 12,000）
 PREP_DONE = 100          # prep_tries がこの値なら下ごしらえ済み
 MAX_TRIES = 3
