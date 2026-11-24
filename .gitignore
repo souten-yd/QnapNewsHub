@@ -12,3 +12,4 @@ playwright-report/
 *.egg-info/
 build/
 .pytest_cache/
+frontend/tsconfig.tsbuildinfo

@@ -40,7 +40,8 @@ _SAFE = ("GET", "HEAD", "OPTIONS")
 
 _lock = threading.Lock()
 _failures: dict[str, list[float]] = {}
-_conns: dict[str, sqlite3.Connection] = {}
+# sqlite3 の接続は 1 本を複数のスレッドで同時に使えない（2026-11-24 E2E で、同時の GET が InterfaceError の 500 になった）。スレッドごとに持つ
+_local = threading.local()
 
 
 @dataclass(frozen=True)
@@ -61,14 +62,15 @@ def _iso(value: datetime) -> str:
 def _db() -> sqlite3.Connection:
     path = data_dir() / "auth.sqlite3"
     key = str(path)
+    conns: dict[str, sqlite3.Connection] = _local.__dict__.setdefault("conns", {})
     with _lock:
-        conn = _conns.get(key)
+        conn = conns.get(key)
         if conn is None or not path.exists():
             if conn is not None:
                 conn.close()
             fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
             os.close(fd)
-            conn = sqlite3.connect(path, check_same_thread=False, timeout=10, isolation_level=None)
+            conn = sqlite3.connect(path, timeout=10, isolation_level=None)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript("""
@@ -77,7 +79,7 @@ CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id INTEGE
 CREATE TABLE IF NOT EXISTS api_tokens (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
   hint TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
 """)
-            _conns[key] = conn
+            conns[key] = conn
         return conn
 
 

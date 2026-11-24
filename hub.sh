@@ -2,6 +2,10 @@
 # QNAP ニュースハブの起動と試験の台本。
 #   ./hub.sh setup          .venv を作って依存を入れる（版は backend/pyproject.toml で固定）
 #   ./hub.sh test [args]    試験（pytest）
+#   ./hub.sh build          画面を build する（frontend で npm ci → tsc → vite build。できた frontend/dist をバックエンドが / 以下で配る）
+#   ./hub.sh icons          アイコン（frontend/icons/*.svg → frontend/public/*.png・packaging/qpkg/icons/*.png）を作り直す。PLAYWRIGHT_BROWSERS_PATH のブラウザで描く
+#   ./hub.sh e2e [args]     画面の E2E（Playwright）。一時の置き場でバックエンドを起こして流す（本物のデータには触れない）。
+#                           ブラウザは PLAYWRIGHT_BROWSERS_PATH のものを使う（install はしない）。撮影は NEWSHUB_SHOTS_DIR にも写す
 #   ./hub.sh run            127.0.0.1:8787 で起動（NEWSHUB_HOST / NEWSHUB_PORT か設定の API で変える）
 #   ./hub.sh create-admin   最初の管理者を作る（パスワードは対話で入力）
 #   ./hub.sh set-openrouter-key  OpenRouter の鍵を暗号化して保存
@@ -29,13 +33,66 @@ case "$cmd" in
     cd "$ROOT/backend"
     exec "$PY" -m pytest "$@"
     ;;
+  build)
+    command -v npm >/dev/null || { echo "npm が要ります（Node.js 22）" >&2; exit 1; }
+    cd "$ROOT/frontend"
+    npm ci --no-audit --no-fund
+    exec npm run build
+    ;;
+  icons)
+    cd "$ROOT/frontend"
+    [ -d node_modules ] || npm ci --no-audit --no-fund
+    exec node scripts/make-icons.mjs
+    ;;
+  e2e)
+    need_venv
+    command -v npm >/dev/null || { echo "npm が要ります（Node.js 22）" >&2; exit 1; }
+    "$0" build
+    cd "$ROOT/frontend"
+    npx tsc -p tsconfig.e2e.json
+    E2E_PORT="${NEWSHUB_E2E_PORT:-18787}"
+    E2E_TMP="$(mktemp -d "${TMPDIR:-/tmp}/newshub-e2e-XXXXXX")"
+    [ -n "$E2E_TMP" ] && [ -d "$E2E_TMP" ] || { echo "一時の置き場を作れませんでした" >&2; exit 1; }
+    SERVER_PID=""
+    cleanup() {
+      if [ -n "$SERVER_PID" ]; then
+        kill "$SERVER_PID" 2>/dev/null || true
+        for _ in $(seq 1 20); do kill -0 "$SERVER_PID" 2>/dev/null || break; sleep 0.25; done
+        kill -9 "$SERVER_PID" 2>/dev/null || true      # 止まらなければ強制（次の実行のポートを塞がない）
+      fi
+      rm -rf -- "${E2E_TMP:?}"
+    }
+    trap cleanup EXIT
+    trap 'exit 130' INT TERM HUP PIPE      # 途中で切られても、起こしたバックエンドと一時の置き場を残さない
+    if curl -fsS "http://127.0.0.1:$E2E_PORT/api/v1/health" >/dev/null 2>&1; then
+      echo "ポート $E2E_PORT はすでに使われています（NEWSHUB_E2E_PORT で変えられます）" >&2
+      exit 1
+    fi
+    # 本番とは別の置き場・別のポートで起こす（外への取得の見張りは動かさない）
+    export NEWSHUB_DATA="$E2E_TMP/data" NEWSHUB_AUTO=0 NEWSHUB_HOST=127.0.0.1 NEWSHUB_PORT="$E2E_PORT"
+    (cd "$ROOT/backend" && "$PY" "$ROOT/frontend/e2e/seed_backend.py")
+    cd "$ROOT/backend"
+    "$PY" -m qnapnewshub.cli run >"$E2E_TMP/server.log" 2>&1 &
+    SERVER_PID=$!
+    cd "$ROOT/frontend"
+    for _ in $(seq 1 60); do
+      curl -fsS "http://127.0.0.1:$E2E_PORT/api/v1/health" >/dev/null 2>&1 && break
+      sleep 0.5
+    done
+    curl -fsS "http://127.0.0.1:$E2E_PORT/api/v1/health" >/dev/null || { echo "試験用のバックエンドが起きませんでした" >&2; cat "$E2E_TMP/server.log" >&2; exit 1; }
+    set +e
+    NEWSHUB_E2E_URL="http://127.0.0.1:$E2E_PORT" npx playwright test "$@"
+    status=$?
+    set -e
+    exit $status
+    ;;
   run)
     need_venv
     cd "$ROOT/backend"
     exec "$PY" -m qnapnewshub.cli run
     ;;
   help|-h|--help)
-    sed -n '2,10p' "${BASH_SOURCE[0]}"
+    sed -n '2,16p' "${BASH_SOURCE[0]}"
     ;;
   *)
     need_venv
