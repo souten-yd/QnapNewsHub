@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useSwipe } from "../components/useSwipe";
 import { relativeTime, DEFAULT_PREFS, LEGACY_DESIGNS, useNewsAction, useNewsChannels, useNewsHome, useNewsItems, useNewsPrefs, useNewsSources, useRefreshNews, type NewsDesign, type NewsItem, type NewsView } from "../api/news";
 import { useDiagNotice } from "../api/diag";
 import { useUpdateNotice } from "../api/update";
 import { useToasts } from "../stores";
+import { HotMini } from "../features/analytics/HotMini";
 import { DesignHome } from "../features/news/DesignHomes";
 import { BroadcastHome } from "../features/news/BroadcastHome";
 import { NewsCard } from "../features/news/NewsCard";
@@ -24,11 +25,13 @@ export default function NewsPage() {
   const updNotice = useUpdateNotice();
   const prefsQuery = useNewsPrefs();
   const prefs = prefsQuery.data ?? DEFAULT_PREFS;
-  const [tab, setTab] = useState<Tab>("home");
+  const [params] = useSearchParams();
+  const initialQ = (params.get("q") ?? "").slice(0, 200);      // 分析のホットトピックから来たとき
+  const [tab, setTab] = useState<Tab>(initialQ ? "latest" : "home");
   const [kinds, setKinds] = useState("");
   const [channel, setChannel] = useState("");
-  const [draft, setDraft] = useState("");
-  const [q, setQ] = useState("");
+  const [draft, setDraft] = useState(initialQ);
+  const [q, setQ] = useState(initialQ);
   const [date, setDate] = useState("");
   const [topic, setTopic] = useState("");
   const [starred, setStarred] = useState(false);
@@ -127,6 +130,7 @@ export default function NewsPage() {
             </ul>
           </details>
         )}
+        {showHome && <HotMini />}
         {showHome && <DigestCards onTopic={pickTopic} channels={chList} onChannel={pickChannel} />}
         {showHome ? (
           home.isLoading ? <div className="nw-skel" aria-busy="true" aria-label="読み込み中" style={{ minHeight: 320 }} /> : home.isError || !home.data ? (

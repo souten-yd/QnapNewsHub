@@ -7,6 +7,7 @@ import { Toasts } from "./components/ui";
 import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage, SetupPage } from "./pages/Auth";
 import NewsPage from "./pages/News";
+import AnalyticsPage from "./pages/Analytics";
 import NewsSourcesPage from "./pages/NewsSources";
 import SettingsPage from "./pages/Settings";
 import DiagnosticsPage from "./pages/Diagnostics";
@@ -38,6 +39,7 @@ export default function App() {
     <Routes>
       <Route element={<AppLayout username={status.data.username ?? ""} />}>
         <Route path="/" element={<NewsPage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/sources" element={<NewsSourcesPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

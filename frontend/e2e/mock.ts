@@ -2,6 +2,7 @@
  *  模擬に無い API が呼ばれたら 404 を返して unhandled に記録する（試験の終わりに空であることを確かめる）。 */
 import type { Page, Route } from "@playwright/test";
 import type { UpdateStatus, UpdateRelease } from "../src/api/update";
+import type { AnalyticsFilters, Compare, HotTopics, Overview, Series, SourcesAnalysis } from "../src/api/analytics";
 import type { Digest, NewsHome, NewsItem, NewsPrefs, NewsRuntimeSettings } from "../src/api/news";
 
 const NOW = Date.now();
@@ -98,12 +99,46 @@ export const UPDATE_BASE: UpdateStatus = {
   job: { phase: "idle", kind: "", target: "", message: "", percent: 0, started_at: "" }, last: null, rest: { active: false, ends_at: null }, etag_hits: 2, checks: 3, manual_steps: [],
 };
 
+// ---- 分析（見本の数字。実データではない） ----
+const DAYS7 = Array.from({ length: 7 }, (_, i) => new Date(NOW - (6 - i) * 86_400_000).toLocaleDateString("en-CA"));
+const hot = (term: string, label: string, score: number | null, count: number, mean: number, sources: number, spark: number[]) =>
+  ({ term, label, score, count, count_all: count + 1, baseline_mean: mean, baseline_sd: 1, growth_pct: Math.round(((count - mean) / Math.max(mean, 1)) * 100), sources, spark });
+export const HOT: HotTopics = {
+  window_hours: 24, baseline_days: 28, enough_history: true, spark_days: DAYS7,
+  top: [hot("rocm", "ROCm", 6.1, 14, 2.1, 5, [1, 2, 1, 3, 2, 4, 14, 14]), hot("qwen", "Qwen", 4.4, 11, 3, 4, [2, 3, 2, 3, 4, 3, 5, 11]), hot("gguf", "GGUF", 3.2, 8, 2, 3, [1, 1, 2, 1, 2, 2, 3, 8]),
+    hot("vulkan", "Vulkan", 2.5, 6, 1.5, 3, [1, 1, 1, 2, 1, 1, 2, 6]), hot("nas", "NAS", 2.1, 5, 1, 2, [0, 1, 1, 0, 1, 1, 2, 5]), hot("llama.cpp", "llama.cpp", 1.9, 9, 5, 4, [4, 5, 5, 6, 5, 4, 6, 9]),
+    hot("ollama", "Ollama", 1.7, 5, 2, 3, [2, 2, 1, 2, 2, 3, 2, 5]), hot("radeon", "Radeon", 1.5, 4, 1.4, 2, [1, 1, 2, 1, 1, 2, 1, 4]), hot("wayland", "Wayland", 1.2, 4, 1.8, 2, [1, 2, 2, 1, 2, 1, 2, 4]), hot("mesa", "Mesa", 1.1, 3, 1, 2, [1, 0, 1, 1, 0, 1, 1, 3])],
+  new: [hot("zorblax", "Zorblax", null, 4, 0, 3, [0, 0, 0, 0, 0, 0, 0, 4])],
+  fields: [{ channel: "ai", name: "AI・LLM", color: "#7c3aed", top: [hot("qwen", "Qwen", 4.4, 11, 3, 4, [2, 3, 2, 3, 4, 3, 5, 11])] }, { channel: "infra", name: "インフラ", color: "#0ea5e9", top: [hot("nas", "NAS", 2.1, 5, 1, 2, [0, 1, 1, 0, 1, 1, 2, 5])] }],
+  method: "",
+};
+export const OVERVIEW: Overview = { today: 412, today_indep: 361, last24h: 980, last24h_indep: 870, sources_today: 57, sources_8d: 80, prev7_daily_avg: 790, prev7_days: 7, ratio_24h: 1.24, ratio_today: 0.52, day: DAYS7[6], built_at: ago(1), unsaved: 0 };
+const KINDS = [["news", "ニュース"], ["release", "更新"], ["model", "モデル"], ["forum", "フォーラム"], ["reddit", "Reddit"]] as const;
+export const ANA_FILTERS: AnalyticsFilters = { kinds: KINDS.map(([id, label]) => ({ id, label })), langs: [{ id: "ja", label: "日本語" }, { id: "en", label: "英語" }], channels: CHANNELS.map((c) => ({ id: c.id, name: c.name, color: c.color })) };
+const mockSeries = (p: URLSearchParams): Series => {
+  const hour = (p.get("grain") || (["24h", "7d"].includes(p.get("range") ?? "7d") ? "hour" : "day")) === "hour";
+  const range = (p.get("range") ?? "7d") as Series["range"];
+  const n = hour ? (range === "24h" ? 24 : 168) : ({ "24h": 1, "7d": 7, "30d": 30, "90d": 90 }[range]);
+  const buckets = Array.from({ length: n }, (_, i) => (hour ? new Date(NOW - (n - 1 - i) * 3_600_000).toLocaleString("sv-SE").slice(0, 13) : new Date(NOW - (n - 1 - i) * 86_400_000).toLocaleDateString("en-CA")));
+  const by = (p.get("by") ?? "none") as Series["by"];
+  const keys: [string, string][] = by === "none" ? [["all", "記事"]] : by === "kind" ? [["news", "ニュース"], ["release", "更新"], ["model", "モデル"]] : by === "lang" ? [["ja", "日本語"], ["en", "英語"]]
+    : by === "channel" ? [["ai", "AI・LLM"], ["infra", "インフラ"], ["-", "どれにも入らない"]] : by === "origin" ? [["press", "報道"], ["official", "公式"]] : [["rss:a", "見本の取得先 1"], ["rss:b", "見本の取得先 2"]];
+  const series = keys.map(([key, label], k) => ({ key, label, counts: buckets.map((_, i) => ((i * 7 + k * 5) % 9) + 2), total: 0, ...(by === "channel" && key !== "-" ? { color: CHANNELS[k].color } : {}) }));
+  series.forEach((s) => { s.total = s.counts.reduce((a, b) => a + b, 0); });
+  return { range, grain: hour ? "hour" : "day", by, metric: (p.get("metric") ?? "all") as "all" | "indep", buckets, series, total: series.reduce((a, s) => a + s.total, 0) };
+};
+const SOURCE_ROWS: SourcesAnalysis["sources"] = Array.from({ length: 8 }, (_, i) => ({ key: `rss:${i}`, name: `見本の取得先 ${i + 1}`, origin: "press", articles: 200 - i * 20, independent: 180 - i * 18, runs: 96, success_pct: i === 3 ? 71.9 : 100, not_modified_pct: 62 - i * 3,
+  image_pct: 80 - i * 7, dup_pct: 8 + i, new: 20, daily: DAYS7.map((_, d) => 10 + ((d * 3 + i * 5) % 13)) }));
+export const COMPARE: Compare = { by: "kind", this_week: [DAYS7[0], DAYS7[6]], prev_week: ["2026-11-10", "2026-11-16"], total_this: 5400, total_prev: 4900,
+  rows: [{ key: "news", label: "ニュース", this: 4000, prev: 3500, this_indep: 3600, prev_indep: 3200, delta: 500, pct: 14 }, { key: "release", label: "更新", this: 900, prev: 1000, this_indep: 880, prev_indep: 990, delta: -100, pct: -10 },
+    { key: "model", label: "モデル", this: 500, prev: 400, this_indep: 480, prev_indep: 390, delta: 100, pct: 25 }] };
+
 export interface MockState {
   authenticated: boolean; setupNeeded: boolean; setupTokenRequired?: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
   hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
   /** 画像の無い記事だけの一覧にしたいとき等、一覧を差し替える */
   items: NewsItem[];
-  restActive: boolean; diagProblems: boolean; update: UpdateStatus;
+  restActive: boolean; diagProblems: boolean; update: UpdateStatus; analyticsEmpty?: boolean;
 }
 
 export function newState(over: Partial<MockState> = {}): MockState {
@@ -166,6 +201,12 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("GET", "/auth/hub")) return json(route, { host: "127.0.0.1", port: 8787, cookie_secure: false });
     if (is("PUT", "/auth/hub")) return json(route, { ...(body as object), restart_needed: true });
 
+    if (is("GET", "/analytics/filters")) return json(route, ANA_FILTERS);
+    if (is("GET", "/analytics/overview")) return json(route, state.analyticsEmpty ? { ...OVERVIEW, today: 0, today_indep: 0, last24h: 0, sources_today: 0, prev7_daily_avg: null, ratio_24h: null } : OVERVIEW);
+    if (is("GET", "/analytics/series")) return json(route, state.analyticsEmpty ? { ...mockSeries(url.searchParams), series: [], total: 0 } : mockSeries(url.searchParams));
+    if (is("GET", "/analytics/hot-topics")) return json(route, state.analyticsEmpty ? { ...HOT, enough_history: false, baseline_days: 1, top: [], new: [], fields: [] } : HOT);
+    if (is("GET", "/analytics/sources")) return json(route, { range: url.searchParams.get("range") ?? "7d", days: DAYS7, sources: SOURCE_ROWS, total_sources: SOURCE_ROWS.length });
+    if (is("GET", "/analytics/compare")) return json(route, COMPARE);
     if (is("GET", "/news/prefs")) return json(route, state.prefs);
     if (is("PUT", "/news/prefs")) { state.prefs = body as NewsPrefs; return json(route, state.prefs); }
     const pick = (list: NewsItem[]) => list.map((i) => state.items.find((x) => x.id === i.id)).filter((i): i is NewsItem => Boolean(i));
