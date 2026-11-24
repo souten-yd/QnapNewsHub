@@ -475,6 +475,9 @@ class Coordinator:
                         from qnapnewshub import channels
 
                         store.prune(db, channels.load()["archive_keep"], commit=False)
+                        from qnapnewshub import changes
+
+                        changes.trim(db)      # 古い削除の印（同期の tombstone）を片付ける
                         events_mod.cleanup(db)
                     db.commit()
                 from qnapnewshub import analytics

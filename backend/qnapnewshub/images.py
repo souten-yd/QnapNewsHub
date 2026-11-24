@@ -144,7 +144,7 @@ def drop_logos() -> int:
     with news_db.session() as db:
         shared = db.scalars(select(NewsItem.image_url).where(NewsItem.image_url.is_not(None), NewsItem.kind.not_in(SKIP_KINDS))
                             .group_by(NewsItem.image_url).having(func.count(NewsItem.id) >= LOGO_MIN_ARTICLES)).all()
-        shared = [u for u in shared if not u.startswith(GENERATED_PREFIX)]
+        shared = [u for u in shared if not u.startswith((GENERATED_PREFIX, "/api/v1/artifacts/images/"))]
         groups: dict[tuple[str, str], list[int]] = {}
         for i in range(0, len(shared), 400):
             for item_id, url, image in db.execute(select(NewsItem.id, NewsItem.url, NewsItem.image_url).where(

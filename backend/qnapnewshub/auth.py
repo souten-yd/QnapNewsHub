@@ -51,6 +51,8 @@ class AuthUser:
     id: int
     username: str
     via: str          # "session" か "token"
+    scope: str = ""   # トークンの権限: read（読み取りだけ）・link（つないだ ControlDeck: 読み取り＋仕事を返す＋生成物を送る。管理はできない）
+    token_id: int = 0
 
 
 def _now() -> datetime:
@@ -81,7 +83,12 @@ CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS api_tokens (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
   hint TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
+CREATE TABLE IF NOT EXISTS link_peers (id INTEGER PRIMARY KEY, token_id INTEGER NOT NULL REFERENCES api_tokens(id) ON DELETE CASCADE, name TEXT NOT NULL,
+  public_key TEXT NOT NULL, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS link_secrets (name TEXT PRIMARY KEY, peer_id INTEGER NOT NULL, received_at TEXT NOT NULL);
 """)
+            if "scope" not in {r[1] for r in conn.execute("PRAGMA table_info(api_tokens)")}:      # 権限の区分（read: 読み取りだけ・link: つないだ ControlDeck）。前の版の表にも足す
+                conn.execute("ALTER TABLE api_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'read'")
             conns[key] = conn
         return conn
 
@@ -236,25 +243,30 @@ def session_user(token: str) -> AuthUser | None:
 
 # ---- API トークン（ControlDeck 用。読み取りだけ） ----
 
-def create_token(user_id: int, name: str) -> dict:
-    """トークンを作る。本体（"token"）は戻り値でだけ見える（保存はハッシュ）。"""
+SCOPES = ("read", "link")
+
+
+def create_token(user_id: int, name: str, scope: str = "read") -> dict:
+    """トークンを作る。本体（"token"）は戻り値でだけ見える（保存はハッシュ）。scope は read（既定）か link（link.py のつなぐ操作だけが作る）。"""
+    if scope not in SCOPES:
+        raise ValueError("トークンの権限が正しくありません")
     name = " ".join(str(name or "").split())[:60]
     if not name:
         raise ValueError("トークンの名前を入れてください")
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
-    cur = writer.run("auth.create_token", lambda: _db().execute("INSERT INTO api_tokens (user_id, name, token_hash, hint, created_at) VALUES (?, ?, ?, ?, ?)",
-                                                                 (user_id, name, _sha(token), token[:9] + "…", _iso(_now()))))
-    return {"id": int(cur.lastrowid), "name": name, "token": token, "hint": token[:9] + "…"}
+    cur = writer.run("auth.create_token", lambda: _db().execute("INSERT INTO api_tokens (user_id, name, token_hash, hint, created_at, scope) VALUES (?, ?, ?, ?, ?, ?)",
+                                                                 (user_id, name, _sha(token), token[:9] + "…", _iso(_now()), scope)))
+    return {"id": int(cur.lastrowid), "name": name, "token": token, "hint": token[:9] + "…", "scope": scope}
 
 
 def list_tokens() -> list[dict]:
-    rows = _db().execute("SELECT id, name, hint, created_at, last_used_at, revoked_at FROM api_tokens ORDER BY id DESC").fetchall()
+    rows = _db().execute("SELECT id, name, hint, created_at, last_used_at, revoked_at FROM api_tokens WHERE scope = 'read' ORDER BY id DESC").fetchall()      # つないだ ControlDeck は link.py の一覧
     staged = writer.get().buf.token_used      # まだ書いていない最終使用の時刻があれば、それが新しい
     return [{"id": r[0], "name": r[1], "hint": r[2], "created_at": r[3], "last_used_at": staged.get(r[0]) or r[4] or "", "revoked": bool(r[5])} for r in rows]
 
 
 def revoke_token(token_id: int) -> bool:
-    cur = writer.run("auth.revoke_token", lambda: _db().execute("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", (_iso(_now()), token_id)))
+    cur = writer.run("auth.revoke_token", lambda: _db().execute("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND scope = 'read'", (_iso(_now()), token_id)))      # link は link.revoke_peer
     return cur.rowcount > 0
 
 
@@ -262,12 +274,12 @@ def token_user(token: str) -> AuthUser | None:
     if not token.startswith(TOKEN_PREFIX):
         return None
     conn = _db()
-    row = conn.execute("SELECT t.id, u.id, u.username FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND u.active = 1",
+    row = conn.execute("SELECT t.id, u.id, u.username, t.scope FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND u.active = 1",
                        (_sha(token),)).fetchone()
     if not row:
         return None
     writer.get().stage_token_used(row[0], _iso(_now()))      # 最終使用の時刻は、まとめ書きのときに（API を呼ぶたびに書かない）
-    return AuthUser(row[1], row[2], "token")
+    return AuthUser(row[1], row[2], "token", row[3], row[0])
 
 
 def apply_token_used(rows: dict[int, str]) -> None:
@@ -315,6 +327,22 @@ async def current_user(request: Request) -> AuthUser:
         raise HTTPException(status_code=401, detail="ログインしてください")
     if request.method not in _SAFE and not _same_origin(request):
         raise HTTPException(status_code=403, detail="別のサイトからの操作は受け付けません")
+    return user
+
+
+async def link_user(request: Request) -> AuthUser:
+    """つないだ ControlDeck（scope=link のトークン）だけ。仕事を借りる・返す・生成物を送る・鍵を渡すなど、**この依存を付けた API だけ**が書き込める。
+    session・読み取りだけのトークンは 403。取り消したトークンは 401。管理の API（require_admin）には、この権限では入れない。"""
+    import asyncio
+
+    token = _bearer(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="トークンが要ります")
+    user = await asyncio.to_thread(token_user, token)
+    if user is None:
+        raise HTTPException(status_code=401, detail="トークンが正しくありません（取り消されたかもしれません）")
+    if user.scope != "link":
+        raise HTTPException(status_code=403, detail="つないだ ControlDeck のトークンではありません")
     return user
 
 

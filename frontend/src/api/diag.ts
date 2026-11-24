@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
+import type { LinkJobs } from "./link";
 import type { UpdateLast } from "./update";
 
 /** 診断（backend/qnapnewshub/diagnostics.py）。管理者だけ。鍵・URL の秘密は含まれない。 */
@@ -32,6 +33,8 @@ export interface Diagnostics {
       cold: { items: number; raw_bytes: number; packed_bytes: number } };
     compress_years: number;
   };
+  /** つないだ ControlDeck（v0.3）。古いサーバーには無い */
+  link?: { peers: { id: number; name: string; last_seen_at: string }[]; last_seen_at: string; jobs: LinkJobs; secrets: { name: string; received_at: string }[]; change_seq: number; artifacts: number; research: number };
   problems: { area: string; level: "error" | "warn"; text: string }[];
 }
 export interface SelfCheck { at: string; ok: boolean; checks: { name: string; ok: boolean; detail: string; fix: string }[] }

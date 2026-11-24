@@ -437,7 +437,8 @@ def present(item: NewsItem, state: dict, score: float | None = None) -> dict:
     url = safe_url(item.url) or (_internal_path(item.url) if item.kind == "event" else None)
     row = {"id": item.id, "kind": item.kind, "source": item.source, "source_key": item.source_key, "title": item.title,
            "url": url, "summary": item.summary_ja or item.summary,
-           "image_url": safe_url(item.image_url),
+           "image_url": safe_url(item.image_url) or (item.image_url if item.image_ai and (item.image_url or "").startswith("/api/v1/artifacts/images/") else None),
+           "image_ai": bool(item.image_ai),
            "published_at": iso(item.published_at),
            "topics": topics_of(item), "state": state, "persisted": not getattr(item, "_unsaved", False)}
     if getattr(item, "body_state", 0) == 1:      # 本文を取り出してある印（本文は出さない。元のページを開く）

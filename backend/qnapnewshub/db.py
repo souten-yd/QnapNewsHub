@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine, event, inspect, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -69,6 +69,8 @@ class NewsItem(Base):
     dup_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 要素の取り出し（entities.py）の版。0 なら未（夜の後回しの仕事が拾う）。下ごしらえと同じ 1 回の呼び出しで取り出したら EXTRACT_VERSION が入る
     extract_v: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # 画像が ControlDeck の生成物（artifacts.py）に差し替えられた印。画面に「AI 生成のイメージ」を出す
+    image_ai: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # 本文の取り出し（bodies.py）: 0 未・1 取れた（news_body に圧縮した本文）・2 取れない（理由は news_body.reason。二度と試さない）
     body_state: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # 1 年より古い記事の抜粋を圧縮して news_cold へ移した印（summary は空。索引からは抜粋を外す）
@@ -330,6 +332,94 @@ class TrendNote(Base):
     stats: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class ChangeLog(Base):
+    """差分の同期（changes.py）の変更番号。記事・物・イベントの追加・更新・削除を、DB の trigger が 1 つの物につき 1 行（最新の変更）に記録する。
+    seq は AUTOINCREMENT（単調。消えた番号を再利用しない）。同じ（kind, ref_id）が変わると古い行を消して新しい seq で入れ直す（表は物の数を超えない）。
+    op は upsert か delete（削除の印は tombstone として一定期間だけ残す）。at は変更の時刻（UTC・文字）。"""
+
+    __tablename__ = "change_log"
+    __table_args__ = (UniqueConstraint("kind", "ref_id", name="uq_change_log"), {"sqlite_autoincrement": True})
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(8))
+    ref_id: Mapped[int] = mapped_column(Integer)
+    op: Mapped[str] = mapped_column(String(8), default="upsert")
+    at: Mapped[str] = mapped_column(String(20), default="")
+
+
+class Job(Base):
+    """仕事の列（jobs.py。ARCHITECTURE 5 章）。dedup_key（種類・対象・入力の版）は 1 つだけ＝同じ仕事を二重に作らない。
+    status: queued（借りられる）・leased（lease_until まで借りている）・done・dead（max_tries 回やって終わらなかった）。tries は借りた回数。"""
+
+    __tablename__ = "jobs"
+    __table_args__ = (UniqueConstraint("dedup_key", name="uq_job_dedup"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    ref_id: Mapped[int] = mapped_column(Integer, default=0)
+    input_v: Mapped[str] = mapped_column(String(32), default="")
+    dedup_key: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(8), default="queued")
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_by: Mapped[int] = mapped_column(Integer, default=0)
+    tries: Mapped[int] = mapped_column(Integer, default=0)
+    max_tries: Mapped[int] = mapped_column(Integer, default=3)
+    model: Mapped[str] = mapped_column(String(200), default="")
+    result: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+Index("ix_jobs_pick", Job.status, Job.kind, Job.id)
+Index("ix_jobs_ref", Job.kind, Job.ref_id)
+
+
+class Embedding(Base):
+    """埋め込み（INT8。ControlDeck が埋め込み、仕事の結果として返す）。vec は dim バイト（符号つき 8bit）、scale は元の値 ≒ vec × scale。受け取って保存するだけ（使う検索は v0.6）。"""
+
+    __tablename__ = "embeddings"
+
+    kind: Mapped[str] = mapped_column(String(8), primary_key=True)      # item・event
+    ref_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    model: Mapped[str] = mapped_column(String(80), primary_key=True)
+    dim: Mapped[int] = mapped_column(Integer)
+    scale: Mapped[float] = mapped_column(Float)
+    vec: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Artifact(Base):
+    """ControlDeck から受け取った生成物（画像）。sha256 が主キー＝同じ中身は 1 つだけ保存する（重複管理）。ファイルは data_dir/artifacts/images/<sha256>.<ext>。"""
+
+    __tablename__ = "artifacts"
+
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8), default="image")
+    ext: Mapped[str] = mapped_column(String(5))
+    size: Mapped[int] = mapped_column(Integer)
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
+    peer_id: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResearchRecord(Base):
+    """調査の記録（ControlDeck の Web 調査: テーマ・出典・確かめた事実・結論）。いまは保存だけ（使うのは v0.6）。digest（内容の sha256）が同じなら二重に入れない。"""
+
+    __tablename__ = "research_records"
+    __table_args__ = (UniqueConstraint("digest", name="uq_research_digest"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    digest: Mapped[str] = mapped_column(String(64))
+    peer_id: Mapped[int] = mapped_column(Integer, default=0)
+    theme: Mapped[str] = mapped_column(String(200))
+    sources: Mapped[str] = mapped_column(Text, default="[]")
+    facts: Mapped[str] = mapped_column(Text, default="[]")
+    conclusion: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AnaMeta(Base):
     """集計の表の状態（sig: 作ったときのチャンネル・出どころの設定の指紋、built_at）。"""
 
@@ -343,7 +433,7 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("news_items", "img_prompt", "TEXT DEFAULT ''"), ("news_items", "prep_tries", "INTEGER NOT NULL DEFAULT 0"),
                                         ("news_items", "canon_url", "VARCHAR(1000) DEFAULT ''"), ("news_items", "guid", "VARCHAR(500) DEFAULT ''"),
                                         ("news_items", "simhash", "BIGINT"), ("news_items", "dup_of", "INTEGER"),
-                                        ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0"),
+                                        ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "image_ai", "BOOLEAN NOT NULL DEFAULT 0"),
                                         ("ana_count", "lag_sum", "BIGINT NOT NULL DEFAULT 0"), ("ana_count", "lag_n", "INTEGER NOT NULL DEFAULT 0"),
                                         ("ana_count", "lag_fast", "INTEGER NOT NULL DEFAULT 0"),
                                         ("news_items", "body_state", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "cold", "INTEGER NOT NULL DEFAULT 0")]
@@ -397,6 +487,9 @@ def _open(file: Path) -> Engine:
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         _add_missing_columns(conn)
+        from qnapnewshub import changes
+
+        changes.install(conn)
         try:
             ensure_search(conn)
         except Exception as exc:  # noqa: BLE001 - 検索は LIKE に落ちる
