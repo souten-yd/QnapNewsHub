@@ -15,11 +15,14 @@
 - 無料の LLM の件数の調査: [docs/research-free-llm-batch.md](docs/research-free-llm-batch.md)
 - 開発の決まり: [AGENTS.md](AGENTS.md)
 
-状態: バックエンド（取得・保存・認証・下ごしらえ・まとめ・API）まで。画面は次の段です。
+状態: バックエンド（取得・保存・認証・下ごしらえ・まとめ・API）と、画面（React ＋ Vite。5 つのデザイン・取得先の管理・設定・ログイン・PWA とアイコン）まで。画面は build してバックエンドが `/` 以下で配ります（API は `/api/v1`）。
 
 ```
 ./hub.sh setup           # .venv を作って依存を入れる
-./hub.sh test            # 試験
+./hub.sh test            # 試験（backend）
+./hub.sh build           # 画面を build（frontend で npm ci → tsc → vite build。Node.js 22）
+./hub.sh e2e             # 画面の E2E（Playwright。一時の置き場でバックエンドを起こす。ブラウザは PLAYWRIGHT_BROWSERS_PATH、install はしない）
+./hub.sh icons           # アイコンの PNG を frontend/icons/*.svg から作り直す
 ./hub.sh create-admin    # 最初の管理者を作る
-./hub.sh run             # 127.0.0.1:8787 で起動（データは NEWSHUB_DATA。既定 ~/.local/share/qnapnewshub）
+./hub.sh run             # （先に build）127.0.0.1:8787 で起動（データは NEWSHUB_DATA。既定 ~/.local/share/qnapnewshub）
 ```

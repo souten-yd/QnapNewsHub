@@ -167,3 +167,16 @@ def test_every_registered_route_is_authenticated_except_the_public_ones(anon_cli
             assert r.status_code == 401, (method, path, r.status_code)
             checked += 1
     assert checked >= 35
+
+
+def test_concurrent_requests_do_not_share_one_sqlite_connection(client):
+    """目的: 同時に来た認証つきの GET が、1 本の sqlite 接続を取り合って 500（InterfaceError）にならない。
+    根拠: 2026-11-24 の E2E（実際のバックエンド）で、設定の画面が開く瞬間の同時の GET が 500・401 になった（接続を全スレッドで共有していた）。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def hit(_):
+        return client.get("/api/v1/news/openrouter-key").status_code
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        codes = list(pool.map(hit, range(80)))
+    assert set(codes) == {200}
