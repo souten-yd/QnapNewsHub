@@ -9,7 +9,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from qnapnewshub import channels, dedup, event_llm, fetchlog, gist, images, metrics, polling, prep, rest, settings, sources, store, trend, writer
+from qnapnewshub import channels, dedup, event_llm, fetchlog, kg_job, gist, images, metrics, polling, prep, rest, settings, sources, store, trend, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsItem
 
@@ -119,6 +119,7 @@ async def _after_save(saved: dict) -> dict:
         late = await prep.run_backfill()      # 夜だけ: 取り出しが済んでいない記事の要素を、使い残した枠で
         info["backfill"] = late
         info["events"] = await event_llm.run()      # 記事 3 件以上・出どころ 2 以上のイベントの要約（10 件ずつ・1 回きり）
+        info["knowledge"] = await kg_job.run()      # 夜: 文書の対応・「一緒に出る」の集計・知識カードの概要（変化のあった物だけ）
         info["trend"] = await trend.run_due()       # 1 日 1〜2 回の「今日の傾向」
         if prepared["error"] and not info["gist"]["error"]:
             info["gist"]["error"] = prepared["error"]

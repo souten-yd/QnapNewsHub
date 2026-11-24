@@ -109,7 +109,7 @@ def test_extract_clean_schema_caps_and_types():
     assert len(out["facts"]) == extract.MAX_FACTS and out["facts"][0]["value"] == ""
     assert extract.clean({"entities": [{"name": "Qwen", "type": "model"}, {"name": "qwen", "type": "org"}, {"name": "ＱＷＥＮ", "type": "org"}]}, "")["entities"] == [{"name": "Qwen", "type": "model"}]
     assert extract.clean({"ja": "x"}, "") is None and extract.clean("text", "") is None and extract.clean({"entities": "none"}, "") is None
-    assert extract.clean({"entities": []}, "") == {"entities": [], "facts": []}
+    assert extract.clean({"entities": []}, "") == {"entities": [], "facts": [], "relations": []}
     assert extract.validate({"name": "x", "type": "model"}, extract.ENTITY_SCHEMA) and not extract.validate({"name": "x" * 81, "type": "model"}, extract.ENTITY_SCHEMA)
 
 

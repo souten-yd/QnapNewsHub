@@ -8,6 +8,7 @@ import { AppLayout } from "./layouts/AppLayout";
 import { LoginPage, SetupPage } from "./pages/Auth";
 import NewsPage from "./pages/News";
 import AnalyticsPage from "./pages/Analytics";
+import KnowledgeMapPage from "./pages/KnowledgeMap";
 import EntitiesPage, { EntityPage } from "./pages/Entities";
 import EventsPage, { EventPage } from "./pages/Events";
 import NewsSourcesPage from "./pages/NewsSources";
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/events/:id" element={<EventPage />} />
         <Route path="/entities" element={<EntitiesPage />} />
         <Route path="/entities/:id" element={<EntityPage />} />
+        <Route path="/map" element={<KnowledgeMapPage />} />
         <Route path="/sources" element={<NewsSourcesPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
