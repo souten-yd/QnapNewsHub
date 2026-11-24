@@ -14,4 +14,11 @@
 - 無料の LLM の件数の調査: [docs/research-free-llm-batch.md](docs/research-free-llm-batch.md)
 - 開発の決まり: [AGENTS.md](AGENTS.md)
 
-状態: 設計の段階（コードはこれから）。
+状態: バックエンド（取得・保存・認証・下ごしらえ・まとめ・API）まで。画面は次の段です。
+
+```
+./hub.sh setup           # .venv を作って依存を入れる
+./hub.sh test            # 試験
+./hub.sh create-admin    # 最初の管理者を作る
+./hub.sh run             # 127.0.0.1:8787 で起動（データは NEWSHUB_DATA。既定 ~/.local/share/qnapnewshub）
+```
