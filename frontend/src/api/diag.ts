@@ -14,7 +14,8 @@ export interface Diagnostics {
     quota: Record<string, number>; spare_used: number; leftover: number; night_from: number; extract_enabled: boolean; extract_waiting: number;
     chain: { gateway_down_in_seconds: number | null; chain: string[]; current: string; index: number; return_in_seconds: number | null; events: { at: string; kind: string; model: string; reason: string }[] };
     gateway: { enabled: boolean; base_set: boolean; key_set: boolean; calls: number; model: string; batch: number };
-    knowledge: { entities: number; claims: number; extracted_articles: number } };
+    knowledge: { entities: number; claims: number; extracted_articles: number };
+    events?: { events: number; summarized: number; summary_waiting: number; summary_gave_up: number; trend_note_day: string; trend_note_slot: number | null } };
   storage: {
     io: { rchar: number; wchar: number; read_bytes: number; write_bytes: number; syscw: number }; series: DiagPoint[];
     last_flush: DiagFlush | null; last_flush_at: string; next_flush_at: string | null; flush_minutes: number; limits: { items: number; mb: number };

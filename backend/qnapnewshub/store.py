@@ -359,7 +359,7 @@ def states(db: Session, user_id: int, ids: list[int]) -> dict[int, dict]:
     return out
 
 
-def attach_also(db: Session, rows: list[dict]) -> list[dict]:
+def attach_also(db: Session, rows: list[dict], collapse: bool = False) -> list[dict]:
     """一覧の各記事に also（同じ記事の別の出どころの数。代表の記事だけに付く）と、その出どころの名前（最大 5）を付ける。"""
     ids = [r["id"] for r in rows]
     if not ids:
@@ -378,6 +378,10 @@ def attach_also(db: Session, rows: list[dict]) -> list[dict]:
     from qnapnewshub import entities
 
     entities.attach_tags(db, rows)      # 物の札（要素の取り出しが済んだ記事だけ。無ければ空）
+    if collapse:      # 同じ出来事（イベント）の記事は 1 つにまとめて、event: {id, others} を付ける（検索・日付・スターの一覧ではまとめない）
+        from qnapnewshub import events
+
+        rows = events.collapse(db, rows)
     return rows
 
 
@@ -421,7 +425,7 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
         ranked = profile.rank(db, user_id, rows, st, now)
         offset = int(before[2:]) if before.startswith("o:") and before[2:].isdigit() else 0
         page = ranked[offset:offset + limit]
-        return {"items": attach_also(db, [present(r, st[r.id], score) for r, score in page]),
+        return {"items": attach_also(db, [present(r, st[r.id], score) for r, score in page], collapse=True),
                 "next": f"o:{offset + limit}" if offset + limit < len(ranked) else None}
     if before:
         stamp, _, last = before.partition("|")
@@ -443,7 +447,7 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
     more = len(rows) > limit
     rows = rows[:limit]
     st = states(db, user_id, [r.id for r in rows])
-    return {"items": attach_also(db, [present(r, st[r.id]) for r in rows]),
+    return {"items": attach_also(db, [present(r, st[r.id]) for r in rows], collapse=view != "starred" and not searching),
             "next": f"{iso(rows[-1].published_at)}|{rows[-1].id}" if more and rows else None}
 
 
@@ -462,7 +466,7 @@ def _channel_page(db: Session, user_id: int, channel: dict, conds: list, *, view
     scored = profile.rank(db, user_id, rows, st, now) if view == "recommended" else [(r, None) for r in rows]
     offset = int(before[2:]) if before.startswith("o:") and before[2:].isdigit() else 0
     page = scored[offset:offset + limit]
-    return {"items": attach_also(db, [dict(present(r, st[r.id], score), channel=channel["id"]) for r, score in page]),
+    return {"items": attach_also(db, [dict(present(r, st[r.id], score), channel=channel["id"]) for r, score in page], collapse=view != "starred"),
             "next": f"o:{offset + limit}" if offset + limit < len(scored) else None}
 
 

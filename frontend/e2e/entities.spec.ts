@@ -71,7 +71,7 @@ for (const vp of SIZES) {
         const budget = page.locator("section", { has: page.locator("#news-budget") });
         await expect(budget.getByTestId("quota-sum")).toContainText("合計 800 / 1 日の上限 800");
         await expect(budget.getByTestId("quota-prep")).toHaveValue("300");
-        await budget.getByTestId("quota-prep").fill("400");
+        await budget.getByTestId("quota-prep").fill("350");
         await expect(budget.getByTestId("quota-sum")).toContainText("保存できません");
         await expect(budget.getByRole("button", { name: "保存" })).toBeDisabled();
         await budget.getByTestId("quota-spare").fill("20");
@@ -90,7 +90,7 @@ for (const vp of SIZES) {
         await shot(page, `settings-model-chain-${vp.name}-${scheme}`);
         await budget.getByRole("button", { name: "保存" }).click();
         await expect.poll(() => state.settings.llm.fallback_models).toEqual(["vendor/second:free"]);
-        expect(state.settings.llm.quota.prep).toBe(400);
+        expect(state.settings.llm.quota.prep).toBe(350);
         expect(state.unhandled).toEqual([]);
       });
 

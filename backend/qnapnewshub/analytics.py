@@ -30,11 +30,11 @@ from qnapnewshub import channels as channels_mod
 from qnapnewshub import db as news_db
 from qnapnewshub import sourcemgr, sources as sources_mod
 from qnapnewshub.config import data_dir
-from qnapnewshub.db import AnaCount, AnaFetch, AnaMeta, AnaTopic, AnaTopicSrc, NewsFetchLog, NewsItem
+from qnapnewshub.db import AnaCount, AnaEntity, AnaFetch, AnaMeta, AnaTopic, AnaTopicSrc, ArticleEntity, NewsFetchLog, NewsItem
 
 logger = logging.getLogger("qnapnewshub.analytics")
 
-VERSION = 1
+VERSION = 2          # 2: 遅れの列（lag_*）・物の集計（ana_entity）を足した。上げると既存の集計は作り直される
 _UTC = timezone.utc
 DIMS = ("all", "kind", "channel", "source", "lang", "origin")
 BY_CHOICES = ("none", "kind", "channel", "source", "lang", "origin")
@@ -51,6 +51,9 @@ NEW_MIN_SOURCES = 2
 TOP_N = 10
 SERIES_TOP = 8
 TERMS_PER_ARTICLE = 24
+LAG_MAX_SECONDS = 48 * 3600     # 発表から取得までの遅れとして数える上限（これより遅い・負の値は取り込みの時刻のずれとして数えない）
+LAG_FAST_SECONDS = 3600
+COUNT_COLS = ("n", "indep", "img", "lag_sum", "lag_n", "lag_fast")
 KIND_FALLBACK_ORIGIN = {"release": "official", "news": "press", "model": "other", "forum": "community", "reddit": "community", "event": "other"}
 LANG_LABELS = {"ja": "日本語", "en": "英語"}
 
@@ -161,7 +164,19 @@ class Resolver:
         return self.origins.get(source_key) or KIND_FALLBACK_ORIGIN.get(kind, "other")
 
 
-def _facts(res: Resolver, *, kind: str, source_key: str, title: str, summary: str, topics_json: str, published_at: datetime, image_url, dup_of, user_id) -> dict | None:
+def _naive_utc(value: datetime) -> datetime:
+    return (value.astimezone(_UTC) if value.tzinfo else value).replace(tzinfo=None)
+
+
+def _lag_seconds(published_at: datetime, fetched_at: datetime | None) -> int | None:
+    if fetched_at is None:
+        return None
+    lag = (_naive_utc(fetched_at) - _naive_utc(published_at)).total_seconds()
+    return int(lag) if 0 <= lag <= LAG_MAX_SECONDS else None
+
+
+def _facts(res: Resolver, *, kind: str, source_key: str, title: str, summary: str, topics_json: str, published_at: datetime, image_url, dup_of, user_id,
+           fetched_at: datetime | None = None) -> dict | None:
     """記事 1 件が集計に入れるもの。出来事（利用者宛て）・隠すソースは入れない（None）。"""
     if kind == "event" or user_id is not None or (res.hidden and source_key.startswith(res.hidden)):
         return None
@@ -170,7 +185,8 @@ def _facts(res: Resolver, *, kind: str, source_key: str, title: str, summary: st
     except ValueError:
         topics = []
     local = _as_local(published_at, res.tz)
-    return {"kind": kind, "lang": lang_of(title), "source": source_key, "channel": res.channel(kind, source_key, title, summary), "origin": res.origin(kind, source_key),
+    lag = _lag_seconds(published_at, fetched_at)
+    return {"lag": lag, "kind": kind, "lang": lang_of(title), "source": source_key, "channel": res.channel(kind, source_key, title, summary), "origin": res.origin(kind, source_key),
             "indep": 0 if dup_of else 1, "img": 1 if image_url else 0, "d": day_key(local), "h": hour_key(local),
             "terms": terms_of(title, topics if isinstance(topics, list) else [])}
 
@@ -201,6 +217,10 @@ class _Acc:
                 self.count[base + ("n",)] += 1
                 self.count[base + ("indep",)] += f["indep"]
                 self.count[base + ("img",)] += f["img"]
+                if f["lag"] is not None:
+                    self.count[base + ("lag_sum",)] += f["lag"]
+                    self.count[base + ("lag_n",)] += 1
+                    self.count[base + ("lag_fast",)] += 1 if f["lag"] <= LAG_FAST_SECONDS else 0
         if only_img or not f["terms"]:
             return
         tgrains = []
@@ -240,7 +260,7 @@ def _flush_acc(db: Session, acc: _Acc, *, replace: bool) -> None:
     """集計の途中の数を表へ。replace=False は足し込み（ON CONFLICT で加算）、True は空の表への挿入。"""
     counts: dict[tuple, dict] = {}
     for (grain, dim, t, kind, lang, key, col), v in acc.count.items():
-        row = counts.setdefault((grain, dim, t, kind, lang, key), {"grain": grain, "dim": dim, "t": t, "kind": kind, "lang": lang, "key": key, "n": 0, "indep": 0, "img": 0})
+        row = counts.setdefault((grain, dim, t, kind, lang, key), {"grain": grain, "dim": dim, "t": t, "kind": kind, "lang": lang, "key": key, "n": 0, "indep": 0, "img": 0, "lag_sum": 0, "lag_n": 0, "lag_fast": 0})
         row[col] += v
     topics: dict[tuple, dict] = {}
     for (grain, t, term, kind, lang, channel, col), v in acc.topic.items():
@@ -251,7 +271,7 @@ def _flush_acc(db: Session, acc: _Acc, *, replace: bool) -> None:
     for (day, key, col), v in acc.fetch.items():
         row = fetch.setdefault((day, key), {"day": day, "source_key": key, "runs": 0, "ok": 0, "s304": 0, "new": 0})
         row[col] += v
-    _upsert(db, AnaCount, list(counts.values()), ("n", "indep", "img"), replace)
+    _upsert(db, AnaCount, list(counts.values()), COUNT_COLS, replace)
     _upsert(db, AnaTopic, list(topics.values()), ("n", "indep"), replace, also=("label",))
     _upsert(db, AnaFetch, list(fetch.values()), ("runs", "ok", "s304", "new"), replace)
     if acc.tsrc:
@@ -289,6 +309,55 @@ def _prune(db: Session, now: datetime, tz, *, force: bool = False) -> None:
     db.execute(delete(AnaTopic).where(AnaTopic.grain == "d", AnaTopic.t < topic_day_from))
     db.execute(delete(AnaTopic).where(AnaTopic.grain == "h", AnaTopic.t < topic_hour_from))
     db.execute(delete(AnaTopicSrc).where(AnaTopicSrc.t < topic_hour_from))
+    db.execute(delete(AnaEntity).where(AnaEntity.grain == "d", AnaEntity.t < topic_day_from))
+    db.execute(delete(AnaEntity).where(AnaEntity.grain == "h", AnaEntity.t < topic_hour_from))
+
+
+# ---- 物の集計（ana_entity） ----
+
+def _entity_counts(rows, res: Resolver, hourly_from: str, topic_day_from: str, topic_hour_from: str) -> Counter:
+    """rows: (entity_id, published_at, dup_of, kind, user_id, source_key, sign)。集計に入る記事だけを、日ごと・時間ごとに数える。"""
+    out: Counter = Counter()
+    for entity_id, published_at, dup_of, kind, user_id, source_key, sign in rows:
+        if kind == "event" or user_id is not None or (res.hidden and source_key.startswith(res.hidden)):
+            continue
+        local = _as_local(published_at, res.tz)
+        d, h = day_key(local), hour_key(local)
+        if d >= topic_day_from:
+            out[("d", d, entity_id, "n")] += sign
+            out[("d", d, entity_id, "indep")] += 0 if dup_of else sign
+        if h >= topic_hour_from:
+            out[("h", h, entity_id, "n")] += sign
+            out[("h", h, entity_id, "indep")] += 0 if dup_of else sign
+    return out
+
+
+def _write_entity_counts(db: Session, counts: Counter, *, replace: bool) -> None:
+    merged: dict[tuple, dict] = {}
+    for (grain, t, entity_id, col), v in counts.items():
+        row = merged.setdefault((grain, t, entity_id), {"grain": grain, "t": t, "entity_id": entity_id, "n": 0, "indep": 0})
+        row[col] += v
+    _upsert(db, AnaEntity, [r for r in merged.values() if r["n"] or r["indep"] or replace], ("n", "indep"), replace)
+
+
+def _rebuild_entities(db: Session, res: Resolver, topic_day_from: str, topic_hour_from: str) -> None:
+    since = datetime.now(_UTC) - timedelta(days=TOPIC_DAILY_KEEP_DAYS + 2)
+    q = select(ArticleEntity.entity_id, NewsItem.published_at, NewsItem.dup_of, NewsItem.kind, NewsItem.user_id, NewsItem.source_key).join(
+        NewsItem, NewsItem.id == ArticleEntity.article_id).where(NewsItem.published_at >= since.replace(tzinfo=None)).execution_options(yield_per=5000)
+    counts = _entity_counts(((*r, 1) for r in db.execute(q)), res, "", topic_day_from, topic_hour_from)
+    _write_entity_counts(db, counts, replace=True)
+
+
+def apply_entity_deltas(db: Session, rows: list[tuple]) -> None:
+    """取り出しの保存（entities.apply_extractions）から。rows: (entity_id, published_at, dup_of, kind, user_id, source_key, 増減 +1/-1)。同じトランザクション。"""
+    if not rows:
+        return
+    res = Resolver()
+    now = datetime.now(_UTC)
+    _, topic_day_from, topic_hour_from = _cutoffs(now, res.tz)
+    _write_entity_counts(db, _entity_counts(rows, res, "", topic_day_from, topic_hour_from), replace=False)
+    if any(r[-1] < 0 for r in rows):      # 取り出し直しで減った分が 0 になった行を残さない（作り直しと一致させる）
+        db.execute(delete(AnaEntity).where(AnaEntity.n == 0, AnaEntity.indep == 0))
 
 
 def _meta(db: Session, key: str) -> str | None:
@@ -316,7 +385,7 @@ def apply(db: Session, new_rows: list, image_gain: list, fetch_rows: list[dict])
     acc = _Acc()
     for r in new_rows:
         f = _facts(res, kind=r.kind, source_key=r.source_key, title=r.title, summary=r.summary or "", topics_json=r.topics, published_at=r.published_at,
-                   image_url=r.image_url, dup_of=r.dup_of, user_id=r.user_id)
+                   image_url=r.image_url, dup_of=r.dup_of, user_id=r.user_id, fetched_at=r.fetched_at)
         if f:
             acc.add(f, hourly_from=hourly_from, topic_day_from=topic_day_from, topic_hour_from=topic_hour_from)
     for r in image_gain:
@@ -336,21 +405,22 @@ def rebuild_in(db: Session, res: Resolver | None = None) -> dict:
     res = res or Resolver()
     now = datetime.now(_UTC)
     hourly_from, topic_day_from, topic_hour_from = _cutoffs(now, res.tz)
-    for model in (AnaCount, AnaTopic, AnaTopicSrc, AnaFetch):
+    for model in (AnaCount, AnaTopic, AnaTopicSrc, AnaFetch, AnaEntity):
         db.execute(delete(model))
     acc = _Acc()
     n = 0
     q = select(NewsItem.kind, NewsItem.source_key, NewsItem.title, NewsItem.summary, NewsItem.topics, NewsItem.published_at, NewsItem.image_url, NewsItem.dup_of,
-               NewsItem.user_id).execution_options(yield_per=5000)
+               NewsItem.user_id, NewsItem.fetched_at).execution_options(yield_per=5000)
     for r in db.execute(q):
         f = _facts(res, kind=r.kind, source_key=r.source_key, title=r.title, summary=(r.summary or "")[:400], topics_json=r.topics, published_at=r.published_at,
-                   image_url=r.image_url, dup_of=r.dup_of, user_id=r.user_id)
+                   image_url=r.image_url, dup_of=r.dup_of, user_id=r.user_id, fetched_at=r.fetched_at)
         if f:
             acc.add(f, hourly_from=hourly_from, topic_day_from=topic_day_from, topic_hour_from=topic_hour_from)
             n += 1
     for r in db.execute(select(NewsFetchLog.source_key, NewsFetchLog.at, NewsFetchLog.ok, NewsFetchLog.status, NewsFetchLog.new, NewsFetchLog.skipped)):
         acc.add_fetch({"source_key": r.source_key, "at": r.at, "ok": r.ok, "status": r.status, "new": r.new, "skipped": r.skipped}, res.tz)
     _flush_acc(db, acc, replace=True)
+    _rebuild_entities(db, res, topic_day_from, topic_hour_from)
     _set_meta(db, "sig", res.sig())
     _set_meta(db, "built_at", now.strftime("%Y-%m-%dT%H:%M:%SZ"))
     _last_prune["at"] = time.monotonic()
@@ -490,10 +560,21 @@ def overview(db: Session, kind: str = "", lang: str = "", now: datetime | None =
                 "sources_today": src_today, "sources_8d": src_total,
                 "prev7_daily_avg": round(avg, 1) if avg is not None else None, "prev7_days": prev_days,
                 "ratio_24h": round(last24 / avg, 2) if avg else None, "ratio_today": round(today_n / avg, 2) if avg else None,
-                "day": today, "built_at": _meta(db, "built_at") or ""}
+                "day": today, "built_at": _meta(db, "built_at") or "", **_event_numbers(db, local)}
     out = dict(cached(("overview", tuple(kinds), lang), build))
     out["unsaved"] = unsaved_count()
     return out
+
+
+def _event_numbers(db: Session, local: datetime) -> dict:
+    """独立したイベントの数（events.counts）: 直近 24 時間と、前の 7 日の 1 日平均。記事の絞り込み（分類・言語）は掛けない（イベントは分類をまたぐ）。"""
+    from qnapnewshub import events
+
+    now = local.astimezone(_UTC)
+    cur = events.counts(db, now - timedelta(hours=24))
+    prev = events.counts(db, now - timedelta(days=8), now - timedelta(hours=24))
+    return {"events_24h": cur["events"], "independent_events_24h": cur["independent"], "event_members_24h": cur["members"], "singles_24h": cur["singles"],
+            "independent_events_prev_daily": round(prev["independent"] / 7, 1) if prev["articles"] else None}
 
 
 def _grid(range_: str, grain: str, now: datetime | None) -> list[str]:
@@ -542,7 +623,7 @@ def series(db: Session, *, range_: str = "7d", grain: str = "", by: str = "none"
 
 
 def _topic_dict(term: str, label: str, score: float | None, cur: int, cur_all: int, mean: float, sd: float, sources: int) -> dict:
-    return {"term": term, "label": label, "score": round(score, 2) if score is not None else None, "count": cur, "count_all": cur_all, "baseline_mean": round(mean, 2),
+    return {"kind": "term", "term": term, "label": label, "score": round(score, 2) if score is not None else None, "count": cur, "count_all": cur_all, "baseline_mean": round(mean, 2),
             "baseline_sd": round(sd, 2), "growth_pct": round((cur - mean) / max(mean, 1.0) * 100) if mean is not None else None, "sources": sources}
 
 
@@ -565,6 +646,83 @@ def _drop_subsumed(rows: list[dict], ratio: float = 0.8) -> list[dict]:
         if not covered:
             keep.append(r)
     return keep
+
+
+def _entity_dict(e, score: float | None, cur: int, cur_all: int, mean: float, sd: float, sources: int, spark: list[int]) -> dict:
+    d = _topic_dict(f"entity:{e.id}", e.name, score, cur, cur_all, mean, sd, sources)
+    d.update(kind="entity", entity_id=e.id, entity_type=e.type, spark=spark)
+    return d
+
+
+def _hot_entities(db: Session, local: datetime, days: int, enough: bool) -> tuple[list[dict], list[dict]]:
+    """物の急上昇と新しく出た物（語と同じ点数・同じ条件。基準は ana_entity の日ごと）。出どころの数は、候補の物だけ記事から数える。"""
+    from qnapnewshub.db import Entity
+
+    h_from = hour_key(local - timedelta(hours=23))
+    d_to = day_key(local - timedelta(days=2))
+    d_from = day_key(local - timedelta(days=1 + BASELINE_DAYS))
+    cur = {eid: (int(i or 0), int(n or 0)) for eid, i, n in db.execute(select(AnaEntity.entity_id, func.sum(AnaEntity.indep), func.sum(AnaEntity.n)).where(
+        AnaEntity.grain == "h", AnaEntity.t >= h_from).group_by(AnaEntity.entity_id))}
+    cand = {eid: v for eid, v in cur.items() if v[0] >= MIN_COUNT}
+    if not cand or not enough:
+        return [], []
+    ids = sorted(cand)
+    base: dict[int, dict[str, int]] = defaultdict(dict)
+    for eid, t, indep in db.execute(select(AnaEntity.entity_id, AnaEntity.t, AnaEntity.indep).where(
+            AnaEntity.grain == "d", AnaEntity.t >= d_from, AnaEntity.t <= d_to, AnaEntity.entity_id.in_(ids))):
+        base[eid][t] = int(indep or 0)
+    since = (local - timedelta(hours=24)).astimezone(_UTC).replace(tzinfo=None)
+    nsrc = {eid: int(c) for eid, c in db.execute(select(ArticleEntity.entity_id, func.count(func.distinct(NewsItem.source_key))).join(
+        NewsItem, NewsItem.id == ArticleEntity.article_id).where(ArticleEntity.entity_id.in_(ids), NewsItem.published_at >= since).group_by(ArticleEntity.entity_id))}
+    ents = {e.id: e for e in db.scalars(select(Entity).where(Entity.id.in_(ids)))}
+    labels = [day_key(local - timedelta(days=i)) for i in range(7, -1, -1)]
+    pos = {t: i for i, t in enumerate(labels)}
+    spark: dict[int, list[int]] = {eid: [0] * len(labels) for eid in ids}
+    for eid, t, indep in db.execute(select(AnaEntity.entity_id, AnaEntity.t, AnaEntity.indep).where(AnaEntity.grain == "d", AnaEntity.t >= labels[0], AnaEntity.entity_id.in_(ids))):
+        if t in pos:
+            spark[eid][pos[t]] = int(indep or 0)
+    rows, new = [], []
+    for eid, (indep, n) in cand.items():
+        e = ents.get(eid)
+        if e is None:
+            continue
+        per_day = base.get(eid, {})
+        total = sum(per_day.values())
+        mean = total / days if days else 0.0
+        sd = math.sqrt(max(0.0, sum(v * v for v in per_day.values()) / days - mean * mean)) if days else 0.0
+        ns = nsrc.get(eid, 1)
+        if total <= 1 and ns >= NEW_MIN_SOURCES:
+            new.append(_entity_dict(e, None, indep, n, mean, sd, ns, spark[eid]))
+            continue
+        z = (indep - mean) / math.sqrt(mean + sd + SCORE_K) * math.sqrt(min(max(ns, 1), 4) / 4)
+        if z > 0:
+            rows.append(_entity_dict(e, z, indep, n, mean, sd, ns, spark[eid]))
+    return rows, new
+
+
+def _merge_entities(db: Session, terms: list[dict], ents: list[dict]) -> list[dict]:
+    """語の行と物の行を 1 つの並びにする。同じものを指す語は外して物を残す（名前・別名が同じ、または語の全部の単語が物の名前に含まれる）。"""
+    if not ents:
+        return terms
+    from qnapnewshub.db import EntityAlias
+    from qnapnewshub.extract import normalize_key
+
+    aliases = defaultdict(list)
+    for eid, alias in db.execute(select(EntityAlias.entity_id, EntityAlias.alias).where(EntityAlias.entity_id.in_([e["entity_id"] for e in ents]))):
+        aliases[eid].append(alias)
+    keys: set[str] = set()
+    token_sets: list[set[str]] = []
+    for e in ents:
+        for name in [e["label"], *aliases.get(e["entity_id"], [])]:
+            keys.add(normalize_key(name))
+            token_sets.append({w for w in re.split(r"[^0-9a-z぀-ヿ一-鿿]+", name.lower()) if w})
+    kept = []
+    for t in terms:
+        words = {w for w in re.split(r"[^0-9a-z぀-ヿ一-鿿]+", str(t["term"]).lower()) if w}
+        if normalize_key(t["term"]) in keys or (words and any(words <= ts for ts in token_sets)):
+            continue
+        kept.append(t)
+    return [*kept, *ents]
 
 
 def hot_topics(db: Session, kind: str = "", lang: str = "", now: datetime | None = None) -> dict:
@@ -644,7 +802,10 @@ def hot_topics(db: Session, kind: str = "", lang: str = "", now: datetime | None
                     by_channel[ch].append(_topic_dict(term, label, s, indep, n, mean, sd, srcs.get(term, 1)))
         rows = _drop_subsumed(rows)
         new = _drop_subsumed(new)
-        rows.sort(key=lambda r: (-r["score"], -r["count"], r["term"]))
+        if not kinds and not lang:      # 物（取り出し）の急上昇・新しく出た物を混ぜる。同じものの語は外す（物の集計には分類・言語が無いので、絞り込み中は混ぜない）
+            e_rows, e_new = _hot_entities(db, local, days, enough)
+            rows, new = _merge_entities(db, rows, e_rows), _merge_entities(db, new, e_new)
+        rows.sort(key=lambda r: (-r["score"], -r["count"], str(r["term"])))
         new.sort(key=lambda r: (-r["count"], -r["sources"], r["term"]))
         top = rows[:TOP_N]
         fields = []
@@ -663,7 +824,8 @@ def hot_topics(db: Session, kind: str = "", lang: str = "", now: datetime | None
                 if t in pos:
                     spark[term][pos[t]] = int(indep or 0)
         for r in [*top, *new[:TOP_N], *[x for f in fields for x in f["top"]]]:
-            r["spark"] = spark.get(r["term"], [])
+            if r.get("kind") != "entity":
+                r["spark"] = spark.get(r["term"], [])
         return {"window_hours": 24, "baseline_days": days, "enough_history": enough, "spark_days": labels, "top": top, "new": new[:TOP_N], "fields": fields,
                 "method": "（直近 24 時間の独立した記事の数 − 過去の 1 日の平均）÷ √(平均 + 散らばり + 2)。独立した出どころの数で重みを付ける。"}
     return cached(("hot", tuple(kinds), lang, hour_key(_now_local(now))), build)
@@ -732,3 +894,64 @@ def filters_info() -> dict:
     res = Resolver()
     return {"kinds": [{"id": k, "label": v} for k, v in sources_mod.KIND_LABELS.items() if k != "event"], "langs": [{"id": k, "label": v} for k, v in LANG_LABELS.items()],
             "channels": [{"id": c["id"], "name": c["name"], "color": c["color"]} for c in res.channels]}
+
+
+# ---- 新着の傾向（7.5。集計の表だけ・LLM なし） ----
+
+def _window(db: Session, grain: str, t_from: str, t_to: str, *, dim: str = "all", key: str | None = None) -> dict:
+    where = [AnaCount.grain == grain, AnaCount.dim == dim, AnaCount.t >= t_from, AnaCount.t <= t_to]
+    if key is not None:
+        where.append(AnaCount.key == key)
+    row = db.execute(select(*[func.coalesce(func.sum(getattr(AnaCount, c)), 0) for c in COUNT_COLS]).where(*where)).one()
+    return {c: int(v or 0) for c, v in zip(COUNT_COLS, row)}
+
+
+def _rates(w: dict, official: int) -> dict:
+    n = w["n"]
+    return {"n": n, "indep": w["indep"], "dup_pct": round((n - w["indep"]) * 100 / n, 1) if n else None, "img_pct": round(w["img"] * 100 / n, 1) if n else None,
+            "lag_min": round(w["lag_sum"] / w["lag_n"] / 60, 1) if w["lag_n"] else None, "fast_pct": round(w["lag_fast"] * 100 / w["lag_n"], 1) if w["lag_n"] else None,
+            "primary_n": official, "primary_pct": round(official * 100 / n, 1) if n else None}
+
+
+def trend_stats(db: Session, now: datetime | None = None) -> dict:
+    """新着の傾向の数字: 直近 24 時間と前の 7 日（1 日あたり）の比較・分野（チャンネル）ごとの勢い・新しく出た物・急に増えた物・独立したイベントの数。
+    すべて集計の表（と、候補の物だけ記事）から。LLM は使わない。"""
+    def build() -> dict:
+        res = Resolver()
+        local = _now_local(now)
+        h_from, h_to = hour_key(local - timedelta(hours=23)), hour_key(local)
+        p_from, p_to = day_key(local - timedelta(days=7)), day_key(local - timedelta(days=1))
+        days = int(db.scalar(select(func.count(func.distinct(AnaCount.t))).where(AnaCount.grain == "d", AnaCount.dim == "all", AnaCount.t >= p_from, AnaCount.t <= p_to)) or 0)
+        cur_w = _window(db, "h", h_from, h_to)
+        prev_w = _window(db, "d", p_from, p_to)
+        cur = _rates(cur_w, _window(db, "h", h_from, h_to, dim="origin", key="official")["n"])
+        prev = _rates(prev_w, _window(db, "d", p_from, p_to, dim="origin", key="official")["n"])
+        prev["n_per_day"] = round(prev["n"] / days, 1) if days else None
+        prev["days"] = days
+        ratio = round(cur["n"] / prev["n_per_day"], 2) if prev["n_per_day"] else None
+        chans = []
+        cur_ch = {k: n for k, n in db.execute(select(AnaCount.key, func.sum(AnaCount.n)).where(AnaCount.grain == "h", AnaCount.dim == "channel", AnaCount.t >= h_from, AnaCount.t <= h_to).group_by(AnaCount.key))}
+        prev_ch = {k: n for k, n in db.execute(select(AnaCount.key, func.sum(AnaCount.n)).where(AnaCount.grain == "d", AnaCount.dim == "channel", AnaCount.t >= p_from, AnaCount.t <= p_to).group_by(AnaCount.key))}
+        names = {c["id"]: c for c in res.channels}
+        for k in set(cur_ch) | set(prev_ch):
+            if k not in names:
+                continue
+            per_day = (prev_ch.get(k, 0) or 0) / days if days else None
+            c = int(cur_ch.get(k, 0) or 0)
+            chans.append({"channel": k, "name": names[k]["name"], "color": names[k]["color"], "cur": c, "prev_per_day": round(per_day, 1) if per_day is not None else None,
+                          "ratio": round(c / per_day, 2) if per_day else None})
+        chans.sort(key=lambda r: (-(r["ratio"] or 0) if (r["cur"] >= 3 and r["ratio"]) else 1, -r["cur"], r["channel"]))
+        from qnapnewshub.db import Entity
+
+        since = (local - timedelta(hours=24)).astimezone(_UTC).replace(tzinfo=None)
+        new_ents = [{"id": e.id, "name": e.name, "type": e.type, "count": e.article_count} for e in db.scalars(select(Entity).where(
+            Entity.first_seen >= since, Entity.article_count >= 2).order_by(Entity.article_count.desc(), Entity.id).limit(10))]
+        enough = days >= BASELINE_MIN_DAYS
+        e_days = int(db.scalar(select(func.count(func.distinct(AnaCount.t))).where(AnaCount.grain == "d", AnaCount.dim == "all", AnaCount.t >= day_key(local - timedelta(days=1 + BASELINE_DAYS)),
+                                                                                        AnaCount.t <= day_key(local - timedelta(days=2)))) or 0)
+        e_rows, e_new = _hot_entities(db, local, e_days, e_days >= BASELINE_MIN_DAYS)
+        e_rows.sort(key=lambda r: (-r["score"], -r["count"], r["entity_id"]))
+        return {"window_hours": 24, "enough_history": enough, "cur": cur, "prev": prev, "ratio": ratio, "channels": chans[:6], "new_entities": new_ents,
+                "surging_entities": [{k: r[k] for k in ("entity_id", "label", "entity_type", "score", "count", "baseline_mean", "sources")} for r in e_rows[:5]],
+                "events": _event_numbers(db, local), "built_at": _meta(db, "built_at") or ""}
+    return cached(("trend-stats", hour_key(_now_local(now))), build)

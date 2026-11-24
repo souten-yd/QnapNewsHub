@@ -6,7 +6,7 @@ import asyncio
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from qnapnewshub import analytics
+from qnapnewshub import analytics, trend
 from qnapnewshub.auth import AuthUser as User
 from qnapnewshub.auth import current_user as get_current_user
 from qnapnewshub.auth import require_admin
@@ -49,6 +49,14 @@ def sources(range: str = Query("7d", pattern=RANGE), kind: str = "", lang: str =
 @router.get("/compare", dependencies=[Depends(_ready)])
 def compare(by: str = Query("kind", pattern="^(kind|channel|origin|lang|source)$"), kind: str = "", lang: str = "", db: Session = Depends(get_news_db)):
     return analytics.compare(db, by=by, kind=kind, lang=lang)
+
+
+@router.get("/trend", dependencies=[Depends(_ready)])
+def trend_stats(db: Session = Depends(get_news_db)):
+    """新着の傾向: 数字（集計の表だけ）と、LLM の「今日の傾向」の解説（無ければ null）。"""
+    out = dict(analytics.trend_stats(db))
+    out["note"] = trend.latest(db)
+    return out
 
 
 @router.post("/rebuild")

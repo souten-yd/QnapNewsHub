@@ -16,6 +16,8 @@ export interface NewsItem {
   translated?: boolean; summary_original?: string;
   /** 同じ記事の別の出どころの数（代表の記事だけ。一覧では 1 件にまとめて出す）と、その出どころの名前 */
   also?: number; also_sources?: string[];
+  /** 同じ出来事（イベント）の記事を 1 つにまとめたとき: イベントの id・ほかの記事の数・出どころの数・一次情報の有無 */
+  event?: { id: number; others: number; sources: number; primary: boolean };
   /** 要素の取り出し（AI）で取れた物の札（記事の数が多い順に最大 4）。押すと物のページ */
   entities?: EntityTag[];
 }
