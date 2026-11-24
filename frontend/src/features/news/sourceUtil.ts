@@ -25,3 +25,17 @@ export function failRate(s: ManagedSource): number {
   const days = s.week.filter((v): v is number => v !== null);
   return days.length ? 100 - days.reduce((a, b) => a + b, 0) / days.length : 0;
 }
+
+/** 次の取得の予定（ISO）を「約 N 分後・N 時間後・まもなく」にする。無効は「—」、未取得は「次の巡回で」。 */
+export function nextLabel(s: ManagedSource, now = Date.now()): string {
+  if (!s.enabled) return "—";
+  if (!s.poll.next_at) return "次の巡回で";
+  const min = Math.round((Date.parse(s.poll.next_at) - now) / 60_000);
+  if (min <= 1) return "まもなく";
+  return min < 90 ? `約 ${min} 分後` : min < 2880 ? `約 ${Math.round(min / 60)} 時間後` : `約 ${Math.round(min / 1440)} 日後`;
+}
+/** いまの間隔の説明: 「30 分（自動）」「2 時間（固定）」「4 時間（失敗で延長）」 */
+export function pollLabel(s: ManagedSource): string {
+  const base = intervalLabel(Math.round(s.poll.interval));
+  return `${base}（${s.poll.backoff ? "失敗で延長" : s.fixed ? "固定" : "自動"}）`;
+}

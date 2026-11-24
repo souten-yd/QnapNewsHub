@@ -2,13 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 
 /** 診断（backend/qnapnewshub/diagnostics.py）。管理者だけ。鍵・URL の秘密は含まれない。 */
-export interface DiagSource { key: string; name: string; kind: string; ok: boolean | null; reason: string; error: string; last_ok_at: string; last_at: string; interval_min: number; new_7d: number; fail_streak: number; stalled: boolean; problems: string[]; fix: string }
+export interface DiagSource { key: string; name: string; kind: string; ok: boolean | null; reason: string; error: string; last_ok_at: string; last_at: string; interval_min: number; interval_auto: boolean; backoff: boolean; hit_rate: number | null; hits_304: number; conditional: number; new_7d: number; fail_streak: number; stalled: boolean; problems: string[]; fix: string }
 export interface DiagModel { model: string; ok: number; fail: number; success_pct: number | null; rate_limited: number; avg_ms: number }
 export interface DiagPoint { t: string; write_bytes: number; read_bytes: number; wchar: number; cpu_pct: number; rss: number }
 export interface DiagFlush { at: string; reason: string; items: number; updates: number; patches: number; fetchlog: number; ok: boolean; error: string; ms: number; write_bytes: number }
 export interface Diagnostics {
   generated_at: string;
-  fetch: { total: number; stalled: number; sources: DiagSource[] };
+  fetch: { total: number; stalled: number; hit_rate: number | null; hits_304: number; conditional: number; backoff: number; sources: DiagSource[] };
   llm: { day: string; calls: Record<string, number>; total: number; daily_limit: number; minute_limit: number; failed: number; last_error: string; key_set: boolean; models: DiagModel[]; rate_limited: number; unprocessed: number; prep_enabled: boolean; prep_model: string };
   storage: {
     io: { rchar: number; wchar: number; read_bytes: number; write_bytes: number; syscw: number }; series: DiagPoint[];

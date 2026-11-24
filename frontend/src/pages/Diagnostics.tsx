@@ -68,12 +68,14 @@ export default function DiagnosticsPage() {
       <Problems d={d} />
 
       <Card id="diag-fetch" title="取得" hint="取得先ごとの成否・理由・最終成功。止まった可能性のあるものを先に並べます。">
-        <dl><Row k="有効な取得先" v={`${d.fetch.total} 件`} /><Row k="止まった可能性" v={`${d.fetch.stalled} 件`} id="fetch-stalled" /></dl>
+        <dl><Row k="有効な取得先" v={`${d.fetch.total} 件`} /><Row k="止まった可能性" v={`${d.fetch.stalled} 件`} id="fetch-stalled" />
+          <Row k="304 の当たり率（条件付きの取得）" v={d.fetch.hit_rate === null ? "まだ計測なし" : `${d.fetch.hit_rate}%（${d.fetch.hits_304} / ${d.fetch.conditional} 回）`} id="fetch-hit-rate" />
+          <Row k="失敗で間隔を延ばしている" v={`${d.fetch.backoff} 件`} /></dl>
         <ul className="space-y-1.5">
           {(stalled.length ? stalled : d.fetch.sources.slice(0, 5)).map((x) => (
             <li key={x.key} className={`rounded-xl border px-3 py-2 text-xs ${x.stalled ? "border-amber-500/50 bg-amber-500/10" : "border-zinc-200 dark:border-zinc-700"}`}>
               <p className="font-semibold">{x.name} <span className="font-normal text-zinc-500">{x.ok === false ? "失敗" : "成功"}{x.reason ? `（${REASONS[x.reason] ?? x.reason}）` : ""}</span></p>
-              <p className="num text-zinc-500">最終成功 {clock(x.last_ok_at)} · 間隔 {x.interval_min} 分 · 7 日の新着 {x.new_7d} 件</p>
+              <p className="num text-zinc-500">最終成功 {clock(x.last_ok_at)} · 間隔 {x.interval_min} 分（{x.backoff ? "失敗で延長" : x.interval_auto ? "自動" : "固定"}） ·{x.hit_rate !== null ? ` 304 の当たり ${x.hit_rate}% ·` : ""} 7 日の新着 {x.new_7d} 件</p>
               {x.problems.map((p) => <p key={p} className="font-medium">{p}</p>)}
               {x.fix && <p className="text-zinc-600 dark:text-zinc-300">直し方: {x.fix}</p>}
               {x.error && <p className="break-words text-zinc-500">{x.error}</p>}

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import html
 import json
 import logging
@@ -48,7 +49,12 @@ DEFAULT_CONFIG: dict = {
     "reddit": ["LocalLLaMA"],
     "intervals": {},       # ソースごとの取得の間隔（分）。{source_key: 分}。無いソースは設定の既定（channels の interval_minutes）
     "disabled": [],        # 止めているソースの source_key（設定には残すが取らない）
+    "fixed": [],           # 間隔を自動で変えず、基準のまま取るソースの source_key（Adaptive Polling の対象外）
+    "origins": {},         # 出どころの種類（official・press・blog・community・paper・other）を利用者が決めたソース。{source_key: 種類}。無ければドメインから推定
+    "categories": {},      # 取り込んだ CSV・OPML の分類。{source_key: 名前}
 }
+ORIGINS = ("official", "press", "blog", "community", "paper", "other")
+ORIGIN_LABELS = {"official": "公式", "press": "報道", "blog": "ブログ", "community": "コミュニティ", "paper": "論文", "other": "その他"}
 INTERVAL_MIN, INTERVAL_MAX = 5, 10080     # ソースごとの取得の間隔（分）の範囲（5 分〜1 週間）
 MAX_PER_RUN = 60          # 1 回の取得で取るソースの数の上限（見張り）
 MAX_DISABLED = 1000
@@ -172,6 +178,22 @@ def normalize(raw: object) -> dict:
     if not isinstance(off, list) or len(off) > MAX_DISABLED:
         raise ConfigError("disabled は source_key の一覧です")
     out["disabled"] = list(dict.fromkeys(str(k)[:600] for k in off))
+    fixed = raw.get("fixed", [])
+    if not isinstance(fixed, list) or len(fixed) > MAX_DISABLED:
+        raise ConfigError("fixed は source_key の一覧です")
+    out["fixed"] = list(dict.fromkeys(str(k)[:600] for k in fixed))
+    for field_name in ("origins", "categories"):
+        table = raw.get(field_name, {})
+        if not isinstance(table, dict) or len(table) > MAX_DISABLED:
+            raise ConfigError(f"{field_name} は {{source_key: 値}} の表です")
+        out[field_name] = {}
+        for k, v in table.items():
+            if field_name == "origins":
+                if v not in ORIGINS:
+                    raise ConfigError(f"出どころの種類は {', '.join(ORIGINS)} のどれかです")
+                out[field_name][str(k)[:600]] = v
+            elif str(v).strip():
+                out[field_name][str(k)[:600]] = str(v).strip()[:40]
     out["pages"] = []
     for page in pages:
         if not isinstance(page, dict):
@@ -295,6 +317,8 @@ def parse_feed(raw: bytes, *, url: str, name: str) -> list[dict]:
                 image = image or child.get("url", "")
             elif tag in ("description", "summary", "encoded", "content") and text:
                 fields.setdefault("summary" if tag in ("description", "summary") else "body", text)
+            elif tag in ("guid", "id") and text:
+                fields.setdefault("guid", text)
             elif tag in ("title", "link", "pubdate", "published", "updated", "date") and text:
                 fields.setdefault(tag, text)
         if not image:
@@ -305,17 +329,50 @@ def parse_feed(raw: bytes, *, url: str, name: str) -> list[dict]:
                          image=urljoin(url, html.unescape(image)) if image else None,
                          published=fields.get("pubdate") or fields.get("published") or fields.get("updated") or fields.get("date"))
         if item:
+            item["guid"] = fields.get("guid", "")[:500]
             out.append(item)
     return out
 
 
-async def fetch_rss(feed: dict) -> list[dict]:
+@dataclass
+class FetchMeta:
+    """1 回の取得のやりとり（service が作り、fetch_rss が読み書きする）。前回の ETag・Last-Modified を入れておくと、
+    条件付きで取り、304 なら not_modified が True・記事は空で返る。成功したら新しい etag・last_modified が入る。失敗の Retry-After（秒）も入る。"""
+    etag: str = ""
+    last_modified: str = ""
+    conditional: bool = False
+    not_modified: bool = False
+    status: int | None = None
+    retry_after: float | None = None
+    new_etag: str = ""
+    new_last_modified: str = ""
 
-    raw = await asyncio.to_thread(net.http_get, feed["url"], pace=1.0, timeout=25)
+
+FETCH_META: contextvars.ContextVar["FetchMeta | None"] = contextvars.ContextVar("newshub_fetch_meta", default=None)
+
+
+async def fetch_rss(feed: dict) -> list[dict]:
+    meta = FETCH_META.get()
+    etag, lm = (meta.etag, meta.last_modified) if meta else ("", "")
     try:
-        return parse_feed(raw, url=feed["url"], name=feed["name"])
+        status, head, raw = await asyncio.to_thread(net.http_get_conditional, feed["url"], etag=etag, last_modified=lm, pace=1.0, timeout=25)
+    except net.HttpError as exc:
+        if meta:
+            meta.status, meta.retry_after = exc.status, exc.retry_after
+        raise
+    if meta:
+        meta.status, meta.conditional = status, bool(etag or lm)
+    if status == 304:
+        if meta:
+            meta.not_modified = True
+        return []
+    try:
+        items = parse_feed(raw, url=feed["url"], name=feed["name"])
     except ET.ParseError as exc:
         raise RuntimeError(f"フィードを読めません: {exc}") from exc
+    if meta:
+        meta.new_etag, meta.new_last_modified = head.get("etag", ""), head.get("last-modified", "")
+    return items
 
 
 async def fetch_page(page: dict) -> list[dict]:
