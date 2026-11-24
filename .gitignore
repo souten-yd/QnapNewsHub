@@ -13,3 +13,4 @@ playwright-report/
 build/
 .pytest_cache/
 frontend/tsconfig.tsbuildinfo
+packaging/.cache/

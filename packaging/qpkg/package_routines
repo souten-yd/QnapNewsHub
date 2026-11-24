@@ -1,0 +1,26 @@
+######################################################################
+# QnapNewsHub の package_routines（QDK 2.5.3）。
+# - プログラム（python・site・app・web）は QPKG の置き場に入れ、更新のたびに入れ替える。
+# - データ（記事・設定・暗号化した鍵）は QPKG の外の置き場（既定は .qpkg/QnapNewsHub-data）に置き、更新でも消さない。
+#   QPKG を消してもデータは残す（消すときは手で。docs/QPKG.md）。
+######################################################################
+
+pkg_pre_install(){
+    # 古い版のプログラムを消してから入れる（消えたモジュールが残らないように）。データの置き場には触らない
+    if [ -d "$SYS_QPKG_DIR" ]; then
+        for d in python site app web; do
+            [ -d "$SYS_QPKG_DIR/$d" ] && $CMD_RM -rf "$SYS_QPKG_DIR/$d"
+        done
+    fi
+}
+
+pkg_post_install(){
+    DATA=$($CMD_GETCFG QnapNewsHub Data_Dir -d "" -f /etc/config/qpkg.conf)
+    if [ -z "$DATA" ]; then
+        DATA="${SYS_QPKG_DIR%/*}/QnapNewsHub-data"
+        $CMD_SETCFG QnapNewsHub Data_Dir "$DATA" -f /etc/config/qpkg.conf
+    fi
+    $CMD_MKDIR -p "$DATA"
+    $CMD_CHMOD 700 "$DATA"
+    $CMD_CHMOD 755 "$SYS_QPKG_DIR/QnapNewsHub.sh"
+}

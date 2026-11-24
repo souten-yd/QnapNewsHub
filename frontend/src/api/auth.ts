@@ -2,7 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 
-export interface AuthStatus { setup_needed: boolean; authenticated: boolean; username: string | null }
+export interface AuthStatus { setup_needed: boolean; setup_token_required?: boolean; authenticated: boolean; username: string | null }
 export interface HubSettings { host: string; port: number; cookie_secure: boolean }
 
 export const AUTH_KEY = ["auth", "status"] as const;
@@ -20,7 +20,7 @@ export function useLogin() {
 export function useSetup() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (b: { username: string; password: string }) => api<{ username: string }>("/auth/setup", { method: "POST", json: b }),
+    mutationFn: (b: { username: string; password: string; setup_token?: string }) => api<{ username: string }>("/auth/setup", { method: "POST", json: b }),
     onSuccess: () => qc.invalidateQueries({ queryKey: AUTH_KEY }),
   });
 }

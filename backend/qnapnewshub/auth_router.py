@@ -16,6 +16,10 @@ class Credentials(BaseModel):
     password: str = Field(min_length=1, max_length=300, repr=False)
 
 
+class SetupBody(Credentials):
+    setup_token: str | None = Field(default=None, max_length=40, repr=False)
+
+
 class TokenBody(BaseModel):
     name: str = Field(min_length=1, max_length=60)
 
@@ -32,18 +36,28 @@ async def status(request: Request):
     cookie = request.cookies.get(auth.COOKIE, "")
     if cookie:
         user = await asyncio.to_thread(auth.session_user, cookie)
-    return {"setup_needed": not have, "authenticated": user is not None, "username": user.username if user else None}
+    return {"setup_needed": not have, "setup_token_required": (not have) and auth.setup_token_required(), "authenticated": user is not None, "username": user.username if user else None}
 
 
 @router.post("/setup")
-async def setup(body: Credentials, request: Request, response: Response):
-    """最初の管理者を作ってそのままログインする（利用者がいる間は 409）。"""
+async def setup(body: SetupBody, request: Request, response: Response):
+    """最初の管理者を作ってそのままログインする（利用者がいる間は 409）。NEWSHUB_SETUP_TOKEN=1 なら一回限りの番号が要る（違えば 403）。"""
+    if await asyncio.to_thread(auth.has_users):
+        raise HTTPException(status_code=409, detail="管理者はすでにいます")
+    if auth._throttled(_ip(request)):
+        raise HTTPException(status_code=429, detail="試行が多すぎます。しばらく待ってください")
+    try:
+        await asyncio.to_thread(auth.check_setup_token, body.setup_token)
+    except PermissionError as exc:
+        auth._fail(_ip(request))
+        raise HTTPException(status_code=403, detail=str(exc)) from None
     try:
         await asyncio.to_thread(auth.create_admin, body.username, body.password)
     except PermissionError:
         raise HTTPException(status_code=409, detail="管理者はすでにいます") from None
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await asyncio.to_thread(auth.clear_setup_token)
     return await _login(body, request, response)
 
 

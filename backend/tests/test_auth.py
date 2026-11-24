@@ -19,12 +19,12 @@ READ_APIS = ["/api/v1/news/items", "/api/v1/news/home", "/api/v1/news/sources", 
 
 def test_first_start_has_no_user_and_setup_creates_the_admin_once(anon_client):
     """最初の起動は管理者がいない。setup で作ると、そのままログインした状態になる。2 回目は 409（乗っ取りの防止）。"""
-    assert anon_client.get("/api/v1/auth/status").json() == {"setup_needed": True, "authenticated": False, "username": None}
+    assert anon_client.get("/api/v1/auth/status").json() == {"setup_needed": True, "setup_token_required": False, "authenticated": False, "username": None}
     assert anon_client.get("/api/v1/news/items").status_code == 401
     for bad in ({"username": "ab", "password": ADMIN_PASSWORD}, {"username": "admin", "password": "short"}, {"username": "bad name!", "password": ADMIN_PASSWORD}):
         assert anon_client.post("/api/v1/auth/setup", json=bad).status_code == 422
     r = anon_client.post("/api/v1/auth/setup", json={"username": ADMIN_NAME, "password": ADMIN_PASSWORD})
-    assert r.status_code == 200 and anon_client.get("/api/v1/auth/status").json() == {"setup_needed": False, "authenticated": True, "username": ADMIN_NAME}
+    assert r.status_code == 200 and anon_client.get("/api/v1/auth/status").json() == {"setup_needed": False, "setup_token_required": False, "authenticated": True, "username": ADMIN_NAME}
     assert anon_client.get("/api/v1/news/items").status_code == 200
     other = TestClient(anon_client.app)
     assert other.post("/api/v1/auth/setup", json={"username": "intruder", "password": USER_PASSWORD}).status_code == 409
@@ -180,3 +180,48 @@ def test_concurrent_requests_do_not_share_one_sqlite_connection(client):
     with ThreadPoolExecutor(max_workers=8) as pool:
         codes = list(pool.map(hit, range(80)))
     assert set(codes) == {200}
+
+
+def test_setup_needs_the_one_time_token_when_listening_on_the_lan(isolated_data, monkeypatch):
+    """目的: QPKG（NEWSHUB_SETUP_TOKEN=1）では、置き場の setup-token.txt の番号を知っている人だけが最初の管理者を作れる。
+    根拠: QPKG は LAN に待ち受けるので、番号が無いと LAN の誰でも先に管理者を作って乗っ取れる（2026-11-24 の設計）。
+    番号はログに出さず、ファイルは 0600、管理者を作ったら消す。違う番号は 403 で、総当たりは制限される。"""
+    import os
+    from qnapnewshub.main import app
+
+    monkeypatch.setenv("NEWSHUB_SETUP_TOKEN", "1")
+    with TestClient(app) as c:
+        path = auth.setup_token_path()
+        assert path.is_file() and (os.stat(path).st_mode & 0o777) == 0o600
+        token = path.read_text(encoding="utf-8").strip()
+        assert len(token) == 14 and token.count("-") == 2
+        assert c.get("/api/v1/auth/status").json()["setup_token_required"] is True
+        body = {"username": ADMIN_NAME, "password": ADMIN_PASSWORD}
+        assert c.post("/api/v1/auth/setup", json=body).status_code == 403
+        assert c.post("/api/v1/auth/setup", json={**body, "setup_token": "AAAA-BBBB-CCCC"}).status_code == 403
+        assert not auth.has_users()
+        r = c.post("/api/v1/auth/setup", json={**body, "setup_token": token.lower()})      # 大文字小文字は問わない
+        assert r.status_code == 200, r.text
+        assert not path.exists()
+        assert c.get("/api/v1/auth/status").json()["setup_token_required"] is False
+        from qnapnewshub import logbuf
+        assert token not in json_dump(logbuf)
+
+
+def test_wrong_setup_tokens_are_throttled(isolated_data, monkeypatch):
+    """目的: 番号の総当たりを止める。根拠: 番号は 32 文字 × 12 桁だが、LAN から無制限に試せると守りにならない。"""
+    from qnapnewshub.main import app
+
+    monkeypatch.setenv("NEWSHUB_SETUP_TOKEN", "1")
+    with TestClient(app) as c:
+        body = {"username": ADMIN_NAME, "password": ADMIN_PASSWORD, "setup_token": "AAAA-BBBB-CCCC"}
+        codes = [c.post("/api/v1/auth/setup", json=body).status_code for _ in range(auth.LOGIN_MAX_FAILURES + 2)]
+        assert codes[0] == 403 and codes[-1] == 429
+
+
+def json_dump(logbuf_module) -> str:
+    import json
+    try:
+        return json.dumps(logbuf_module.recent(500), ensure_ascii=False)
+    except AttributeError:
+        raise

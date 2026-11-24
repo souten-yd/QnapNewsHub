@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from qnapnewshub import __version__, auth_router, diag_router, logbuf, metrics, router, service, settings, writer
+from qnapnewshub import __version__, auth, auth_router, diag_router, logbuf, metrics, router, service, settings, writer
 
 logger = logging.getLogger("qnapnewshub.main")
 
@@ -31,6 +31,9 @@ async def sampler() -> None:
 async def lifespan(app: FastAPI):
     logbuf.install(file_log=bool(settings.load()["storage"]["log_file"]))
     metrics.sample()
+    token = await asyncio.to_thread(auth.ensure_setup_token)
+    if token:      # 番号そのものはログに出さない（置き場のファイルと、QPKG なら QTS のシステムのログで見る）
+        logger.warning("最初の管理者を作るには一回限りの番号が要ります（データの置き場の %s）", auth.SETUP_TOKEN_FILE)
     tasks = [asyncio.create_task(sampler())]
     if os.environ.get("NEWSHUB_AUTO") != "0":
         tasks.append(asyncio.create_task(service.news_loop()))
