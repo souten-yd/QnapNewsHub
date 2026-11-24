@@ -3,7 +3,7 @@
 ControlDeck（https://github.com/souten-yd/ControlDeck）と同じ決まりで開発する。迷ったら ControlDeck の `AGENTS.md` を正とする。ここにはこのリポジトリで特に要るものを書く。
 
 ## プロジェクト概要
-ずっと電源の入っている QNAP（または Linux の PC）で、ニュースを集める・ためる・読む。重い処理（本文の訳・画像生成・RAG）は ControlDeck が受け持つ。設計は `docs/DESIGN.md`、計画は `docs/PLAN.md`。
+ずっと電源の入っている QNAP（または Linux の PC）で、ニュースを集める・ためる・読む。重い処理（本文の訳・画像生成・RAG）は ControlDeck が受け持つ。設計は `docs/ARCHITECTURE.md`（正）と `docs/DESIGN.md`、計画は `docs/PLAN.md`。
 
 ## 絶対に守るルール
 1. **公開のリポジトリ**。鍵・パスワード・トークン・利用者の名前・メール・ホスト名・家の中のアドレスを入れない。試験の見本の鍵らしい値は実行時に組み立てる。
