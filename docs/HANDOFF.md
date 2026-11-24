@@ -27,20 +27,22 @@
 | #6 | v0.1: Write Coordinator（まとめ書き 30 分）・お休みモード・診断・systemd のユーザーの単位の生成 |
 | #9 | v0.1: QPKG（x86_64）`./hub.sh qpkg`・QTS の模擬での確かめ（`packaging/qpkg/test/run-sim.sh`）・LAN に待ち受けるときの最初の管理者の一回限りの番号（`NEWSHUB_SETUP_TOKEN=1`）。docs/QPKG.md |
 | 更新（0.1.1） | 署名つきの Release（Ed25519）・更新の確認（1 日 1 回・ETag・メモリだけ）・QPKG の入れ替え（切り離した子で `sh <qpkg>`）・前の版への戻し・設定の更新の節・ホームの知らせ・診断。docs/UPDATE.md。`./hub.sh release <版>` が Release の台本（作るだけ。実際の Release は司令塔が作る） |
+| 分析（第 1 版） | 集計の表（`analytics.py`・まとめ書きと同じトランザクションで増分・作り直し）・`/api/v1/analytics`（概要・推移・ホットトピック・取得先・比較）・画面「分析」（ECharts 5.6.0 を遅延読み込み）・ホームの上位 5。PLAN v0.4 の一部を前倒し。ARCHITECTURE 7・7.5・11 章の「実装と違った点」、DESIGN 9 章（速さの実測） |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
-- 試験: backend 208 件・E2E 110 件（#9 の時点）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
+- 試験: backend 245 件・E2E 135 件（分析の第 1 版の時点）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
 - 実測（開発の PC）: 待機中の書き込み 0 バイト／10 分、お休み中も 0、常駐 114〜190MB、待機 CPU 0.1〜0.4%。
 - **作業中**: なし（#9 の時点）。
-- まだ無いもの: QNAP 実機での確認・長時間の連続運転・QNAP 実機・無料 LLM の係（予算 800 回・用途ごとの割り当て・モデルの切り替え）・要素の取り出し・イベント・新着の傾向・ControlDeck との連携（ペアリング・仕事の列・同期）・知識グラフ・分析の画面。
+- まだ無いもの: QNAP 実機での確認・長時間の連続運転・QNAP 実機・無料 LLM の係（予算 800 回・用途ごとの割り当て・モデルの切り替え）・要素の取り出し・イベント・新着の傾向の LLM の解説・一緒に出る分析・ControlDeck との連携（ペアリング・仕事の列・同期）・知識グラフ（分析の画面の「知識の地図」「物のノート」は空き枠だけ）。
 - 既知の小さなずれ: LLM の 1 日の上限の既定は今 300 回（設計は 800 回。v0.2 で変える）。試験で StarletteDeprecationWarning が 1 件出る（動作に影響なし）。
 
 ## 4. 次にやること（順番）
 1. 開発の PC で動かす（利用者「24 時間も待たなくて良い」〔2026-11-24〕。長時間の運転は並行して、結果を待たずに次へ進む）（`./hub.sh install-service` か `./hub.sh run`、目録から 50〜100 件を有効に）。取得の実績・失敗・書き込みの量・メモリを診断の画面で見る。
 2. QPKG を利用者の QNAP に入れてもらう（`./hub.sh qpkg` の .qpkg を渡す。手順は docs/QPKG.md。型番と CPU も QTS の画面で確認してもらう）。動いたら v0.1 を Release（.qpkg を Release の添付に）。
-3. v0.2: 無料 LLM の係（ARCHITECTURE 5.1）・概要と要素の取り出しを 1 回で・粗いイベント・本文の取り出し（Trafilatura）・新着の傾向（7.5）・FTS5 ＋ trigram・zstd・集計の表・100 万件の模擬データでの性能。
-4. 更新の機能（0.1.1）の最初の Release: 司令塔が `./hub.sh release 0.1.1 --notes …` で作る。そのあと実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
-5. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
+3. （済）分析の第 1 版（集計の表・API・画面）。続き: 実データを 1 週間ためてホットトピックの上位が一般語にならないか見る（ストップワードの調整）・集計の表の作り直しが長い（100 万件で約 34 秒）ので、必要なら分割する。
+4. v0.2: 無料 LLM の係（ARCHITECTURE 5.1）・概要と要素の取り出しを 1 回で・粗いイベント・本文の取り出し（Trafilatura）・新着の傾向（7.5）・FTS5 ＋ trigram・zstd・集計の表・100 万件の模擬データでの性能。
+5. 更新の機能（0.1.1）の最初の Release: 司令塔が `./hub.sh release 0.1.1 --notes …` で作る。そのあと実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
+6. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
 
 ## 5. 開発の仕方
 ```
@@ -89,3 +91,8 @@
 - 数百万件を非力な CPU で速く。メモリのキャッシュを使ってよい（16GB を占有しない）。書き込みはまとめて、常に書き続けない。お休みモード（既定 切）。
 - 画像が抽出できなかった記事は画像を出さない。グラフィカルな画面。アプリとアイコン（iOS のホーム画面・QPKG）。
 - Linux で先に作り、そのあと QPKG。CI は極力使わず、手元の試験で。開発の決まりは ControlDeck と同じ。
+
+- **分析の集計の表**: 記事を保存する経路（`writer._flush`）に `analytics.apply` が付いている。記事の列を足す・保存の経路を変えるときは、集計の表（`analytics._facts`）と増分・作り直しの一致の試験（`test_incremental_equals_rebuild`）を見る。
+  `store.apply_staged` は「保存で初めて画像が付いた記事」を返す（画像のある数の増分のため）。直接 `upsert_items` で入れた記事（E2E の seed など）は増分に入らないので、集計の表は次の読みの作り直しで揃う（`ana_meta` が無いか指紋が違うとき）。
+  E2E の分析の数字は模擬（`frontend/e2e/mock.ts` の HOT・OVERVIEW など）で、実データではない。
+- **ECharts**: `frontend/src/features/analytics/echarts.ts` で部品を選び、`Chart.tsx` が動的 import で描く。版を上げるときは `package.json` の固定の版と別チャンクの大きさ（約 590KB）を見る。
