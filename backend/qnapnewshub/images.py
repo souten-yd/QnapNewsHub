@@ -19,7 +19,7 @@ from urllib.parse import urljoin, urlsplit
 from sqlalchemy import func, select, update
 
 from qnapnewshub import db as news_db
-from qnapnewshub import gnews, net
+from qnapnewshub import gnews, net, rest, writer
 from qnapnewshub.db import NewsItem
 from qnapnewshub.sources import safe_url
 
@@ -112,24 +112,25 @@ def _candidates(ids: list[int]) -> list[tuple[int, str]]:
     """新着（ids）を先に、残りの枠で、画像を試していない古い記事を新しい順に（最大 BACKFILL_PER_RUN 件）。"""
     base = (NewsItem.image_url.is_(None), NewsItem.image_tried.is_(False), NewsItem.kind.not_in(SKIP_KINDS))
     with news_db.session() as db:
+        coord = writer.get()
         fresh = db.execute(select(NewsItem.id, NewsItem.url).where(NewsItem.id.in_(ids or [0]), *base)
                            .order_by(NewsItem.published_at.desc()).limit(MAX_PER_RUN)).all()
+        have = {i for i, _ in fresh}      # まだ書いていない新着（DB に無い）も候補にする
+        fresh = [*[(p.id, p.url) for p in coord.pending_items() if p.id in set(ids) and p.id not in have and not p.image_url and not p.image_tried
+                   and p.kind not in SKIP_KINDS], *fresh]
         room = min(BACKFILL_PER_RUN, MAX_PER_RUN - len(fresh))
         old: list = []
-        if room > 0:
-            old = db.execute(select(NewsItem.id, NewsItem.url).where(NewsItem.id.not_in(ids or [0]), *base)
-                             .order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(room)).all()
+        if room > 0:      # 書いていない結果（画像を試した印）を除くため、多めに読む
+            rows = db.execute(select(NewsItem.id, NewsItem.url).where(NewsItem.id.not_in(ids or [0]), *base)
+                              .order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(room + 400)).all()
+            old = [(i, u) for i, u in rows if not coord.has_unsaved(i)][:room]
         return [(i, u) for i, u in [*fresh, *old]]
 
 
 def _store(results: dict[int, str | None], tried: list[int]) -> None:
-    with news_db.session() as db:
-        for item_id, image in results.items():
-            if image:
-                db.execute(update(NewsItem).where(NewsItem.id == item_id).values(image_url=image))
-        for i in range(0, len(tried), 400):
-            db.execute(update(NewsItem).where(NewsItem.id.in_(tried[i:i + 400])).values(image_tried=True))
-        db.commit()
+    coord = writer.get()      # バッファへ（Write Coordinator がまとめて書く）
+    for item_id in tried:
+        coord.patch_item(item_id, set={"image_tried": True, **({"image_url": results[item_id]} if results.get(item_id) else {})})
 
 
 def _domain(url: str) -> str:
@@ -151,14 +152,15 @@ def drop_logos() -> int:
                 if not gnews.is_google_news(url):
                     groups.setdefault((_domain(url), image), []).append(item_id)
         drop = [item_id for ids in groups.values() if len(ids) >= LOGO_MIN_ARTICLES for item_id in ids]
-        for i in range(0, len(drop), 400):
-            db.execute(update(NewsItem).where(NewsItem.id.in_(drop[i:i + 400])).values(image_url=None, image_tried=True))
-        db.commit()
+        for item_id in drop:
+            writer.get().patch_item(item_id, set={"image_url": None, "image_tried": True})
         return len(drop)
 
 
 async def fill(new_ids: list[int]) -> dict:
     """新しく入った記事（new_ids）と古い記事の画像の埋め合わせ。{"tried": 件数, "found": 件数, "logos": 外したロゴの数}。"""
+    if rest.blocks_analysis():
+        return {"tried": 0, "found": 0, "logos": 0}
     todo = await asyncio.to_thread(_candidates, new_ids)
     gate = asyncio.Semaphore(CONCURRENCY)
     results: dict[int, str | None] = {}

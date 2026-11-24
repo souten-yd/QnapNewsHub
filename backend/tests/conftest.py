@@ -33,7 +33,12 @@ def isolated_data(tmp_path, monkeypatch):
     llm.reset_minute_window()
     service._status.clear()
     service._last.update(started=0.0, finished=None, new=0)
+    from qnapnewshub import metrics, rest, writer
+
+    rest.invalidate()
+    metrics.reset()
     yield
+    writer.forget_all()      # 書き手のスレッドを止める（バッファの未保存分は試験ごとに捨てる）
 
 
 @pytest.fixture()

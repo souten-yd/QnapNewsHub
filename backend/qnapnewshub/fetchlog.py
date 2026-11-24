@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from qnapnewshub import writer
 from qnapnewshub.db import NewsFetchLog, NewsItem
 
 KEEP = 200
@@ -24,7 +25,7 @@ def status_of(error: str) -> int | None:
     return int(m.group(1) or m.group(2)) if m else None
 
 
-def record(db: Session, rows: list[dict]) -> None:
+def record(db: Session, rows: list[dict], commit: bool = True) -> None:
     """rows: [{source_key, at(datetime), ok, status, count, new, ms, error, skipped}]。書いた後、ソースごとに KEEP 回を超えた古い行を消す。"""
     if not rows:
         return
@@ -35,12 +36,21 @@ def record(db: Session, rows: list[dict]) -> None:
     for key in {r["source_key"][:600] for r in rows}:
         keep = select(NewsFetchLog.id).where(NewsFetchLog.source_key == key).order_by(NewsFetchLog.id.desc()).limit(KEEP)
         db.execute(delete(NewsFetchLog).where(NewsFetchLog.source_key == key, NewsFetchLog.id.not_in(keep)))
-    db.commit()
+    if commit:
+        db.commit()
+
+
+def _row(r: dict) -> dict:
+    return {"at": _iso(r["at"]), "ok": r["ok"], "status": r.get("status"), "count": r.get("count", 0), "new": r.get("new", 0), "ms": r.get("ms", 0),
+            "error": r.get("error", ""), "skipped": r.get("skipped", ""), "persisted": False}
 
 
 def history(db: Session, key: str, limit: int = HISTORY_DEFAULT) -> list[dict]:
-    rows = db.scalars(select(NewsFetchLog).where(NewsFetchLog.source_key == key).order_by(NewsFetchLog.id.desc()).limit(max(1, min(limit, KEEP))))
-    return [{"at": _iso(r.at), "ok": r.ok, "status": r.status, "count": r.count, "new": r.new, "ms": r.ms, "error": r.error, "skipped": r.skipped} for r in rows]
+    limit = max(1, min(limit, KEEP))
+    pend = [_row(r) for r in reversed(writer.get().pending_fetchlog()) if r["source_key"][:600] == key]      # まだ書いていない分（新しい順）
+    rows = db.scalars(select(NewsFetchLog).where(NewsFetchLog.source_key == key).order_by(NewsFetchLog.id.desc()).limit(limit))
+    saved = [{"at": _iso(r.at), "ok": r.ok, "status": r.status, "count": r.count, "new": r.new, "ms": r.ms, "error": r.error, "skipped": r.skipped, "persisted": True} for r in rows]
+    return (pend + saved)[:limit]
 
 
 def _iso(value: datetime | None) -> str:
@@ -54,6 +64,7 @@ def week_bars(db: Session, now: datetime | None = None) -> dict[str, list[int | 
     now = now or datetime.now(timezone.utc)
     start = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
     rows = db.execute(select(NewsFetchLog.source_key, NewsFetchLog.at, NewsFetchLog.ok).where(NewsFetchLog.at >= start)).all()
+    rows = [*rows, *[(r["source_key"][:600], r["at"], bool(r["ok"])) for r in writer.get().pending_fetchlog() if r["at"] >= start]]
     days: dict[str, list[list[int]]] = {}
     for key, at, ok in rows:
         at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
@@ -75,12 +86,22 @@ def summary(db: Session) -> dict[str, dict]:
     for key, at in db.execute(select(NewsFetchLog.source_key, func.max(NewsFetchLog.at)).where(NewsFetchLog.ok.is_(True), NewsFetchLog.skipped == "").group_by(NewsFetchLog.source_key)):
         if key in out:
             out[key]["last_ok_at"] = _iso(at)
+    for r in writer.get().pending_fetchlog():      # まだ書いていない分は新しいので、上書きする
+        key = r["source_key"][:600]
+        prev = out.get(key, {})
+        out[key] = {"last_at": _iso(r["at"]), "last_ok": r["ok"], "last_error": r.get("error", ""), "last_status": r.get("status"), "last_count": r.get("count", 0),
+                    "last_ms": r.get("ms", 0), "last_skipped": r.get("skipped", ""), "last_ok_at": prev.get("last_ok_at", "")}
+        if r["ok"] and not r.get("skipped"):
+            out[key]["last_ok_at"] = _iso(r["at"])
     return out
 
 
 def article_totals(db: Session) -> dict[str, int]:
     """ソースごとの、これまでに入った記事の累計（news_items を source_key で数える）。"""
-    return {k: n for k, n in db.execute(select(NewsItem.source_key, func.count(NewsItem.id)).group_by(NewsItem.source_key))}
+    out = {k: n for k, n in db.execute(select(NewsItem.source_key, func.count(NewsItem.id)).group_by(NewsItem.source_key))}
+    for k, n in writer.get().pending_by_source().items():
+        out[k] = out.get(k, 0) + n
+    return out
 
 
 def recent_articles(db: Session, key: str, limit: int = 10) -> list[dict]:

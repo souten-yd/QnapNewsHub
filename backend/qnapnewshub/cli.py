@@ -40,9 +40,12 @@ def _run(args: argparse.Namespace) -> int:
 
     from qnapnewshub import config
 
+    from qnapnewshub import settings
+
     host, port = config.listen()
+    access = bool(settings.load()["storage"]["access_log"])      # アクセスのログは既定で切（書き込みを増やさない）
     print(f"待ち受け: http://{host}:{port}")
-    uvicorn.run("qnapnewshub.main:app", host=host, port=port, log_level="info")
+    uvicorn.run("qnapnewshub.main:app", host=host, port=port, log_level="warning", access_log=access)
     return 0
 
 

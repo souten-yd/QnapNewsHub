@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from qnapnewshub import channels as channels_mod
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsAction, NewsItem
-from qnapnewshub import prefs, profile
+from qnapnewshub import prefs, profile, writer
 from qnapnewshub import sources as sources_mod
 from qnapnewshub.sources import plain, safe_url
 from qnapnewshub.topics import extract_topics
@@ -115,7 +115,142 @@ def upsert_items(db: Session, items: list[dict]) -> dict:
             "new_urls": [u for u in by_url if u not in existing]}
 
 
-def prune(db: Session, limit: int | None = None, removed_urls: list[str] | None = None) -> int:
+def _fields_of(data: dict, cur, now: datetime) -> dict:
+    """取り直した data を cur（いまの記事）へ重ねたときの、列の更新。抜粋が変わったら古い訳は捨てる。"""
+    topics = json.dumps(extract_topics(data["title"], data["summary"], data.get("extra_topics", ())), ensure_ascii=False)
+    if cur.gist:      # LLM が付けた話題の語は、取り直しで消さない
+        topics = json.dumps(list(dict.fromkeys(topics_of(cur) + json.loads(topics))), ensure_ascii=False)
+    out = {"kind": data["kind"], "source": data["source"], "source_key": data["source_key"], "title": data["title"], "summary": data["summary"],
+           "topics": topics, "fetched_at": now, "image_url": data.get("image_url") or cur.image_url}
+    if cur.summary != data["summary"]:
+        out.update(summary_ja="", prep_tries=0)
+    return out
+
+
+def stage_items(items: list[dict]) -> dict:
+    """記事をバッファへ積む（ここでは DB へ書かない。Write Coordinator が後でまとめて書く）。upsert_items と同じ形の結果。
+    新しい記事には、先に id を割り当てる（未保存のまま「操作」を受けても同じ id で書ける）。"""
+    coord = writer.get()
+    now = datetime.now(_UTC)
+    by_url = {item["url"]: item for item in items}
+    existing: dict[str, NewsItem] = {}
+    urls = list(by_url)
+    with news_db.session() as db:
+        for i in range(0, len(urls), 400):
+            for row in db.execute(select(NewsItem).where(NewsItem.url.in_(urls[i:i + 400]))).scalars():
+                existing[row.url] = writer.clone(row)
+    new = updated = 0
+    changed: list[dict] = []
+    new_ids: list[int] = []
+    new_urls: list[str] = []
+    added = 0
+    for url, data in by_url.items():
+        with coord.lock:
+            pending = {r.url: r for r in (*coord.inflight.new.values(), *coord.buf.new.values())}
+            in_buf = next((r for r in coord.buf.new.values() if r.url == url), None)
+        if in_buf is not None:                    # まだ書いていない新しい記事の取り直し: そのまま上書き
+            touched = (in_buf.title, in_buf.summary) != (data["title"], data["summary"])
+            for k, v in _fields_of(data, in_buf, now).items():
+                setattr(in_buf, k, v)
+            updated += 1
+            if touched and in_buf.kind != "event":
+                changed.append(item_dict(in_buf))
+            continue
+        base = pending.get(url) or existing.get(url)
+        if base is None:
+            item_id = coord.allocate_id()
+            rec = NewsItem(id=item_id, kind=data["kind"], source=data["source"], source_key=data["source_key"], title=data["title"], url=url,
+                           summary=data["summary"], image_url=data.get("image_url"), published_at=data["published_at"], fetched_at=now,
+                           topics=json.dumps(extract_topics(data["title"], data["summary"], data.get("extra_topics", ())), ensure_ascii=False),
+                           user_id=data.get("user_id"), gist="", image_tried=False, summary_ja="", img_prompt="", prep_tries=0)
+            rec._unsaved = True
+            with coord.lock:
+                coord.buf.new[item_id] = rec
+            added += len(rec.title) + len(rec.summary) + len(url) + 400
+            new += 1
+            new_ids.append(item_id)
+            new_urls.append(url)
+            if rec.kind != "event":
+                changed.append(item_dict(rec))
+            continue
+        cur = writer.clone(base)
+        coord._overlay(cur)  # noqa: SLF001
+        touched = (cur.title, cur.summary) != (data["title"], data["summary"])
+        fields = _fields_of(data, cur, now)
+        with coord.lock:
+            coord.buf.updates[url] = {**coord.buf.updates.get(url, {}), **fields}
+            coord.buf.update_ids[url] = base.id
+            if "summary_ja" in fields and base.id in coord.buf.patches:      # 抜粋が変わったので、古い下ごしらえの結果は捨てる
+                for k in ("summary_ja", "prep_tries"):
+                    coord.buf.patches[base.id].get("set", {}).pop(k, None)
+                coord.buf.patches[base.id].pop("tries", None)
+        added += len(data["title"]) + len(data["summary"]) + 200
+        for k, v in fields.items():
+            setattr(cur, k, v)
+        updated += 1
+        if touched and cur.kind != "event":
+            changed.append(item_dict(cur))
+    coord._touch(added)  # noqa: SLF001
+    return {"new": new, "updated": updated, "changed": changed, "new_ids": new_ids, "new_urls": [u for u in by_url if u in new_urls]}
+
+
+def apply_staged(db: Session, new: list, updates: dict[str, dict], patches: dict[int, dict]) -> None:
+    """バッファを DB へ（コミットは呼ぶ側。1 トランザクション）。Write Coordinator の保存から呼ぶ。"""
+    for rec in new:
+        db.add(writer.clone(rec))
+    db.flush()
+    urls = list(updates)
+    for i in range(0, len(urls), 400):
+        for row in db.execute(select(NewsItem).where(NewsItem.url.in_(urls[i:i + 400]))).scalars():
+            for k, v in updates[row.url].items():
+                setattr(row, k, v)
+    ids = list(patches)
+    for i in range(0, len(ids), 400):
+        for row in db.execute(select(NewsItem).where(NewsItem.id.in_(ids[i:i + 400]))).scalars():
+            writer.apply_patch(row, patches[row.id])
+    db.flush()
+
+
+def changes_persisted(db: Session, after_id: int = 0, limit: int = 500) -> list[dict]:
+    """ControlDeck への差分に出す記事: 保存済み（DB にある）ものだけ。バッファの未保存の分は出さない（保存されてから出る）。"""
+    rows = db.scalars(select(NewsItem).where(NewsItem.id > after_id, NewsItem.kind != "event").order_by(NewsItem.id.asc()).limit(max(1, min(limit, 2000)))).all()
+    return [{**item_dict(r), "persisted": True} for r in rows]
+
+
+def _pending_match(item: NewsItem, user_id: int, *, kinds, source: str, topic: str, q: str, day: str, mute: bool) -> bool:
+    """バッファの記事が、一覧の条件（filters と同じ意味）に合うか。"""
+    if item.user_id is not None and item.user_id != user_id:
+        return False
+    if any(item.source_key.startswith(p) for p in sources_mod.HIDDEN_SOURCE_PREFIXES):
+        return False
+    if mute:
+        taste = prefs.taste(user_id)
+        text_ = f"{item.title} {item.summary}"
+        if any(t in text_ for t in taste["mute_terms"]) or item.source in taste["mute_sources"]:
+            return False
+    if kinds and item.kind not in kinds:
+        return False
+    if source and source not in (item.source_key, item.source):
+        return False
+    if topic and topic not in topics_of(item):
+        return False
+    if q.strip():
+        hay = f"{item.title} {item.summary} {item.source}".lower()
+        if not all(t.lower() in hay for t in q.split()[:8]):
+            return False
+    if day:
+        start, end = day_range(day)
+        pub = utc_naive(item.published_at)
+        if not start <= pub < end:
+            return False
+    return True
+
+
+def pending_for(user_id: int, **kw) -> list[NewsItem]:
+    return [p for p in writer.get().pending_items() if _pending_match(p, user_id, **kw)]
+
+
+def prune(db: Session, limit: int | None = None, removed_urls: list[str] | None = None, commit: bool = True) -> int:
     """残す件数（設定のアーカイブ。既定 MAX_ITEMS）を超えた分を古い順に消す（star は残す）。消した件数。
     removed_urls を渡すと、消した記事の URL をそこへ足す（RAG から一緒に消す設定のとき）。"""
     cap = MAX_ITEMS if limit is None else limit
@@ -130,7 +265,8 @@ def prune(db: Session, limit: int | None = None, removed_urls: list[str] | None 
             removed_urls += list(db.scalars(select(NewsItem.url).where(NewsItem.id.in_(ids[i:i + 500]), NewsItem.kind != "event")))
     for i in range(0, len(ids), 500):
         db.execute(delete(NewsItem).where(NewsItem.id.in_(ids[i:i + 500])))
-    db.commit()
+    if commit:
+        db.commit()
     return len(ids)
 
 
@@ -213,7 +349,7 @@ def present(item: NewsItem, state: dict, score: float | None = None) -> dict:
            "url": url, "summary": item.summary_ja or item.summary,
            "image_url": safe_url(item.image_url),
            "published_at": iso(item.published_at),
-           "topics": topics_of(item), "state": state}
+           "topics": topics_of(item), "state": state, "persisted": not getattr(item, "_unsaved", False)}
     if item.summary_ja:      # 訳した概要を summary に出し、元の抜粋は開いたとき見られるよう別に持つ
         row["translated"], row["summary_original"] = True, item.summary
     if score is not None:
@@ -234,12 +370,15 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
         conds.append(action_exists(user_id, "star"))
     elif not searching:
         conds.append(not_(action_exists(user_id, "hide")))
+    pend_kw = dict(kinds=kinds, source=source, topic=topic, q=q, day=day, mute=not searching)
+    pend = [] if view == "starred" else pending_for(user_id, **pend_kw)      # まだ書いていない記事（操作が付かないので、星は無い）
     if channel is not None:
-        return _channel_page(db, user_id, channel, conds, view=view, before=before, limit=limit, now=now)
+        return _channel_page(db, user_id, channel, conds, view=view, before=before, limit=limit, now=now, pend=pend)
     if view == "recommended" and not searching:
         since = utc_naive(now - timedelta(days=RECOMMEND_WINDOW_DAYS))
-        rows = db.scalars(select(NewsItem).where(*conds, NewsItem.published_at >= since)
-                          .order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(RECOMMEND_CANDIDATES)).all()
+        rows = [writer.get().effective(r) for r in db.scalars(select(NewsItem).where(*conds, NewsItem.published_at >= since)
+                          .order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(RECOMMEND_CANDIDATES)).all()]
+        rows = sorted([*rows, *[p for p in pend if utc_naive(p.published_at) >= since]], key=lambda r: (utc_naive(r.published_at), r.id), reverse=True)[:RECOMMEND_CANDIDATES]
         st = states(db, user_id, [r.id for r in rows])
         ranked = profile.rank(db, user_id, rows, st, now)
         offset = int(before[2:]) if before.startswith("o:") and before[2:].isdigit() else 0
@@ -253,7 +392,16 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
             conds.append(or_(NewsItem.published_at < cut, and_(NewsItem.published_at == cut, NewsItem.id < int(last or 0))))
         except ValueError:
             pass
-    rows = db.scalars(select(NewsItem).where(*conds).order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(limit + 1)).all()
+    rows = [writer.get().effective(r) for r in db.scalars(select(NewsItem).where(*conds).order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(limit + 1)).all()]
+    if pend:
+        if before:
+            stamp, _, last = before.partition("|")
+            try:
+                cut = utc_naive(datetime.fromisoformat(stamp.replace("Z", "+00:00")))
+                pend = [p for p in pend if (utc_naive(p.published_at), p.id) < (cut, int(last or 0))]
+            except ValueError:
+                pass
+        rows = sorted([*rows, *pend], key=lambda r: (utc_naive(r.published_at), r.id), reverse=True)[:limit + 1]
     more = len(rows) > limit
     rows = rows[:limit]
     st = states(db, user_id, [r.id for r in rows])
@@ -264,12 +412,14 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
 CHANNEL_CANDIDATES = 1500
 
 
-def _channel_page(db: Session, user_id: int, channel: dict, conds: list, *, view: str, before: str, limit: int, now: datetime) -> dict:
+def _channel_page(db: Session, user_id: int, channel: dict, conds: list, *, view: str, before: str, limit: int, now: datetime, pend: list | None = None) -> dict:
     """チャンネルの記事。語の判定は Python で行うので、新しい順の候補（最大 1500 件）から選ぶ。ページは o:<位置>。"""
     since = utc_naive(now - timedelta(days=RECOMMEND_WINDOW_DAYS * 2))
-    rows = [r for r in db.scalars(select(NewsItem).where(*conds, NewsItem.published_at >= since)
-                                  .order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(CHANNEL_CANDIDATES))
+    rows = [writer.get().effective(r) for r in db.scalars(select(NewsItem).where(*conds, NewsItem.published_at >= since)
+                                  .order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(CHANNEL_CANDIDATES))]
+    rows = [r for r in [*rows, *[p for p in (pend or []) if utc_naive(p.published_at) >= since]]
             if channels_mod.matches(channel, kind=r.kind, source_key=r.source_key, title=r.title, summary=r.summary or "")]
+    rows.sort(key=lambda r: (utc_naive(r.published_at), r.id), reverse=True)
     st = states(db, user_id, [r.id for r in rows])
     scored = profile.rank(db, user_id, rows, st, now) if view == "recommended" else [(r, None) for r in rows]
     offset = int(before[2:]) if before.startswith("o:") and before[2:].isdigit() else 0
@@ -296,6 +446,17 @@ def set_action(db: Session, user_id: int, item_id: int, action: str, on: bool = 
         db.delete(rows[action])
     db.commit()
     return states(db, user_id, [item_id])[item_id]
+
+
+def set_action_now(user_id: int, item_id: int, action: str, on: bool = True) -> dict | None:
+    """利用者の操作を即時に書く（Write Coordinator 経由）。操作先の記事がまだ未保存なら、先にバッファを書く（外部キーの行を先に作る）。"""
+    def do():
+        coord = writer.get()
+        if coord.has_pending_id(item_id):
+            coord._flush("action")  # noqa: SLF001
+        with news_db.session() as db:
+            return set_action(db, user_id, item_id, action, on)
+    return writer.run("news.action", do)
 
 
 # ---- アーカイブ・話題の動き ----

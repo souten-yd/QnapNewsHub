@@ -5,6 +5,7 @@ import { useToasts } from "../../stores";
 import { Card, field, ghost, primary } from "./settingsUi";
 
 const label = "block text-xs text-zinc-500";
+const REST_MODES: Record<string, string> = { keep_memory: "集め続けてメモリに保持", stop_all: "集める・分析・保存をすべて休む", flush_at_limit: "集め続けて上限のときだけ一括で保存" };
 const PURPOSE_LABEL: Record<string, string> = { prep: "下ごしらえ", digest: "まとめ", gist: "一言要約" };
 
 /** OpenRouter のモデル名の入力（無料のモデルは :free で終わる）。一覧は取らない（ニュースハブは外へ余計に通信しない）。 */
@@ -113,6 +114,40 @@ export function NewsRuntimeCards() {
           </>}
           {runDigest.isPending && <span role="status" className="text-xs text-zinc-500">作っています…</span>}
         </div>
+      </Card>
+
+      <Card id="news-rest" title="お休みモード" hint="決めた時間帯は、ディスクへの書き込みを止めて機器を休ませます。既定は切です。">
+        <Toggle label="お休みモードを使う" value={draft.rest.enabled} disabled={dis} onChange={(on) => set({ rest: { ...draft.rest, enabled: on } })} />
+        {data.rest_state?.active && <p role="status" data-testid="rest-active" className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-800 dark:text-amber-300">いまお休み中です{data.rest_state.ends_at ? `（${data.rest_state.ends_at.slice(11, 16)} まで）` : ""}</p>}
+        {draft.rest.enabled && <>
+          <div className="grid grid-cols-2 gap-2">
+            <label className={label}>開始<input type="time" aria-label="お休みの開始" value={draft.rest.start} disabled={dis} onChange={(e) => set({ rest: { ...draft.rest, start: e.target.value } })} className={`${field} mt-1 w-full`} /></label>
+            <label className={label}>終わり<input type="time" aria-label="お休みの終わり" value={draft.rest.end} disabled={dis} onChange={(e) => set({ rest: { ...draft.rest, end: e.target.value } })} className={`${field} mt-1 w-full`} /></label>
+          </div>
+          <fieldset className="space-y-1.5">
+            <legend className="text-xs font-medium text-zinc-500">お休み中の動き</legend>
+            {(Object.entries(data.rest_modes ?? REST_MODES) as [NewsRuntimeSettings["rest"]["mode"], string][]).map(([id, text]) => (
+              <label key={id} className="flex min-h-11 items-center gap-3 rounded-xl border border-zinc-200 px-3 py-2 text-xs dark:border-zinc-700">
+                <input type="radio" name="rest-mode" checked={draft.rest.mode === id} disabled={dis} onChange={() => set({ rest: { ...draft.rest, mode: id } })} className="h-4 w-4 shrink-0" />
+                <span>{text}</span>
+              </label>
+            ))}
+          </fieldset>
+          <p className="rounded-lg border border-amber-500/40 px-3 py-2 text-xs leading-relaxed" data-testid="rest-warning">
+            <b>停電などで電源が切れると、メモリにだけある分は消えます。</b>「メモリに保持」「上限のときだけ保存」では、お休み中に集めた記事が保存されるのはお休みが明けたとき（または上限に達したとき）です。消えても、取得元に残っている記事は次の取得で取り直せます。お休み中も、設定の保存やログインなど、あなたの操作は書き込みます。
+          </p>
+        </>}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={label}>まとめ書きの間隔（分。1〜1440。ふだんの保存）
+            <input type="number" min={1} max={1440} aria-label="まとめ書きの間隔" value={draft.storage.flush_minutes} disabled={dis}
+              onChange={(e) => set({ storage: { ...draft.storage, flush_minutes: num(e.target.value, 1, 1440, 30) } })} className={`${field} mt-1 w-full`} /></label>
+          <label className={label}>まとめ書きの件数の上限（件）
+            <input type="number" min={10} max={100000} aria-label="まとめ書きの件数の上限" value={draft.storage.max_items} disabled={dis}
+              onChange={(e) => set({ storage: { ...draft.storage, max_items: num(e.target.value, 10, 100000, 1000) } })} className={`${field} mt-1 w-full`} /></label>
+        </div>
+        <Toggle label="ログをファイルにも書く（再起動で効く）" hint="既定は切（ログはメモリだけ）。書くと書き込みが増えます" value={draft.storage.log_file} disabled={dis} onChange={(on) => set({ storage: { ...draft.storage, log_file: on } })} />
+        <Toggle label="アクセスのログを出す（再起動で効く）" hint="既定は切" value={draft.storage.access_log} disabled={dis} onChange={(on) => set({ storage: { ...draft.storage, access_log: on } })} />
+        {saveButton}
       </Card>
 
       <KeyCard />

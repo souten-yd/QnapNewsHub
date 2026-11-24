@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import select
 
+from qnapnewshub import writer
 from qnapnewshub import llm, prep, settings, store
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsItem
@@ -90,6 +91,7 @@ def test_prep_batches_30_per_call_saves_and_presents(monkeypatch, keyed):
     assert "30. Title number 29" in first and "31. " not in first             # 1 回目は 30 件ちょうど
     assert server.calls[0]["model"] == llm.DEFAULT_MODEL and server.calls[0]["reasoning"] == {"enabled": False}
     assert prep.calls_today() == 2 and llm.stats()["total"] == 2
+    writer.flush("test")      # まとめ書きの前の分は、保存してから DB で確かめる
     with news_db.session() as db:
         row = db.get(NewsItem, ids[0])
         assert row.summary_ja.startswith("新しい GPU") and row.title == "Title number 0 of the day" and row.img_prompt.startswith("a graphics card")
@@ -132,6 +134,7 @@ def test_prep_checks_each_article_and_resends_only_the_failures_once_stricter(mo
     assert len(sent) == 2 and out["calls"] == 2 and out["done"] == 3
     assert prep.STRICT.strip() not in sent[0] and prep.STRICT.strip() in sent[1]                # 送り直しだけ強めた指示
     assert "Title number 1 of the day" in sent[1] and "Title number 2 of the day" in sent[1] and "Title number 0 of the day" not in sent[1]
+    writer.flush("test")      # まとめ書きの前の分は、保存してから DB で確かめる
     with news_db.session() as db:
         got = {r.id: r for r in db.scalars(select(NewsItem))}
     assert got[ids[1]].prep_tries == 1 and got[ids[1]].summary_ja == "" and got[ids[2]].summary_ja.startswith("新しい GPU")
@@ -140,6 +143,7 @@ def test_prep_checks_each_article_and_resends_only_the_failures_once_stricter(mo
     server.answer_fn = lambda messages, n: chat("not json")
     run(prep.run([]))
     run(prep.run([]))
+    writer.flush("test")
     with news_db.session() as db:
         assert db.get(NewsItem, ids[1]).prep_tries == prep.MAX_TRIES
     before = len(server.calls)

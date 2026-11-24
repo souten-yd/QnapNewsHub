@@ -11,25 +11,41 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from qnapnewshub import __version__, auth_router, router, service
+from qnapnewshub import __version__, auth_router, diag_router, logbuf, metrics, router, service, settings, writer
 
 logger = logging.getLogger("qnapnewshub.main")
 
 
+async def sampler() -> None:
+    """5 分ごとに、プロセスの I/O・CPU・メモリを 1 点とる（診断。読むだけ）。日が変わったら前日の要約を 1 回だけ保存する。"""
+    while True:
+        try:
+            await asyncio.to_thread(metrics.sample)
+            await asyncio.to_thread(metrics.flush_daily)
+        except Exception:  # noqa: BLE001
+            logger.exception("診断の数値をとれませんでした")
+        await asyncio.sleep(metrics.SAMPLE_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = None
+    logbuf.install(file_log=bool(settings.load()["storage"]["log_file"]))
+    metrics.sample()
+    tasks = [asyncio.create_task(sampler())]
     if os.environ.get("NEWSHUB_AUTO") != "0":
-        task = asyncio.create_task(service.news_loop())
+        tasks.append(asyncio.create_task(service.news_loop()))
     try:
         yield
     finally:
-        if task is not None:
+        for task in tasks:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+        # 正常な停止（SIGTERM など）: バッファを書いてから終わる
+        info = await asyncio.to_thread(writer.shutdown)
+        logger.info("停止: 未保存の分を保存しました %s", {k: info.get(k) for k in ("items", "updates", "patches", "fetchlog", "ok")} if info else "（なし）")
 
 
 def web_dir() -> Path | None:
@@ -75,6 +91,7 @@ def create_app() -> FastAPI:
 
     api.include_router(auth_router.router)
     api.include_router(router.router)
+    api.include_router(diag_router.router)
     app.include_router(api)
     root = web_dir()
     if root is not None:

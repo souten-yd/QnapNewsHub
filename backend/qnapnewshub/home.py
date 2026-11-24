@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from qnapnewshub import channels as ch
 from qnapnewshub.db import NewsAction, NewsItem
-from qnapnewshub import profile, store
+from qnapnewshub import profile, store, writer
 
 _UTC = timezone.utc
 CANDIDATES = 800
@@ -36,8 +36,10 @@ def build(db: Session, user_id: int, now: datetime | None = None) -> dict:
     conds.append(not_(store.action_exists(user_id, "hide")))
     conds.append(NewsItem.kind != "event")
     since = store.utc_naive(now - timedelta(days=store.RECOMMEND_WINDOW_DAYS))
-    rows = db.scalars(select(NewsItem).where(*conds, NewsItem.published_at >= since)
-                      .order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(CANDIDATES)).all()
+    rows = [writer.get().effective(r) for r in db.scalars(select(NewsItem).where(*conds, NewsItem.published_at >= since)
+                      .order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(CANDIDATES)).all()]
+    pend = [p for p in store.pending_for(user_id, kinds=None, source="", topic="", q="", day="", mute=True) if p.kind != "event" and store.utc_naive(p.published_at) >= since]
+    rows = sorted([*rows, *pend], key=lambda r: (store.utc_naive(r.published_at), r.id), reverse=True)[:CANDIDATES]      # まだ書いていない新着も（persisted:false の印つき）
     st = store.states(db, user_id, [r.id for r in rows])
     ranked = profile.rank(db, user_id, rows, st, now)
 
@@ -65,6 +67,7 @@ def build(db: Session, user_id: int, now: datetime | None = None) -> dict:
 
     today_start, _ = store.day_range(now.astimezone(store.local_tz()).strftime("%Y-%m-%d"))
     today_count = db.scalar(select(func.count(NewsItem.id)).where(store.visible(user_id), NewsItem.kind != "event", NewsItem.published_at >= today_start)) or 0
+    today_count += sum(1 for p in pend if store.utc_naive(p.published_at) >= today_start)
     opened = db.execute(select(NewsAction.at, NewsItem).join(NewsItem, NewsItem.id == NewsAction.item_id).where(
         NewsAction.user_id == user_id, NewsAction.action == "open", NewsAction.at >= store.utc_naive(now - timedelta(days=30)), NewsItem.kind != "event")).all()
     read_today = len({item.id for at, item in opened if at >= today_start})
@@ -100,7 +103,9 @@ def _csv_cell(value: object) -> str:
 
 def export_rows(db: Session, user_id: int, channel: dict | None = None, limit: int = 100_000) -> list[dict]:
     conds = [store.visible(user_id), NewsItem.kind != "event"]
-    rows = db.scalars(select(NewsItem).where(*conds).order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(limit)).all()
+    rows = [writer.get().effective(r) for r in db.scalars(select(NewsItem).where(*conds).order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(limit)).all()]
+    rows = sorted([*rows, *[p for p in store.pending_for(user_id, kinds=None, source="", topic="", q="", day="", mute=False) if p.kind != "event"]],
+                  key=lambda r: (store.utc_naive(r.published_at), r.id), reverse=True)[:limit]
     if channel is not None:
         rows = [r for r in rows if ch.matches(channel, kind=r.kind, source_key=r.source_key, title=r.title, summary=r.summary or "")]
     starred = set(db.scalars(select(NewsAction.item_id).where(NewsAction.user_id == user_id, NewsAction.action == "star")))

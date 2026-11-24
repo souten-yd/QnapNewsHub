@@ -9,6 +9,7 @@ import { LoginPage, SetupPage } from "./pages/Auth";
 import NewsPage from "./pages/News";
 import NewsSourcesPage from "./pages/NewsSources";
 import SettingsPage from "./pages/Settings";
+import DiagnosticsPage from "./pages/Diagnostics";
 
 /** 状態（管理者がいるか・ログイン中か）で、最初の管理者を作る画面・ログイン・本体を切り替える。 */
 export default function App() {
@@ -38,6 +39,7 @@ export default function App() {
       <Route element={<AppLayout username={status.data.username ?? ""} />}>
         <Route path="/" element={<NewsPage />} />
         <Route path="/sources" element={<NewsSourcesPage />} />
+        <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

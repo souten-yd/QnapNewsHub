@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
+from qnapnewshub import writer
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsAction, NewsItem
 from qnapnewshub import profile, service, sources, store
@@ -223,6 +224,7 @@ def test_one_failing_source_does_not_stop_others(monkeypatch):
     assert not by["boom"]["ok"] and "HTTP 500" in by["boom"]["error"]
     assert not by["slow"]["ok"] and "以内" in by["slow"]["error"]
     assert by["skip"]["ok"] and "キー" in by["skip"]["skipped"]
+    writer.flush("test")      # まとめ書きの前の分は、保存してから DB で確かめる
     with news_db.session() as db:
         assert db.scalar(select(NewsItem.url)) == "https://a.test/ok"
 

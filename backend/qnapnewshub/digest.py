@@ -23,7 +23,7 @@ from sqlalchemy import func, select
 
 from qnapnewshub import channels as channels_mod
 from qnapnewshub import db as news_db
-from qnapnewshub import llm, settings, store
+from qnapnewshub import llm, rest, settings, store, writer
 from qnapnewshub.db import NewsAction, NewsDigest, NewsItem
 
 logger = logging.getLogger("qnapnewshub.digest")
@@ -179,6 +179,10 @@ def _exists(period: str, day: str) -> bool:
 
 
 def _save(period: str, day: str, *, body: str, ids: list[int], model: str, error: str, fallback: bool) -> dict:
+    return writer.run("digest.save", lambda: _save_now(period, day, body=body, ids=ids, model=model, error=error, fallback=fallback), user=False)
+
+
+def _save_now(period: str, day: str, *, body: str, ids: list[int], model: str, error: str, fallback: bool) -> dict:
     with news_db.session() as db:
         row = db.scalar(select(NewsDigest).where(NewsDigest.period == period, NewsDigest.day == day))
         if row is None:
@@ -214,6 +218,7 @@ async def generate(period: str, day: str, *, now: datetime | None = None) -> dic
         focus = cfg["llm"]["digest_focus"]
 
         def collect():
+            writer.flush("digest")      # まだ書いていない新着もまとめに入れる（保存してから集める）
             with news_db.session() as db:
                 return gather(db, period, now, focus)
 
@@ -258,6 +263,8 @@ async def generate(period: str, day: str, *, now: datetime | None = None) -> dic
 
 async def run_due(now: datetime | None = None) -> list[dict]:
     """予定の時刻を過ぎていて、まだ作っていない（失敗の行も「作った」に数える）まとめを作る。見張りが 1 分ごとに呼ぶ。"""
+    if rest.blocks_analysis():
+        return []
     local = now or datetime.now()
     cfg = settings.load()
     due = settings.due_digests(cfg, local)

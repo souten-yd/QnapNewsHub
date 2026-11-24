@@ -81,24 +81,51 @@ def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+_mem: dict[str, dict] = {}       # 置き場ごとの、今日の回数（メモリが正。ファイルへは Write Coordinator がまとめて書く）
+MODEL_STATS: dict[str, dict] = {}      # モデルごとの成功・失敗・429・時間（メモリだけ。診断が見る）
+USE_BY_PURPOSE_MODEL: dict[str, int] = {}
+
+
+def _fresh() -> dict:
+    return {"day": _today(), "prep": 0, "digest": 0, "gist": 0, "failed": 0, "last_error": ""}
+
+
 def _read() -> dict:
-    try:
-        raw = json.loads(_counter_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        raw = {}
-    if not isinstance(raw, dict) or raw.get("day") != _today():
-        return {"day": _today(), "prep": 0, "digest": 0, "gist": 0, "failed": 0, "last_error": ""}
+    key = str(_counter_path())
+    raw = _mem.get(key)
+    if raw is None:
+        try:
+            raw = json.loads(_counter_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = {}
+        _mem[key] = raw if isinstance(raw, dict) else {}
+        raw = _mem[key]
+    if raw.get("day") != _today():
+        raw = _mem[key] = _fresh()
     return raw
 
 
 def _write(raw: dict) -> None:
+    """回数はメモリに持ち、ファイルへはまとめ書きのときに（最後の値を）書く。"""
+    from qnapnewshub import writer
+
     path = _counter_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(raw, handle, ensure_ascii=False)
-    os.replace(tmp, path)
+    _mem[str(path)] = raw
+    snapshot = json.dumps(raw, ensure_ascii=False)
+
+    def do() -> None:
+        writer.write_file(path, snapshot, name="llm.counter", user=False)
+
+    writer.get().stage_state("llm-calls", do)
+
+
+def note_model(model: str, *, ok: bool, status: int | None = None, ms: int = 0) -> None:
+    """モデルごとの成否（診断）。429 は混み合いの数。"""
+    row = MODEL_STATS.setdefault(model, {"ok": 0, "fail": 0, "rate_limited": 0, "ms_total": 0})
+    row["ok" if ok else "fail"] += 1
+    row["ms_total"] += ms
+    if status == 429:
+        row["rate_limited"] += 1
 
 
 def calls_today(purpose: str | None = None) -> int:
@@ -227,9 +254,16 @@ async def _complete_once(model: str, messages: list[dict], *, max_tokens: int, t
         raise LlmNotAllowed("OpenRouter の鍵が未設定です（設定で入れてください）")
     await _reserve(purpose, daily, per_minute)
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "reasoning": {"enabled": False}}
-    status, text = await _post(body, key)
+    started = _clock()
+    try:
+        status, text = await _post(body, key)
+    except LlmUnavailable:
+        note_model(model, ok=False, ms=int((_clock() - started) * 1000))
+        raise
     if status >= 400:
+        note_model(model, ok=False, status=status, ms=int((_clock() - started) * 1000))
         raise LlmUnavailable(_error_message(status, text))
+    note_model(model, ok=True, status=status, ms=int((_clock() - started) * 1000))
     try:
         data = json.loads(text)
         if isinstance(data, dict) and data.get("error") and not data.get("choices"):      # 200 のまま混み合いを返すことがある

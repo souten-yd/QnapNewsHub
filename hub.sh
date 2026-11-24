@@ -7,6 +7,9 @@
 #   ./hub.sh e2e [args]     画面の E2E（Playwright）。一時の置き場でバックエンドを起こして流す（本物のデータには触れない）。
 #                           ブラウザは PLAYWRIGHT_BROWSERS_PATH のものを使う（install はしない）。撮影は NEWSHUB_SHOTS_DIR にも写す
 #   ./hub.sh run            127.0.0.1:8787 で起動（NEWSHUB_HOST / NEWSHUB_PORT か設定の API で変える）
+#   ./hub.sh install-service   systemd のユーザーの単位 qnapnewshub.service を ~/.config/systemd/user に書いて有効にする（root は使わない。停電のあと自動で起きる）
+#   ./hub.sh uninstall-service 止めて、無効にして、単位を消す（データの置き場は消さない）
+#   ./hub.sh print-service     単位の中身だけを表示する（何も書かない）
 #   ./hub.sh create-admin   最初の管理者を作る（パスワードは対話で入力）
 #   ./hub.sh set-openrouter-key  OpenRouter の鍵を暗号化して保存
 #   ./hub.sh <cli のコマンド>  python -m qnapnewshub.cli へそのまま渡す
@@ -91,8 +94,58 @@ case "$cmd" in
     cd "$ROOT/backend"
     exec "$PY" -m qnapnewshub.cli run
     ;;
+  print-service|install-service|uninstall-service)
+    UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    UNIT="$UNIT_DIR/qnapnewshub.service"
+    unit_text() {
+      # 停止の合図（SIGTERM）でバッファを書き切る時間を TimeoutStopSec に取る。ログは journal へ（標準出力は捨てる）
+      cat <<UNIT_EOF
+[Unit]
+Description=QNAP News Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$ROOT/backend
+ExecStart=$PY -m qnapnewshub.cli run
+Environment=${NEWSHUB_DATA:+"NEWSHUB_DATA=$NEWSHUB_DATA"}
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=120
+StandardOutput=null
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
+UNIT_EOF
+    }
+    case "$cmd" in
+      print-service) unit_text | sed '/^Environment=$/d' ;;
+      install-service)
+        need_venv
+        command -v systemctl >/dev/null || { echo "systemd が見つかりません" >&2; exit 1; }
+        [ "$(id -u)" -ne 0 ] || { echo "root では入れません（ふつうの利用者で実行してください）" >&2; exit 1; }
+        mkdir -p "$UNIT_DIR"
+        unit_text | sed '/^Environment=$/d' > "$UNIT"
+        systemctl --user daemon-reload
+        systemctl --user enable --now qnapnewshub.service
+        echo "入れました: $UNIT"
+        echo "ログイン前から動かすには: loginctl enable-linger \$USER（あとで利用者が実行）。状態: systemctl --user status qnapnewshub.service"
+        ;;
+      uninstall-service)
+        systemctl --user disable --now qnapnewshub.service 2>/dev/null || true
+        rm -f -- "$UNIT"
+        systemctl --user daemon-reload 2>/dev/null || true
+        echo "外しました（データの置き場は残しています）"
+        ;;
+    esac
+    ;;
   help|-h|--help)
-    sed -n '2,16p' "${BASH_SOURCE[0]}"
+    sed -n '2,19p' "${BASH_SOURCE[0]}"
     ;;
   *)
     need_venv

@@ -17,6 +17,7 @@ import httpx
 import pytest
 from sqlalchemy import delete
 
+from qnapnewshub import writer
 from qnapnewshub import channels, home, images, presets, prefs, router, sources, store
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsAction, NewsItem
@@ -109,6 +110,7 @@ def test_fill_only_new_items_without_image_and_never_retries(monkeypatch):
     monkeypatch.setattr(images, "fetch_page_image", fake)
     out = asyncio.run(images.fill([a, b, c, d]))
     assert out["tried"] == 3 and out["found"] == 1 and sorted(calls) == ["https://a.test/1", "https://a.test/2", "https://a.test/5"]
+    writer.flush("test")      # まとめ書きの前の分は、保存してから DB で確かめる
     with news_db.session() as db:
         rows = {r.id: r for r in db.query(NewsItem)}
     assert rows[a].image_url == "https://i.test/a.png" and rows[a].image_tried and rows[b].image_url is None and rows[b].image_tried
@@ -161,6 +163,7 @@ def test_site_logo_shared_by_two_articles_is_dropped_but_other_domains_kept():
     i1 = add("https://gen.test/1", title="i1", image=gen)
     i2 = add("https://gen.test/2", title="i2", image=gen)
     assert images.drop_logos() == 4
+    writer.flush("test")      # まとめ書きの前の分は、保存してから DB で確かめる
     with news_db.session() as db:
         rows = {r.id: r for r in db.query(NewsItem)}
     assert rows[a].image_url is None and rows[b].image_url is None and rows[a].image_tried
@@ -190,6 +193,7 @@ def test_google_news_items_resolve_to_original_url_for_the_image(monkeypatch):
     monkeypatch.setattr(images, "fetch_page_image", fake_fetch)
     out = asyncio.run(images.fill([ok, fail]))
     assert out["tried"] == 2 and out["found"] == 1 and fetched == ["https://real.test/article"]
+    writer.flush("test")      # まとめ書きの前の分は、保存してから DB で確かめる
     with news_db.session() as db:
         rows = {r.id: r for r in db.query(NewsItem)}
     assert rows[ok].image_url == "https://real.test/og.png" and rows[ok].url == gnews_url

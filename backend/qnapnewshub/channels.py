@@ -18,6 +18,7 @@ import json
 import re
 from urllib.parse import quote
 
+from qnapnewshub import writer
 from qnapnewshub.config import data_dir
 from qnapnewshub import sources as sources_mod
 from qnapnewshub.sources import ConfigError
@@ -143,11 +144,7 @@ def load() -> dict:
 
 def save(raw: object) -> dict:
     cfg = normalize(raw)
-    path = _path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(path)
+    writer.write_file(_path(), json.dumps(cfg, ensure_ascii=False, indent=1), name="channels.save", mode=0o644)
     return cfg
 
 

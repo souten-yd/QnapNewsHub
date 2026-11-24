@@ -25,11 +25,9 @@ class SecretError(RuntimeError):
 
 
 def _write_private(path, data: bytes) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(data)
-    os.replace(tmp, path)
+    from qnapnewshub import writer
+
+    writer.write_file(path, data, name="secretbox.write")
 
 
 def _key() -> bytes:

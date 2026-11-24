@@ -10,6 +10,7 @@ import os
 import re
 import threading
 
+from qnapnewshub import writer
 from qnapnewshub.config import data_dir
 from qnapnewshub.sources import ConfigError
 
@@ -127,11 +128,5 @@ def save(user_id: int, raw: object) -> dict:
     with _lock:
         everything = _all()
         everything[str(user_id)] = prefs
-        path = _path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(everything, handle, ensure_ascii=False)
-        os.replace(tmp, path)
+        writer.write_file(_path(), json.dumps(everything, ensure_ascii=False), name="prefs.save")
     return prefs

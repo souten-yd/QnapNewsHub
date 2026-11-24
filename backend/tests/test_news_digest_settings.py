@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import delete, select
 
+from qnapnewshub import writer
 from qnapnewshub import digest, gist, llm, service, settings, store
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsDigest, NewsItem
@@ -105,6 +106,7 @@ def test_gist_is_off_by_default_and_adds_gist_and_topics_when_on(monkeypatch):
     cfg["llm"]["gist_enabled"] = True
     settings.save(cfg)
     assert run(gist.enrich(rows))["done"] == 1
+    writer.flush("test")      # まとめ書きの前の分は、保存してから DB で確かめる
     with news_db.session() as db:
         row = db.get(NewsItem, first)
         assert row.gist == "新しいモデルが出た" and "量子化" in row.topics
