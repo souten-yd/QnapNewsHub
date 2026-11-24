@@ -5,8 +5,11 @@ import { api } from "./client";
 export interface LinkPeer { id: number; name: string; fingerprint: string; created_at: string; last_seen_at: string; revoked: boolean }
 export interface LinkSecret { name: string; received_at: string; peer_id: number; peer: string; present: boolean }
 export interface LinkJobs { queued: number; leased: number; expired: number; dead: number; done_24h: number; queued_by_kind: Record<string, number> }
+/** この機器の LAN の URL の候補と、発見の応答（UDP）の状態。127.0.0.1 待ち受けなら urls は空。 */
+export interface LinkLan { lan: boolean; discovery_port: number; answering: boolean; urls: string[] }
 export interface LinkStatus {
   fingerprint: string; peers: LinkPeer[]; secrets: LinkSecret[]; pairing: { expires_at: string; wrong: number } | null; jobs: LinkJobs; allowed_secrets: string[];
+  lan: LinkLan;
 }
 export interface PairingStart { code: string; expires_at: string; expires_in: number; fingerprint: string; public_key: string }
 

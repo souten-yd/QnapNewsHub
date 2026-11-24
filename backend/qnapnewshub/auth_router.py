@@ -111,6 +111,7 @@ class HubSettings(BaseModel):
     host: str = Field(default="127.0.0.1", max_length=20)
     port: int = Field(default=8787, ge=1, le=65535)
     cookie_secure: bool = False
+    discovery_port: int = Field(default=8788, ge=0, le=65535)
 
 
 @router.get("/hub")

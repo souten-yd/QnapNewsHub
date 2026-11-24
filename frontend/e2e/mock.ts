@@ -194,6 +194,7 @@ const EVENT_DETAIL: EventDetail = { ...EVENTS[0], hours_since_first: 4, origins:
 export const LINK_BASE: LinkStatus = {
   fingerprint: "1a2b-3c4d-5e6f-7a8b-9c0d", peers: [], secrets: [], pairing: null, allowed_secrets: ["openrouter"],
   jobs: { queued: 0, leased: 0, expired: 0, dead: 0, done_24h: 0, queued_by_kind: {} },
+  lan: { lan: true, discovery_port: 8788, answering: true, urls: ["http://192.0.2.10:8787", "http://198.51.100.7:8787"] },      // 文書用のアドレス（TEST-NET）
 };
 export const LINK_PEERS: LinkStatus["peers"] = [
   { id: 2, name: "見本の ControlDeck（書斎の PC。とても長い名前でも折り返して 320px に収まること）", fingerprint: "aaaa-bbbb-cccc-dddd-eeee", created_at: ago(30), last_seen_at: ago(0.1), revoked: false },
@@ -357,7 +358,7 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     }
     if (is("POST", "/auth/logout")) { state.authenticated = false; return json(route, { ok: true }); }
     if (!state.authenticated) return json(route, { detail: "ログインしてください" }, 401);
-    if (is("GET", "/auth/hub")) return json(route, { host: "127.0.0.1", port: 8787, cookie_secure: false });
+    if (is("GET", "/auth/hub")) return json(route, { host: "127.0.0.1", port: 8787, cookie_secure: false, discovery_port: 8788 });
     if (is("PUT", "/auth/hub")) return json(route, { ...(body as object), restart_needed: true });
 
     if (is("GET", "/analytics/filters")) return json(route, ANA_FILTERS);

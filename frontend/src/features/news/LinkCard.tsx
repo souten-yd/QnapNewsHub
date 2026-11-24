@@ -41,6 +41,15 @@ export function LinkCard() {
             <p className="text-xs text-zinc-500">ニュースハブの公開鍵の指紋（ControlDeck の画面に出る指紋と同じか、目で確かめてください）</p>
             <p data-testid="link-fingerprint" className="num mt-1 break-all font-mono text-base font-semibold tracking-wide">{s.fingerprint}</p>
           </div>
+          <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-700" data-testid="link-lan">
+            <p className="text-xs text-zinc-500">この機器の LAN の URL（ControlDeck の「ハブの URL」に写せます）</p>
+            {s.lan.urls.length > 0 ? (
+              <ul className="mt-1 space-y-1">
+                {s.lan.urls.map((u) => <li key={u} data-testid="link-lan-url" className="break-all font-mono text-sm font-semibold select-all">{u}</li>)}
+              </ul>
+            ) : <p className="mt-1 text-xs text-zinc-500" data-testid="link-lan-none">いまは 127.0.0.1 だけで待ち受けています（設定の「待ち受け」で LAN に出すと、ここに出ます）。</p>}
+            {s.lan.urls.length > 0 && <p className="mt-1 text-[11px] text-zinc-500" data-testid="link-lan-note">{s.lan.answering ? `ControlDeck の「探す」には自動で答えます（UDP ${s.lan.discovery_port}）。` : "発見の応答は切です。ControlDeck には上の URL を入れてください。"}</p>}
+          </div>
           {waiting && started ? (
             <div data-testid="link-pairing" className="rounded-xl border border-accent-500/50 bg-accent-500/5 p-3" role="status">
               <p className="text-xs text-zinc-600 dark:text-zinc-300">ControlDeck の「ニュースハブとつなぐ」に、この番号とニュースハブの URL を入れてください。</p>
