@@ -9,3 +9,6 @@ playwright-report/
 *.sqlite3*
 *.key
 .env
+*.egg-info/
+build/
+.pytest_cache/

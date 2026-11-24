@@ -66,6 +66,33 @@ GitHub 等  │   ├ 下ごしらえ（無料の LLM、30 件ずつ、1 日の�
 - 使った回数・失敗の理由を設定の画面に出す。
 - 鍵は暗号化して保存（ニュースハブの置き場の鍵ファイルで。鍵の本文は画面・ログに出さない）。
 
+### 2.5 実装で決めたこと（0.5 段・1 段。2026-11-24）
+**モジュールの形**（`backend/qnapnewshub/`。ControlDeck の `app/news/` から移し、ControlDeck 側の依存を小さな置き換えに）:
+- 核（ほぼそのまま）: `sources`（ソースの設定・整形・取得）・`catalog.json`・`presets`（目録）・`sourcemgr`（取得先の管理）・`fetchlog`（取得の履歴）・`feedgen`（フィードを作る手伝い）・`probe`（通信確認・サイトの発見・一覧の巡回・robots.txt）・`db`（SQLite・WAL）・`fts`（FTS5）・`store`（保存・重複の除去・アーカイブ・一覧・検索）・`images`（og:image・ロゴの除外）・`gnews`（Google ニュースを解く）・`channels`・`prefs`・`profile`（好み・おすすめの順位）・`home`・`topics`・`service`（取得の実行・見張り）。
+- 外部の LLM: `llm`（OpenRouter の chat completions を httpx で直接。回数の上限・混み合いのやり直し・鍵）・`prep`（下ごしらえ）・`gist`（一言要約）・`digest`（日刊・週刊のまとめ）・`settings`。
+- ニュースハブ側で新しく書いたもの: `config`（NEWSHUB_DATA・パスの検査）・`hubconf`（待ち受け）・`egress`・`net`（安全な取得）・`secretbox`（鍵の暗号化）・`auth`・`auth_router`・`router`（/api/v1/news）・`main`・`cli`。
+- 移さなかったもの: reader（リーダー）・imagegen・rag・cpu_llm・ControlDeck の利用者 DB・通知・チャットの題（好みの `use_chat` は既定で切、ニュースハブには会話が無い）。出来事（kind=event）の記録は移さない（読む側の除外だけ残る）。
+- 利用者の自分のリポジトリを隠す仕組み（`HIDDEN_SOURCE_PREFIXES`）は残し、既定は空（公開のリポジトリに利用者名を書かない）。既定のソースは `ggml-org/llama.cpp`・GIGAZINE・Phoronix・Hacker News・Hugging Face・2 つのフォーラム・r/LocalLLaMA（Reddit は鍵が無いので「取得しない」の注記になる）。
+
+**データの置き場**（`NEWSHUB_DATA`、既定 `~/.local/share/qnapnewshub`。0700）: `news/news.sqlite3`（記事・操作・まとめ・取得の履歴）・`news/*.json`（ソース・チャンネル・好み・設定・`llm-calls.json`＝今日の回数）・`auth.sqlite3`（利用者・session・API トークン。ハッシュだけ）・`secrets.json`＋`secret.key`（暗号化した鍵と暗号化の鍵。0600）・`hub.json`（待ち受け）。
+
+**外への取得**（AGENTS.md 7）: すべて `egress`（名前を解決 → 全アドレスが公開か検査 → 検査した IP へ接続。DNS rebinding 対策）。大きさの上限 5MB・時間の上限・リダイレクトは各段を検査（RSS の取得は追わない）・robots.txt を守る・ロボット確認はすり抜けない。
+
+**LLM の使い方**（2.4 の実装）: 30 件ずつ。記事ごとの検査（JSON・番号・概要が日本語か。抜粋が空の記事は概要が空でよい）→ 合わない記事だけ同じ回で 1 回「必ず日本語で」を強めて送り直す → だめなら試行 +1・3 回で諦める。**送れなかった記事（鍵なし・上限・通信失敗）は試行を増やさず、次の取得で拾う**（直近 7 日・試行 3 回未満）。1 日の上限（既定 300 回、まとめ・一言要約も合計に数える）・1 分の上限（既定 10 回、超えそうなら空くまで待つ）・429 などは 20/60/120 秒で最大 3 回。設定の `GET /news/settings` の `llm_stats` に今日の回数（用途別）・失敗の数・直近の理由を出す。鍵が未設定なら下ごしらえ・まとめは「鍵が未設定」で止まる（取得・閲覧は動く。まとめは見出しの一覧にもせず、その回は作らない）。
+
+**認証**: 最初の起動は利用者がいない。`POST /api/v1/auth/setup` か `./hub.sh create-admin` で最初の管理者（利用者がいる間は 409）。cookie の session（HttpOnly・SameSite=Lax・30 日）と ControlDeck 用の API トークン（`nhub_…`・読み取り専用・作った応答で 1 度だけ本体が見える・取り消せる）。書き込み・設定・鍵・トークンの管理は session の管理者だけ。cookie での書き込みは Origin が同じホストのときだけ。ログインの失敗は IP ごとに 5 分で 8 回まで。パスワードは scrypt。待ち受けは既定 127.0.0.1、`PUT /api/v1/auth/hub`（または `NEWSHUB_HOST`）で 0.0.0.0 にできる（再起動で効く）。
+
+**API**（`/api/v1`。画面は 2 段）:
+- 認証なし: `GET /health`・`GET /auth/status`・`POST /auth/setup`・`POST /auth/login`。
+- 認証: `POST /auth/logout`、`GET|POST /auth/tokens`、`DELETE /auth/tokens/{id}`、`GET|PUT /auth/hub`。
+- 読む（session か トークン）: `GET /news/items`・`archive`・`trends`・`profile`・`home`・`channels`・`prefs`・`export`・`settings`・`presets`・`digests`・`digests/{id}`・`sources`・`sources/manage`・`sources/manage/detail`。
+- 書く（session のみ）: `POST /news/refresh`・`items/{id}/action`・`digests/run`・`sources/discover|check|generate|manage/bulk|manage/add`、`PUT /news/sources|channels|prefs|settings|profile/mute`、`GET|PUT|DELETE /news/openrouter-key`（鍵の本文は返さない。入っているかだけ）。
+- ControlDeck の同期の API（`/sync/...`）・ペアリング・封じた鍵の受け取りは 4 段。
+
+### 2.6 1 段で確かめたこと・確かめていないこと
+- 確かめた: `./hub.sh test`（backend 135 件・外への通信と LLM は全部模擬）。`./hub.sh run` で起動し、目録から 4 件の RSS ＋チャンネルの検索（Google ニュース）で 1 回の取得が通り、記事・og:image・取得先ごとの履歴が入ること。鍵が無いので下ごしらえは「鍵が未設定」で止まること。
+- 確かめていない: 実際の OpenRouter への呼び出し（鍵が無い。HTTP の形は模擬で確認）・24 時間の見張りの運用（3 段）・ControlDeck の目録の元になった未マージの版（ControlDeck の `feat/news-feed-catalog`）が本番へ入ったあとの差分・QNAP の機種での動作・Python 3.12 以外。
+
 ## 3. ControlDeck との受け渡し
 
 ### 3.1 つなぐ（ペアリング）
