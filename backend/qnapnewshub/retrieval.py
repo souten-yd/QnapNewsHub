@@ -14,7 +14,7 @@ from datetime import datetime
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from qnapnewshub import kg, kg_view, searchindex
+from qnapnewshub import docstore, kg, kg_view, searchindex
 from qnapnewshub.db import Claim, Document, Entity, EntityAlias, Event, EventArticle, Evidence, NewsDocument, NewsItem, Relationship, ResearchRecord
 from qnapnewshub.entities import normalize_key
 from qnapnewshub.rcache import Budget
@@ -130,15 +130,29 @@ def _doc_seeds(db: Session, q: str, terms: list[str], *, scopes: list[str], doc_
             conds.append(Document.published_at >= kg._naive(since))
         if until:
             conds.append(Document.published_at <= kg._naive(until))
-        scored = []
-        for d in db.scalars(select(Document).where(*conds).limit(500)):
+        scored: dict[int, tuple[float, Document, list[str], str]] = {}
+        for d in db.scalars(select(Document).where(*conds).limit(500)):      # 題の部分一致（短い語・索引が無いとき）
             hit = [t for t in terms if t.casefold() in d.title.casefold()]
-            scored.append((len(hit) / len(terms), d, hit))
-        for sc, d, hit in sorted(scored, key=lambda x: (-x[0], -(x[1].id)))[:limit]:
+            scored[d.id] = (0.8 * len(hit) / len(terms), d, hit, "title")
+        fts = docstore.search_any(db, terms, limit=max(limit * 4, 100))      # 題・要旨の全文（doc_fts。BM25）
+        if fts:
+            top = fts[0][1] or 1.0
+            sc = dict(fts)
+            base = [Document.id.in_(list(sc)), Document.kind.in_(others), Document.sensitivity.in_(scopes)]
+            if since:
+                base.append(Document.published_at >= kg._naive(since))
+            if until:
+                base.append(Document.published_at <= kg._naive(until))
+            for d in db.scalars(select(Document).where(*base)):
+                hit = [t for t in terms if t.casefold() in f"{d.title} {d.abstract}".casefold()]
+                v = 0.9 * sc[d.id] / top
+                if d.id not in scored or scored[d.id][0] < v:
+                    scored[d.id] = (v, d, hit, "fulltext")
+        for sc_, d, hit, via in sorted(scored.values(), key=lambda x: (-x[0], -x[1].id))[:limit]:
             f = _find(d.title, hit)
             out.append({"kind": "document", "id": d.id, "article_id": None, "doc_kind": d.kind, "title": d.title, "url": d.url, "source": d.source, "published_at": kg.iso(d.published_at),
-                        "sensitivity": d.sensitivity, "score": round(0.8 * sc, 4), "bm25": 0.0, "match": {"via": "title", "terms": hit},
-                        "position": {"field": "title", "start": f[0], "end": f[1], "term": f[2], "snippet": d.title[:120]} if f else {}})
+                        "sensitivity": d.sensitivity, "score": round(sc_, 4), "bm25": 0.0, "match": {"via": via, "terms": hit}, "tier": d.tier,
+                        "position": {"field": "title", "start": f[0], "end": f[1], "term": f[2], "snippet": d.title[:120]} if f else {"field": "abstract", "start": None, "end": None, "term": "", "snippet": ""}})
     out.sort(key=lambda r: -r["score"])
     return out[:limit]
 

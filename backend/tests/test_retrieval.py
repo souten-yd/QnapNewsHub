@@ -439,3 +439,18 @@ def test_response_size_is_bounded_and_time_budget_stops_early(client):
         out = kg_view.neighbors(db, [a], depth=3, scopes=["public"], deadline=0.0)
     assert len(out["levels"]) == 1 and out["truncated"] and out["stopped"] == 2      # 1 段目は返し、期限を過ぎたので 2 段目へは行かない
     assert post(client, "/graph/neighbors", {"ids": [a], "budget_ms": 5}).status_code == 422
+
+
+def test_seeds_use_the_abstract_index_for_non_news_documents(client):
+    """目的: ニュース以外の文書（論文など）は、題に語が無くても要旨（doc_fts の全文）に含まれれば種になり、段（tier）も返す。区分の範囲外の文書は出ない。
+    根拠: v0.7 前半の docstore（doc_fts）を使い回す（同じ索引を書き直さない）・v0.6 の 1。"""
+    from qnapnewshub.db import Document
+
+    with news_db.session() as db:
+        db.add(Document(kind="paper", ident="arxiv:2601.55555", title="A study of caches", abstract="We evaluate speculative decoding throughput", sensitivity="public", ai_use="allowed", tier=1))
+        db.add(Document(kind="paper", ident="arxiv:2601.55556", title="Hidden study", abstract="speculative decoding secret", sensitivity="confidential", ai_use="local_only", tier=1))
+        db.commit()
+    items = post(client, "/retrieve/seeds", {"q": "speculative decoding", "kinds": ["document"]}).json()["items"]
+    assert [i["title"] for i in items] == ["A study of caches"] and items[0]["match"]["via"] == "fulltext" and items[0]["tier"] == 1
+    both = post(client, "/retrieve/seeds", {"q": "speculative decoding", "kinds": ["document"], "confidential": True}).json()["items"]
+    assert {i["title"] for i in both} == {"A study of caches", "Hidden study"}

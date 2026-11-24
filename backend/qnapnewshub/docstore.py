@@ -136,6 +136,20 @@ def search(db: Session, q: str, *, kind: str = "", tier: int | None = None, limi
     return list(db.scalars(cond.where(Document.title.like(like, escape="\\") | Document.abstract.like(like, escape="\\")).order_by(Document.id.desc()).limit(limit)))
 
 
+def search_any(db: Session, terms: list[str], *, limit: int = 100) -> list[tuple[int, float]]:
+    """問いの文から取った語（3 文字以上）の、どれかを題・要旨に含む（OR）ニュース以外の文書 [(文書の id, 点数)]（点数の大きい順。点数は BM25 の符号を反転）。
+    v0.6 の種の検索（retrieval.seeds）が使う。索引（doc_fts）が無いときは空（呼ぶ側が題の LIKE で補う）。"""
+    terms = [t for t in terms if len(t) >= 3]
+    if not terms:
+        return []
+    match = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
+    try:
+        rows = db.execute(text(f"SELECT rowid, bm25({DOC_FTS}, 4.0, 1.0) AS r FROM {DOC_FTS} WHERE {DOC_FTS} MATCH :q ORDER BY r LIMIT :k"), {"q": match, "k": limit}).all()
+    except Exception:  # noqa: BLE001 - 索引が無い
+        return []
+    return [(int(i), -float(r)) for i, r in rows]
+
+
 # ---- 段・昇格 ----
 
 def promote(db: Session, doc: Document, to_tier: int, reason: str, now: datetime | None = None) -> bool:
@@ -157,7 +171,7 @@ def promotions(db: Session, doc_id: int, limit: int = 20) -> list[dict]:
 
 def news_tiers(db: Session, article_ids: list[int] | None = None) -> int:
     """ニュースの文書を、いまの状態の段へ上げる（本文を取り出せた→L2・要素の取り出しが済んだ→L3）。冪等。article_ids を渡せばその記事だけ。上げた文書の数を返す。コミットは呼ぶ側。"""
-    now = _now()
+    now = _now().strftime("%Y-%m-%d %H:%M:%S.%f")      # text() の束縛に datetime を直接渡さない（Python 3.12 の非推奨）
     scope = ""
     if article_ids is not None:
         if not article_ids:
