@@ -129,6 +129,8 @@ GitHub 等  │   ├ 下ごしらえ（無料の LLM、30 件ずつ、1 日の�
 - 受け取る範囲: 分野・チャンネル・言語・保存の期間。
 
 ## 4. 配布（Linux → QPKG）
+
+**2026-11-24: QPKG を作った。作り方・入れ方・データの置き場・最初の管理者の一回限りの番号・確かめ方は `docs/QPKG.md`（こちらが正）。**
 - まず Linux（Ubuntu・Debian）で: `pip install` か、自前の起動台本（venv を作る）で動かす。systemd のユーザーの単位も用意。
 - QPKG: Python の実行の部品（python-build-standalone などの持ち運べる Python）と venv と画面の build を 1 つにまとめる。QNAP の CPU（x86_64 か ARM か）で作り分ける。**利用者の QNAP の機種（CPU・メモリ）を確かめてから決める**。Container Station があれば、コンテナのイメージを配る道もある。
 - 更新は ControlDeck と同じく Release の版を見て、画面から。

@@ -1,0 +1,11 @@
+#!/bin/sh
+# QTS の /sbin/setcfg の模擬。setcfg SECTION FIELD VALUE [-f FILE]
+sec="$1"; key="$2"; val="$3"; shift 3
+file=/etc/config/uLinux.conf
+while [ $# -gt 0 ]; do case "$1" in -f) file="$2"; shift 2;; *) shift;; esac; done
+touch "$file"
+awk -v s="$sec" -v k="$key" -v v="$val" '
+  BEGIN{cur=""; done=0; seen=0}
+  /^\[.*\]$/ { if (tolower(cur)==tolower(s) && !done) { print k " = " v; done=1 } cur=substr($0,2,length($0)-2); if (tolower(cur)==tolower(s)) seen=1; print; next }
+  { i=index($0,"="); if (i>0) { kk=substr($0,1,i-1); gsub(/^[ \t]+|[ \t]+$/,"",kk); if (tolower(cur)==tolower(s) && tolower(kk)==tolower(k)) { if(!done){print k " = " v; done=1}; next } } print }
+  END{ if (!done) { if (!seen && s!="") print "[" s "]"; print k " = " v } }' "$file" > "$file.tmp" && mv "$file.tmp" "$file"

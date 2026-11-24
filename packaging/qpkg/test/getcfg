@@ -1,0 +1,13 @@
+#!/bin/sh
+# QTS の /sbin/getcfg の模擬（INI。section が "" なら最初の [ より前）。getcfg SECTION FIELD [-d 既定] [-u] [-f FILE]
+sec="$1"; key="$2"; shift 2
+def=""; up=0; file=/etc/config/uLinux.conf
+while [ $# -gt 0 ]; do case "$1" in -d) def="$2"; shift 2;; -u) up=1; shift;; -f) file="$2"; shift 2;; *) shift;; esac; done
+val=$(awk -v s="$sec" -v k="$key" '
+  BEGIN{cur=""; IGNORECASE=1}
+  /^\[.*\]$/ {cur=substr($0,2,length($0)-2); next}
+  { i=index($0,"="); if(i==0) next; kk=substr($0,1,i-1); gsub(/^[ \t]+|[ \t]+$/,"",kk);
+    if (tolower(cur)==tolower(s) && tolower(kk)==tolower(k)) { v=substr($0,i+1); gsub(/^[ \t]+|[ \t]+$/,"",v); print v; exit } }' "$file" 2>/dev/null)
+[ -n "$val" ] || val="$def"
+[ $up = 1 ] && val=$(echo "$val" | tr a-z A-Z)
+echo "$val"

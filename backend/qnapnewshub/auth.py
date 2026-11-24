@@ -20,6 +20,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request, Response
@@ -119,6 +120,54 @@ def check_new_credentials(username: str, password: str) -> None:
 
 def has_users() -> bool:
     return _db().execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
+
+
+# ---- 最初の管理者の一回限りの番号（QPKG など LAN に出すとき） ----
+# 2026-11-24: QPKG は既定で LAN（0.0.0.0）に待ち受ける。利用者がいない間は誰でも setup できてしまうので、
+# NEWSHUB_SETUP_TOKEN=1 のときは、データの置き場の setup-token.txt（0600）にある番号を知っている人だけが最初の管理者を作れる。
+# QPKG の起動台本は、この番号を QTS のシステムのログ（管理者だけが見られる）にも出す。
+
+SETUP_TOKEN_FILE = "setup-token.txt"
+
+
+def setup_token_required() -> bool:
+    return os.environ.get("NEWSHUB_SETUP_TOKEN", "") == "1"
+
+
+def setup_token_path() -> Path:
+    return data_dir() / SETUP_TOKEN_FILE
+
+
+def ensure_setup_token() -> str | None:
+    """番号が要る設定で、まだ利用者がいなければ番号を用意する（あれば読む）。要らなければ None。"""
+    if not setup_token_required() or has_users():
+        return None
+    path = setup_token_path()
+    if path.is_file():
+        old = path.read_text(encoding="utf-8").strip()
+        if old:
+            return old
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"      # 読み違えやすい 0/O・1/I を除く
+    token = "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
+    writer.write_file(path, token + "\n", name="auth.setup_token", mode=0o600)
+    return token
+
+
+def check_setup_token(given: str | None) -> None:
+    """番号が要る設定なら照合する。合わなければ PermissionError。"""
+    if not setup_token_required():
+        return
+    path = setup_token_path()
+    want = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+    norm = (given or "").strip().upper().replace(" ", "")
+    if not want or not hmac.compare_digest(norm.encode(), want.encode()):
+        raise PermissionError("最初の管理者を作る番号が違います")
+
+
+def clear_setup_token() -> None:
+    path = setup_token_path()
+    if path.exists():
+        writer.run("auth.setup_token_clear", lambda: path.unlink(missing_ok=True))
 
 
 def create_admin(username: str, password: str) -> int:

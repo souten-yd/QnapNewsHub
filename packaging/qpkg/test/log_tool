@@ -1,0 +1,3 @@
+#!/bin/sh
+# QTS の /sbin/log_tool の模擬: -a のあとの文をシステムのログの代わりのファイルに書く
+while [ $# -gt 0 ]; do case "$1" in -a) shift; echo "$*" >> /var/log/qts-system.log; exit 0;; *) shift;; esac; done

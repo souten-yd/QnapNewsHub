@@ -6,6 +6,7 @@
 #   ./hub.sh icons          アイコン（frontend/icons/*.svg → frontend/public/*.png・packaging/qpkg/icons/*.png）を作り直す。PLAYWRIGHT_BROWSERS_PATH のブラウザで描く
 #   ./hub.sh e2e [args]     画面の E2E（Playwright）。一時の置き場でバックエンドを起こして流す（本物のデータには触れない）。
 #                           ブラウザは PLAYWRIGHT_BROWSERS_PATH のものを使う（install はしない）。撮影は NEWSHUB_SHOTS_DIR にも写す
+#   ./hub.sh qpkg           QNAP の QPKG（x86_64）を作る → dist/QnapNewsHub_<版>_x86_64.qpkg（packaging/qpkg/build.sh。podman と QDK を使う）
 #   ./hub.sh run            127.0.0.1:8787 で起動（NEWSHUB_HOST / NEWSHUB_PORT か設定の API で変える）
 #   ./hub.sh install-service   systemd のユーザーの単位 qnapnewshub.service を ~/.config/systemd/user に書いて有効にする（root は使わない。停電のあと自動で起きる）
 #   ./hub.sh uninstall-service 止めて、無効にして、単位を消す（データの置き場は消さない）
@@ -41,6 +42,10 @@ case "$cmd" in
     cd "$ROOT/frontend"
     npm ci --no-audit --no-fund
     exec npm run build
+    ;;
+  qpkg)
+    need_venv
+    exec "$ROOT/packaging/qpkg/build.sh"
     ;;
   icons)
     cd "$ROOT/frontend"

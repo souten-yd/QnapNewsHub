@@ -88,7 +88,7 @@ const IMPORT_ROWS = [
 ];
 
 export interface MockState {
-  authenticated: boolean; setupNeeded: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
+  authenticated: boolean; setupNeeded: boolean; setupTokenRequired?: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
   hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
   /** 画像の無い記事だけの一覧にしたいとき等、一覧を差し替える */
   items: NewsItem[];
@@ -136,7 +136,7 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     state.calls.push({ method, path, body });
     const is = (m: string, p: string | RegExp) => method === m && (typeof p === "string" ? path === p : p.test(path));
 
-    if (is("GET", "/auth/status")) return json(route, { setup_needed: state.setupNeeded, authenticated: state.authenticated, username: state.authenticated ? state.username : null });
+    if (is("GET", "/auth/status")) return json(route, { setup_needed: state.setupNeeded, setup_token_required: Boolean(state.setupNeeded && state.setupTokenRequired), authenticated: state.authenticated, username: state.authenticated ? state.username : null });
     if (is("POST", "/auth/login")) {
       const b = body as { username: string; password: string };
       if (b.password !== "correct-horse-battery") return json(route, { detail: "利用者名かパスワードが違います" }, 401);
