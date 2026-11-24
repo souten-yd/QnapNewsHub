@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-24（v0.3 のニュースハブ側〔feat/link-controldeck〕の後）
+最終更新: 2026-11-25（v0.7 前半〔feat/connectors〕の後）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -34,9 +34,10 @@
 | v0.3 ニュースハブ側（feat/link-controldeck） | **ControlDeck とつなぐ**: ペアリング（6 桁・10 分・総当たり制限・`link.py`）・scope=link のトークン（管理 API 不可。試験が全ルートを調べる）・封じた鍵の受け取り（ECIES・許可は openrouter だけ）・`GET /changes`（trigger の `change_log`・`changes.py`）・仕事の列（`jobs.py`。lease・冪等・期限切れは claim で列へ。作り手は claim のとき）・画像の受け取り（`artifacts.py`。形の検査・hash の重複・AI 生成の印）・調査の記録・つなぐ画面（`LinkCard.tsx`）・診断の「つないだ ControlDeck」。ControlDeck 側は別の PR。DESIGN 3 章・ARCHITECTURE 5 章の「実装と違った点」 |
 | v0.2 後半（feat/search-storage） | **日本語の全文検索**（trigram＋英語 porter の 2 つの索引・BM25・短い語は LIKE・古い DB はバッチで作り直し）・**本文の取り出し**（Trafilatura・robots・Zstandard の BLOB・1 日 200 件・1 分 6 件・取れない記事は二度と試さない・下ごしらえは本文の頭 1,500 文字）・**保存の圧縮**（1 年より古い記事の抜粋を圧縮・索引から外す）・性能の実測（`backend/tools/bench_search.py`）・画面（「本文あり」の印・設定・診断）。ARCHITECTURE 8・9 章の「実装と違った点」・DESIGN 12 章 |
 | v0.5 知識グラフ（feat/knowledge-graph） | **統合の土台として汎用に**: 表 documents・news_documents（記事の対応）・evidences・relationships・entity_notes・entity_cards（`kg.py`・`kg_view.py`・`kg_job.py`・`kg_router.py`）・機密の区分の引き継ぎ（既定は public だけ・confidential は管理者だけ）・LLM の型つきの関係（下ごしらえの同じ 1 回の呼び出しに relations。引用が原文に無ければ「推測」）・co_occurs の集計（夜・回数 3・比 2）・履歴と矛盾（読むときに計算）・知識カード（概要は夜に変化のあった物だけ・メモは別の表に即時保存）・知識の地図（Cytoscape.js 3.33.1・`POST /graph/neighbors`）・Obsidian の書き出し（zip）。試験 351 件・性能 P95 216 ms 以下（10 万件の模擬）。ARCHITECTURE 6 章・DESIGN 13 章 |
+| v0.7 前半（feat/connectors） | **収集の connector の枠組み**（`connectors.py`・種類 feed／api／historical／change／discovery／market・取得の間隔・1 日の件数と通信量の予算・鍵〔任意〕・利用条件の記録〔`connector_terms.py`。未確認は既定で切〕・取得先の管理の「connector」の節）・**保存の段 L0〜L4 と昇格**（`docstore.py`。documents.tier・document_promotions・昇格の規則）・論文の同定（document_aliases）・document_links・Metric の時系列（metric_points）・L0 の検索（doc_fts）・connector: GitHub の発見とスターの急増・HF の新しいモデルと派生版・OpenAlex・Crossref・Semantic Scholar・HN 検索・Sitemap・変化の検出（既存の RSS・Release・arXiv・HN・HF は載せ替え）。試験 376 件。ARCHITECTURE 10 章の続き・DESIGN 14 章 |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
-- 試験: backend 351 件（v0.5 の時点）・E2E 211 件（v0.5 で `knowledge.spec.ts` 20 件を足した）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
+- 試験: backend 376 件（v0.7 前半の時点）・E2E 223 件（v0.5 で 211 件・v0.7 前半で `connectors.spec.ts` 12 件を足した）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
 - 実測（開発の PC）: 待機中の書き込み 0 バイト／10 分、お休み中も 0、常駐 114〜190MB、待機 CPU 0.1〜0.4%。
 - **作業中**: なし（#9 の時点）。
 - まだ無いもの: **本物の ControlDeck とのつなぎ（ControlDeck 側の PR のあと）**・QNAP 実機での確認・長時間の連続運転・QNAP 実機・**本物の LLM での取り出しの質の評価**・本物の LLM でのイベントの要約・解説の質・イベントのしきい値の実データでの調整・一緒に出る分析（v0.5 で集計は済み）・知識グラフ（v0.5 で作った。実データ・本物の LLM での質は未）（分析の画面の「知識の地図」「物のノート」は空き枠だけ）。
@@ -52,7 +53,8 @@
 5. （済）v0.1.1 は Release 済み。残り: 実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
 6. v0.3 の続き: **ControlDeck 側**（ControlDeck のリポジトリ・その決まりの関門と PR）。つなぐ画面・`/changes` の取り込み・仕事を借りる係（埋め込み・要約・取り出し・画像）・鍵を封じて渡す（`link.seal()` が見本）・画像を PUT する。つないだら本物同士で「止めていた間の記事が後でまとめて分析される」を確かめる。
 7. （済）v0.5 知識グラフ（feat/knowledge-graph・2026-11-25）。残り: **本物の LLM で 20 件を 1 回流し、relations を足した出力が上限に収まるか（finish_reason）・引用が原文に出る率・推測の割合を見る**／実データで co_occurs のしきい値と、物の別名寄せの要否を見る／カードの概要の質。続きは v0.6（検索の統合: 局所 PageRank・`/research`。neighbors は済み）。
-8. v0.4・v0.6 以降は PLAN.md の順。
+8. （済）v0.7 前半（feat/connectors・2026-11-25）。残り: **実データで昇格の規則（既定のチャンネルの語は広い）と、1 日の予算の既定を調整**／本物の Semantic Scholar・Crossref・Sitemap・変化の検出を 1 回ずつ確かめる／HF の `filter=base_model:…` の効き／L2 に上がった非ニュースの本文の取得／診断・画面に文書（論文・リポジトリ・モデル）の見方を足す。v0.8 は e-Stat・日銀・国会会議録・e-Gov・EDINET・DefiLlama・CoinGecko・GDELT・Wikidata・PyPI／npm・OSV／NVD（ControlDeck の PLAN-integrated-knowledge 8.5）。
+9. v0.4・v0.6 以降は PLAN.md の順。
 
 
 ## 5. 開発の仕方
@@ -135,3 +137,11 @@
   - 本文はまとめ書きに積む（`writer.stage_body`）。取れた・取れないの記録は 1 日の上限の数え（`bodies.used_today`＝保存済み＋未保存）に入る。再起動で未保存の分が消えると、その記事はまた試される（上限を少し超えうる）。
   - **NHK・BBC は X-Robots-Tag: noarchive を返す**ので、本文は取らない（取れない理由に「保存しない指示」と出る）。これは仕様。
   - 100 万件の索引は約 3GB（trigram が大半）。QNAP の SSD の容量に注意。圧縮（抜粋）では DB は縮まない（VACUUM が要る）。
+
+- **connector（v0.7 前半）**:
+  - 新しい connector を足すとき: `connectors.SPECS` に Spec（種類・既定の予算・設定の既定・鍵の有無・`run` の関数名）、`connector_terms.TERMS` に利用条件（**公式の資料で確かめてから。読めなければ unconfirmed**）、`conn_impl.py` に `async def <名前>(ctx) -> Result`（通信は `ctx.get`/`ctx.json` だけ。結果は `ctx.begin()` の入れ物へ。文書は rec の dict）、`connectors.normalize_settings` に設定の検査。試験は `connectors._http` を差し替える（`tests/test_connectors.py` の `fake`）。ページを取る connector は `conn_impl._robots_rules`（bodies の robots 判定）を通す。
+  - 新しい connector は既定で切。既存の取得を載せ替えたもの（`Spec.adapted`）だけ既定で入。`gate` を通さない取得経路を足さない（`service._fetch_one` が既存の取得、`connectors.run_one` が新しい取得）。
+  - 文書・辺・Metric の書き込みは `writer.stage_connector` → `docstore.apply`（まとめ書き）だけ。識別子は `docstore.paper_idents` で同定（論文は DOI・arXiv ID・OpenAlex・S2）。直接 `Document` を作らない。
+  - 段は上げるだけ（`docstore.promote`）。ニュースの記事の段は `docstore.news_tiers`（本文は body_state・取り出しは extract_v）。extract_v を別の経路で書き換える処理を足したら、writer の `tiered` の集合（patches の `extract_v`）を見る。
+  - テストが既定のチャンネルの語に偶然合って昇格しないよう、`test_connectors.py` の fixture は語による規則（channel・hot・watch）を切にしている。
+  - 秘密: 鍵は `connector.<id>.key`（secretbox）。`ctx.get` が自動で付ける。診断の束・応答に値を出さない（試験あり）。

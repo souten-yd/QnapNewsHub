@@ -308,3 +308,21 @@ ControlDeck 側は別の PR。ここはニュースハブの API・画面・試�
 - 「以前は非対応で最近対応したもの」に答える実データでの確認（PLAN v0.5 の確かめ方）。value の無い主張は比べないので、取り出しが値を返さない対応状況は拾えない。
 - 地図の描画の上限（Cytoscape は点が数百までを想定。1 回の追加は 60 本まで）。実機の iPhone での指の操作。
 - Obsidian での実際の取り込み（リンクが解決する・front matter が読める）。YAML は仕様どおりに作ったが、Obsidian の実機では確かめていない。
+
+
+## 14. v0.7 前半（収集の connector の枠組み・保存の段 L0〜L4・connector）で、確かめたことと確かめていないこと（2026-11-25）
+設計は ARCHITECTURE 10 章の続き。実装は `connectors.py`・`connector_terms.py`・`conn_impl.py`・`docstore.py`・`connectors_router.py`・画面 `ConnectorsPanel.tsx`（取得先の管理の「connector」の節）。
+
+**確かめたこと**
+- 試験 376 件（v0.5 の 351 件＋新しい 25 件。`tests/test_connectors.py`）・build・E2E（`e2e/connectors.spec.ts`。320・1280 × ライト・ダーク）。外部の API は `connectors._http`・`bodies._http` の模擬で、本物の LLM は呼んでいない。
+- 予算（件数・通信量）で止まる／診断に出る／日が変わると戻る・利用条件の無い（未確認の）connector は既定で切・明示がないと入れられない・既存の取得（arXiv など）も入切の下にある・L0〜L4 の移行が冪等・昇格は上げるだけで理由が残る・昇格の規則 5 種・論文の同定（arXiv ID・DOI・OpenAlex・S2 で 1 件）・HF の派生版の一致と量子化の種類・スターの日ごとの差と急増・Sitemap の robots.txt・変化の検出（ETag・hash）・L0 の検索・API の権限と鍵の秘匿・まとめ書きを通る・お休みで止まる。
+- **実走**（一時の置き場・鍵なし。外への取得はこの範囲だけ）: GitHub の検索 1 回（トピック llm・直近 7 日・スター 50 以上・20 件 → 15 件が文書、スターの Metric 15 点。0.8 秒・87KB）・HF 2 回（新しい GGUF 20 件・Qwen/Qwen3-8B の量子化の派生版の問い合わせ。合わせて 1.3 秒・28KB）・OpenAlex 1 回（CS 分野・直近 7 日・25 件。0.7 秒・91KB）・arXiv の RSS 1 回（cs.AI 30 件 → 論文の文書 30 件。0.3 秒）。結果は文書 110 件（model 40・paper 55・repo 15）。
+- 実走で分かったこと: OpenAlex の結果は DOI が Zenodo などの論文以外の登録も多い（type:article で絞ってもプレプリントや記録が混ざる）。HF の派生版の問い合わせは、サーバー側の絞り込みの効きを実走では確かめていない（そのため、返った行を base_model で照合して一致だけを入れる実装にした）。
+
+**確かめていないこと**
+- 実データでの昇格の規則の当たり具合（既定のチャンネルの語は広く、HF の GGUF が大半 L2 に上がった。語の選び方・ホットトピックの語の質は評価が要る）。L2 に上がった非ニュースの文書の本文の取得は未実装。
+- `filter=base_model:<関係>:<id>` がサーバーで効くか。Semantic Scholar の本物・Crossref の本物（実走の対象外）。GitHub の検索の 1,000 件の上限・レート制限（403・429）の挙動は模擬だけ。
+- Sitemap・変化の検出を本物のサイトで。robots.txt の Crawl-delay（標準外）は見ていない。
+- QNAP の負荷・1 日の L0 の件数の目標（最初は 1〜2 万件／日から測る）。このブランチでは測っていない。
+- 診断の画面に connector の専用の欄はまだ無い（problems の文に出る）。文書（論文・リポジトリ・モデル・L0）の画面はまだ無い（API だけ）。
+- 利用条件の記録は 2026-11-25 に公式の資料を読んだ範囲。HN の Algolia（本文を読めなかった）・HF のメタデータ再利用・GitHub の User-Agent 要件・arXiv の RSS の個別ページ・Semantic Scholar の商用の可否は未確認。

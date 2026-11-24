@@ -9,6 +9,7 @@ import { CheckResultView, SiteAdder } from "../features/news/NewsSourceTools";
 import { FeedMaker } from "../features/news/FeedMaker";
 import { PresetPanel } from "../features/news/NewsPresetPanel";
 import { SourceImport } from "../features/news/SourceImport";
+import { ConnectorsPanel } from "../features/news/ConnectorsPanel";
 import { INTERVAL_CHOICES, STATE_LABEL, failRate, intervalLabel, nextLabel, pollLabel, stateOf, type SourceState } from "../features/news/sourceUtil";
 
 /** 取得先の管理（/news/sources）。ニュースの取得先（RSS・Atom・一覧の巡回・GitHub・Steam・arXiv・Reddit など）の一覧・実績・通信確認・有効/無効・間隔・追加と削除。
@@ -127,7 +128,7 @@ export default function NewsSourcesPage() {
   const { bulk, add } = useManageMutations();
   const toast = useToasts((s) => s.show);
   const canEdit = true;      // ニュースハブの利用者はすべて管理者
-  const [tab, setTab] = useState<"list" | "add" | "io">("list");
+  const [tab, setTab] = useState<"list" | "add" | "io" | "connector">("list");
   const [q, setQ] = useState("");
   const [group, setGroup] = useState("");
   const [status, setStatus] = useState<"" | SourceState>("");
@@ -191,10 +192,10 @@ export default function NewsSourcesPage() {
         全 {items.length} 件 · 正常 {counts.ok} · 失敗中 {counts.failing} · 止まっている {counts.stalled} · 無効 {counts.disabled} · 未取得 {counts.waiting}。
         間隔は取得先ごとに決められます（既定 {intervalLabel(data.default_interval)}）。{!data.reddit_key && " Reddit は API キーが無いので取得しません。"}
       </p>
-      <div role="tablist" aria-label="表示" className="flex gap-1.5">
-        {([["list", "取得先の一覧"], ["add", "追加・目録"], ["io", "取り込み・書き出し"]] as const).map(([id, label]) => (
+      <div role="tablist" aria-label="表示" className="flex flex-wrap gap-1.5">
+        {([["list", "取得先の一覧"], ["add", "追加・目録"], ["io", "取り込み・書き出し"], ["connector", "connector"]] as const).map(([id, label]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} data-testid={`news-tab-${id}`}
-            className={`min-h-10 rounded-full border px-4 text-sm ${tab === id ? "border-accent-600 bg-accent-50 font-semibold dark:bg-accent-600/15" : "border-zinc-300 dark:border-zinc-700"}`}>{label}</button>
+            className={`min-h-10 whitespace-nowrap rounded-full border px-3 text-sm sm:px-4 ${tab === id ? "border-accent-600 bg-accent-50 font-semibold dark:bg-accent-600/15" : "border-zinc-300 dark:border-zinc-700"}`}>{label}</button>
         ))}
       </div>
       {tab === "list" && (
@@ -278,6 +279,7 @@ export default function NewsSourcesPage() {
           {canEdit && cfg.data && <SiteAdder config={cfg.data.config} busy={busy} onChange={(next) => save.mutate(next, { onSuccess: () => toast("足しました", "success"), onError: fail })} />}
         </section>
       )}
+      {tab === "connector" && <ConnectorsPanel />}
       {tab === "io" && <SourceImport origins={data.origins} onDone={() => undefined} />}
     </div>
   );

@@ -220,6 +220,66 @@ class Document(Base):
     sensitivity: Mapped[str] = mapped_column(String(12), default="confidential", server_default="confidential", index=True)
     ai_use: Mapped[str] = mapped_column(String(12), default="local_only", server_default="local_only")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # 保存の段（v0.7。docstore.py）: 0 発見（URL・題・日付・ID だけ）・1 概要・書誌・2 本文・3 物・主張・関係・4 詳しい分析。昇格の理由と時刻は最後の 1 回（履歴は document_promotions）
+    tier: Mapped[int] = mapped_column(Integer, default=1, server_default="1", index=True)
+    tier_reason: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    tier_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    abstract: Mapped[str] = mapped_column(Text, default="", server_default="")
+    meta: Mapped[str] = mapped_column(Text, default="", server_default="")      # JSON（著者・引用の数・DOI・量子化の種類など。connector ごと）
+    connector: Mapped[str] = mapped_column(String(40), default="", server_default="")
+
+
+class DocumentAlias(Base):
+    """文書の別の識別子（論文の DOI・arXiv ID・OpenAlex ID・Semantic Scholar ID は同じ論文を指す）。docstore.upsert が同じ論文を 1 件にまとめるのに使う。"""
+
+    __tablename__ = "document_aliases"
+
+    ident: Mapped[str] = mapped_column(String(1100), primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+
+
+class DocumentPromotion(Base):
+    """段の昇格の記録（理由・時刻）。上げるだけで、下げない。"""
+
+    __tablename__ = "document_promotions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    from_tier: Mapped[int] = mapped_column(Integer)
+    to_tier: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(String(160), default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class DocumentLink(Base):
+    """文書どうしの辺（論文の引用 cites など）。物どうしの relationships とは別（文書は物ではない）。"""
+
+    __tablename__ = "document_links"
+    __table_args__ = (UniqueConstraint("src_id", "dst_id", "type", name="uq_document_links"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    src_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    dst_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(16), default="cites")
+    source: Mapped[str] = mapped_column(String(40), default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MetricPoint(Base):
+    """数値の時系列（Metric）。物（subject: 例 repo:owner/name）・指標・値・単位・時刻・出どころ・条件。同じ（物・指標・時刻・出どころ・条件）は 1 点。"""
+
+    __tablename__ = "metric_points"
+    __table_args__ = (UniqueConstraint("subject", "metric", "at", "source", "cond", name="uq_metric_points"), Index("ix_metric_points_series", "subject", "metric", "at"))
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject: Mapped[str] = mapped_column(String(300))
+    metric: Mapped[str] = mapped_column(String(60))
+    value: Mapped[float] = mapped_column(Float)
+    unit: Mapped[str] = mapped_column(String(20), default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(40), default="")
+    cond: Mapped[str] = mapped_column(String(200), default="")      # 条件（例 window=1d）
+    document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class NewsDocument(Base):
@@ -554,9 +614,12 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("news_items", "body_state", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "cold", "INTEGER NOT NULL DEFAULT 0"),
                                         ("claims", "document_id", "INTEGER"), ("claims", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"),
                                         ("claims", "ai_use", "VARCHAR(12) NOT NULL DEFAULT 'allowed'"),
-                                        ("entities", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"), ("entities", "ai_use", "VARCHAR(12) NOT NULL DEFAULT 'allowed'")]
+                                        ("entities", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"), ("entities", "ai_use", "VARCHAR(12) NOT NULL DEFAULT 'allowed'"),
+                                        ("documents", "tier", "INTEGER NOT NULL DEFAULT 1"), ("documents", "tier_reason", "VARCHAR(160) NOT NULL DEFAULT ''"),
+                                        ("documents", "tier_at", "DATETIME"), ("documents", "abstract", "TEXT NOT NULL DEFAULT ''"),
+                                        ("documents", "meta", "TEXT NOT NULL DEFAULT ''"), ("documents", "connector", "VARCHAR(40) NOT NULL DEFAULT ''")]
 # 後から足した索引（既にあるファイルにも足す）
-_LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id")]
+_LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id"), ("documents", "tier")]
 
 _engines: dict[str, Engine] = {}
 _lock = threading.Lock()
@@ -627,6 +690,9 @@ def _open(file: Path) -> Engine:
         from qnapnewshub import changes
 
         changes.install(conn)
+        from qnapnewshub import docstore
+
+        docstore.ensure(conn)
         try:
             ensure_search(conn)
         except Exception as exc:  # noqa: BLE001 - 検索は LIKE に落ちる

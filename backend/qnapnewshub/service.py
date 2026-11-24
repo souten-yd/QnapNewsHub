@@ -9,8 +9,9 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from qnapnewshub import channels, dedup, event_llm, fetchlog, kg_job, gist, images, metrics, polling, prep, rest, settings, sources, store, trend, writer
+from qnapnewshub import channels, connectors, dedup, event_llm, fetchlog, kg_job, gist, images, metrics, polling, prep, rest, settings, sources, store, trend, writer
 from qnapnewshub import db as news_db
+from qnapnewshub import net
 from qnapnewshub.db import NewsItem
 
 logger = logging.getLogger("qnapnewshub.service")
@@ -47,14 +48,23 @@ async def _fetch_one(source: sources.Source, gate: asyncio.Semaphore) -> tuple[s
 
         def ms() -> int:
             return int((time.monotonic() - started) * 1000)
+        cid = connectors.for_source(source.key)
+        box = None
         try:
+            ok, why = connectors.gate(cid)      # connector の入・切・利用条件・1 日の予算（既存の取得もこの枠組みの下）
+            if not ok:
+                raise sources.SkippedSource(why)
+            box = connectors.begin_count()
             items = await asyncio.wait_for(source.fetch(), SOURCE_TIMEOUT_SECONDS)
+            connectors.note_usage(cid, items=len(items), nbytes=box[0], requests=1)
             return source, items, {"label": source.label, "kind": source.kind, "ok": True, "skipped": "", "error": "", "count": len(items), "at": at, "ms": ms(),
                                    "status": 304 if meta.not_modified else 200, "not_modified": meta.not_modified, "conditional": meta.conditional,
                                    "etag": meta.new_etag, "last_modified": meta.new_last_modified}
         except sources.SkippedSource as exc:
             return source, [], {"label": source.label, "kind": source.kind, "ok": True, "skipped": str(exc), "error": "", "count": 0, "at": at, "ms": ms(), "status": None}
         except Exception as exc:  # noqa: BLE001 - 1 つのソースの失敗で他を止めない
+            if box is not None:      # 失敗しても受け取った量は予算に数える
+                connectors.note_usage(cid, nbytes=box[0], requests=1)
             logger.info("ニュースの取得に失敗しました (%s): %s", source.key, exc)
             text = _error_text(exc)
             return source, [], {"label": source.label, "kind": source.kind, "ok": False, "skipped": "", "error": text, "count": 0, "at": at, "ms": ms(),
@@ -155,6 +165,14 @@ async def refresh(*, force: bool = False, channel_ids: list[str] | None = None, 
         gate = asyncio.Semaphore(CONCURRENCY)
         results = await asyncio.gather(*[_fetch_one(s, gate) for s in listing])
         items = [item for _, got, _ in results for item in got]
+        arxiv_items = [i for source, got, _ in results if connectors.for_source(source.key) == "arxiv" for i in got]
+        if arxiv_items:      # arXiv の RSS から論文の文書（L1・arXiv ID で同定）も作る（書誌だけ。まとめ書きに乗る）
+            try:
+                from qnapnewshub import conn_impl
+
+                connectors.note_usage("arxiv", items=conn_impl.stage_arxiv_papers(arxiv_items))
+            except Exception:  # noqa: BLE001 - 論文の文書を作れなくても記事の取得は成功
+                logger.exception("arXiv の論文の文書を作れませんでした")
         saved = await asyncio.to_thread(_save, items)
         resting = rest.blocks_analysis()      # お休み中は、画像・一言要約・下ごしらえをしない（書き込みも通信も増やさない）
         try:     # 画像の無い新着へ、記事のページの og:image を付ける（失敗しても取得は成功）
@@ -243,6 +261,12 @@ async def news_loop() -> None:
                             logger.info("ニュースを取得しました: %s 件のソース・新着 %s 件・失敗 %s 件", len(due), result["new"], result["failed"])
             except Exception:  # noqa: BLE001 - 1 回の失敗で見張りを止めない
                 logger.exception("ニュースの取得に失敗しました")
+            try:      # 新しい connector（発見・API・sitemap・変化の検出）。間隔・予算・入切は connectors が見る
+                if not settings.in_quiet(settings.load(), datetime.now()) and not rest.blocks_fetch():
+                    for cid in await connectors.run_due():
+                        logger.info("connector を実行しました: %s", cid)
+            except Exception:  # noqa: BLE001
+                logger.exception("connector の実行に失敗しました")
             try:
                 for row in ([] if rest.blocks_analysis() else await digest.run_due()):
                     logger.info("ニュースのまとめを作りました: %s %s", row.get("period"), row.get("day"))

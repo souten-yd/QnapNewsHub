@@ -24,6 +24,7 @@ from urllib.parse import quote, urljoin, urlsplit
 
 from qnapnewshub import writer
 from qnapnewshub import net
+from qnapnewshub import connectors
 from qnapnewshub.config import data_dir
 
 logger = logging.getLogger("qnapnewshub.news.sources")
@@ -419,7 +420,7 @@ async def fetch_github(repo: str) -> list[dict]:
 
     try:
         rows = await net.get_json(f"https://api.github.com/repos/{repo}/releases", params={"per_page": 10},
-                                  headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
+                                  headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", **connectors.auth_headers("github")})
     except net.HttpError as exc:
         if exc.status not in (403, 429):      # 上限（認証なしは 1 時間 60 回）なら Atom で取る。ほかの失敗はそのまま
             raise

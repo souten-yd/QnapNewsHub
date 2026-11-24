@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from qnapnewshub import __version__, maintenance, analytics, analytics_router, auth, auth_router, diag_router, entities_router, events_router, kg_router, link_router, logbuf, metrics, router, service, settings, update_router, updater, writer
+from qnapnewshub import __version__, maintenance, analytics, analytics_router, auth, auth_router, diag_router, entities_router, events_router, connectors_router, kg_router, link_router, logbuf, metrics, router, service, settings, update_router, updater, writer
 
 logger = logging.getLogger("qnapnewshub.main")
 
@@ -35,6 +35,22 @@ async def _analytics_ready() -> None:
         logger.exception("分析の集計の表を用意できませんでした")
 
 
+async def _tiers_ready() -> None:
+    """起動の後、既存のニュースの文書を L1〜L3 の段に当てはめる（冪等。済んでいれば何も上がらない）。失敗しても API は動く。"""
+    from qnapnewshub import db as news_db, docstore
+
+    def do() -> int:
+        with news_db.session() as db:
+            n = docstore.migrate(db)
+            db.commit()
+            return n
+
+    try:
+        await asyncio.to_thread(writer.run, "news.tiers", do, user=False)
+    except Exception:  # noqa: BLE001
+        logger.exception("文書の段の移行に失敗しました")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logbuf.install(file_log=bool(settings.load()["storage"]["log_file"]))
@@ -42,7 +58,7 @@ async def lifespan(app: FastAPI):
     token = await asyncio.to_thread(auth.ensure_setup_token)
     if token:      # 番号そのものはログに出さない（置き場のファイルと、QPKG なら QTS のシステムのログで見る）
         logger.warning("最初の管理者を作るには一回限りの番号が要ります（データの置き場の %s）", auth.SETUP_TOKEN_FILE)
-    tasks = [asyncio.create_task(sampler()), asyncio.create_task(_analytics_ready())]
+    tasks = [asyncio.create_task(sampler()), asyncio.create_task(_analytics_ready()), asyncio.create_task(_tiers_ready())]
     if os.environ.get("NEWSHUB_AUTO") != "0":
         tasks.append(asyncio.create_task(service.news_loop()))
         tasks.append(asyncio.create_task(updater.loop()))
@@ -112,6 +128,8 @@ def create_app() -> FastAPI:
     api.include_router(update_router.router)
     api.include_router(analytics_router.router)
     api.include_router(link_router.router)
+    api.include_router(connectors_router.router)
+    api.include_router(connectors_router.documents)
     app.include_router(api)
     root = web_dir()
     if root is not None:

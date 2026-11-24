@@ -23,6 +23,6 @@
 | v0.4 トレンドと分析の画面 | ホットトピック（点数）・推移・ヒートマップ・一緒に出る分析・日次の報告・ECharts | 実データの 1 週間で上位が一般語にならないこと | 一部 済（前倒し・2026-11-24: **集計の表・分析の画面・ホットトピック（LLM なし）・推移・ヒートマップ（取得先 × 日）・ECharts**。残り: 一緒に出る分析・日次の報告・実データの 1 週間の確かめ） |
 | v0.5 知識グラフ（**統合の土台として汎用に**: Document〔news・paper・repo・model・research・note〕・Evidence〔根拠の位置〕・Relationship〔型・方向・根拠・確かさ〕。ニュース以外は表と API だけ） | 物・主張・根拠・関係・履歴と矛盾・知識カード・メモ（上書きしない）・地図（Cytoscape.js） | 試験・実データで「以前は非対応で最近対応したもの」に答えられること | 作った（2026-11-25・feat/knowledge-graph。試験・E2E・10 万件の性能は済み。**実データ・本物の LLM での関係・概要の質は未**。ARCHITECTURE 6 章・DESIGN 13 章） |
 | v0.6 ハイブリッド RAG と Web 検索の統合（**ControlDeck の MPKR が使う検索の道具の API**: 種の検索〔全文・物〕・`POST /graph/neighbors`〔段ごとのまとめ取り・辺の型・上限〕・局所 PageRank、調査の記録 `/research`。MPKR 本体は ControlDeck） | ControlDeck の調査にニュースハブを提供元として足す・RRF と reranker・調査の記録の保存と再利用 | ControlDeck の評価（本番で） | ☐ |
-| v0.7 数値・比較・高度な分析 | ベンチマークの DB（条件つき）・トピックの分類・ウォッチリストと変化・変化点・意見の違い | 試験・実データ | ☐ |
+| v0.7 収集の connector の枠組み・数値・比較・高度な分析（ControlDeck の PLAN-integrated-knowledge 8 章） | **connector の枠組みと画面（予算・利用条件）・L0〜L4 と昇格・GitHub（発見・スターの急増）・HF（派生版）・arXiv・OpenAlex・Crossref・Semantic Scholar・HN 検索・Sitemap・変化の検出・Metric の時系列**。続き: ベンチマークの DB（条件つき）・トピックの分類・ウォッチリストと変化・変化点・意見の違い | 試験・E2E・実走（各 1〜2 回）・実データ | 前半 済（2026-11-25・feat/connectors。実データでの昇格の質・Semantic Scholar／Crossref の本物・実機の負荷は未。ARCHITECTURE 10 章・DESIGN 14 章）。残り: 数値・比較・高度な分析 |
 | v0.8 生成物と外部の互換 | 画像・報告の保管（hash）・Markdown／Obsidian・OPML の書き出し | 試験 | ☐ |
 | v1.0 安定版 | 300 万・500 万件の試験・障害からの戻り・守りの検証・実機の I/O・データを残す更新の試験 | ARCHITECTURE 15 章の目標 | ☐ |

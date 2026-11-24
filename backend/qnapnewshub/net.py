@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import re
 import threading
 import time
@@ -22,6 +23,9 @@ from qnapnewshub import egress
 UA = "Mozilla/5.0 (compatible; QnapNewsHub/0.1)"
 MAX_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 3
+
+# 取得 1 回ぶんの受信量の数え（connector の 1 日の通信量の予算。service._fetch_one が入れ物を入れる。入れ物が無ければ数えない）
+BYTES: contextvars.ContextVar["list[int] | None"] = contextvars.ContextVar("newshub_net_bytes", default=None)
 
 _pace_lock = threading.Lock()
 _last_call: dict[str, float] = {}
@@ -58,6 +62,9 @@ async def _read(client: httpx.AsyncClient, method: str, url: str, *, max_bytes: 
                 if size > max_bytes:
                     raise NetError("応答が大きすぎます")
                 chunks.append(chunk)
+            box = BYTES.get()
+            if box is not None:
+                box[0] += size
             return resp.status_code, {k.lower(): v for k, v in resp.headers.items()}, b"".join(chunks)
     except egress.EgressRejected as exc:
         raise NetError(str(exc)) from exc
