@@ -273,6 +273,16 @@ def complete(token_id: int, results: list[dict]) -> dict:
     return {"results": writer.run("news.jobs.complete", do, user=False)}
 
 
+KEEP_DAYS = 30
+
+
+def trim(db: Session) -> int:
+    """終わって（done・dead）KEEP_DAYS 日たった仕事を消す（まとめ書きの中から。コミットは呼ぶ側）。重複を防ぐ ID も消えるが、対象の記事が古くなっているので作り手は再び作らない。"""
+    from sqlalchemy import delete
+
+    return db.execute(delete(Job).where(Job.status.in_(("done", "dead")), Job.updated_at < _now() - timedelta(days=KEEP_DAYS))).rowcount or 0
+
+
 # ---- 診断 ----
 
 def summary(db: Session) -> dict:

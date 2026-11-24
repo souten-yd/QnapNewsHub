@@ -400,6 +400,24 @@ def test_tombstones_are_trimmed_after_90_days(client, fast):
         assert db.scalar(select(func.count()).select_from(news_db.ChangeLog).where(news_db.ChangeLog.op == "delete")) == 0
 
 
+def test_finished_jobs_are_trimmed_after_30_days(client, fast):
+    item = save_items(1)[0]
+    a, b = put_job("embed", item), put_job("extract_retry", item)
+
+    def age() -> int:
+        with news_db.session() as db:
+            old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=31)
+            db.get(Job, a).status, db.get(Job, a).updated_at = "done", old
+            db.get(Job, b).updated_at = old      # queued のままの古い仕事は消さない
+            db.commit()
+            n = jobs.trim(db)
+            db.commit()
+            return n
+    assert writer.run("news.jobs.test", age) == 1
+    with news_db.session() as db:
+        assert db.get(Job, a) is None and db.get(Job, b) is not None
+
+
 def test_existing_database_is_backfilled_into_the_change_log(client, fast):
     """目的: 前の版（change_log が無い）の DB を開いても、いまある記事が最初の同期で全部取れる。根拠: 更新で入れ替えた直後の ControlDeck の最初の同期。"""
     save_items(3)

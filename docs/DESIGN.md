@@ -128,6 +128,17 @@ GitHub 等  │   ├ 下ごしらえ（無料の LLM、20 件ずつ、1 日の�
 - 機能の入・切: 自分での取得・下ごしらえ（CPU の Gemma）・**画像生成**・リーダー・まとめ・RAG への蓄積・導入候補の検出・ゲームの見張り。ニュースハブがやっていることは ControlDeck では切っておける（例: まとめはニュースハブのものを使う）。
 - 受け取る範囲: 分野・チャンネル・言語・保存の期間。
 
+### 3 章の実装と、設計と違った点（v0.3 のニュースハブ側・feat/link-controldeck）
+ControlDeck 側は別の PR。ここはニュースハブの API・画面・試験（`test_link.py`・`e2e/link.spec.ts`）。コードは `link.py`（つなぐ・鍵）・`changes.py`（差分）・`jobs.py`（仕事の列）・`artifacts.py`（画像・調査の記録）・`link_router.py`（API）。
+- **つなぐ（3.1）**: `POST /api/v1/link/pairing`（管理者。6 桁の番号・10 分・指紋）→ ControlDeck が `POST /api/v1/link/pair`（番号・名前・自分の X25519 公開鍵〔base64 の 32 バイト〕。認証なし）→ **scope=link のトークン**と、ニュースハブの公開鍵・指紋が返る。番号は **メモリだけ**（再起動で消える。1 回だけ使える）。総当たり: 同じ番号への間違い 5 回でその番号は無効・同じ IP は 10 分に 8 回間違えると 429（正しい番号でも）。指紋は公開鍵の SHA-256 の先頭 80 ビットを 4 文字ごと（`1a2b-3c4d-5e6f-7a8b-9c0d`）。
+- **トークンの権限**: `api_tokens.scope`（read／link。前の版の表には起動時に列を足す）。read は読み取り（GET）だけ（従来どおり）。**link は `link_user` 依存を付けた API だけが書ける**（claim・complete・secret・画像・調査）。それ以外の POST/PUT/DELETE は従来の「トークンは読み取り専用」で 403、管理の API（`require_admin`）は session だけ。試験は全ルートを機械的に調べ、link トークンで管理の API・link_user の無い書き込みが通らないこと、link_user の付いた書き込みの一覧が許可の一覧と一致することを確かめる（新しい API に依存を付け忘れると落ちる）。
+- **鍵を封じて受け取る（3.2）**: `POST /link/secret`（link トークン）。ECIES の形は `link.py` の docstring が正（使い捨ての X25519 → ECDH → HKDF-SHA256〔salt = 使い捨て公開鍵 ‖ ニュースハブの公開鍵、info = `qnapnewshub-link-v1`〕→ AES-256-GCM、追加データ = `qnapnewshub-link-v1|<名前>`）。送る形は `{"v":1,"epk","n","c"}`（base64）。ControlDeck 側の実装の見本が `link.seal()`。ニュースハブの秘密鍵は secretbox（暗号化）の `link_x25519`。受け取れる名前は `openrouter` だけ（`llm.KEY_NAME` の枠へ）。名前と時刻と相手の名前だけを `link_secrets` に残し、値はログ・応答・診断・画面に出ない（試験で全部を grep）。改ざん・別の名前の枠への貼り替え・別の宛先向けは 422 で、保存済みの鍵は変わらない。
+- **差分の同期（3.3）**: 設計の `GET /sync/items` ではなく **`GET /api/v1/changes?cursor=&limit=500&kinds=items,entities,events&channels=&categories=`**（ARCHITECTURE 5 章の API 表に合わせた）。変更番号は **DB の trigger**（`change_log`。物ごとに最新の 1 行・AUTOINCREMENT で単調）が付けるので、まとめ書き・取り出し・イベントの更新・古い記事の削除のどの経路でも漏れない。保存済みだけ（バッファは出ない）。op は upsert・delete・archive（`dup_of` で畳まれた記事）。削除の印は 90 日残す（まとめ書きの中で掃除）。前の版の DB を開いたときは、いまある物を全部「変更あり」として入れる。`reset: true` は cursor が最新より大きいとき。絞り込みで落ちた物も cursor は進む。**`/sync/digests`・`/sync/sources` は作っていない**（まとめ・取得先は既存の `/news/digests`・`/news/sources/manage` を読み取りトークンで読める）。
+- **仕事の列**・**生成物**は ARCHITECTURE 5 章の「実装と違った点」に書いた。
+
+**確かめたこと（試験）**: 番号の失効・使い回しの拒否・間違い 5 回での無効・IP の 429／link トークンが管理の API を呼べないこと（全ルート）／封じた鍵の往復・改ざん・貼り替え・宛先違い・値が出ないこと／cursor の単調・保存済みだけ・削除とアーカイブ・絞り込み・前の版の DB の補充／lease の期限切れ・3 回で dead・冪等な返し・遅れた結果／結果の検査（取り出し・要約・埋め込み・画像）／画像の形・大きさ・種類の偽り・hash の重複・認証つきの配信／ControlDeck 役の一通り（つなぐ → 鍵 → 差分 → 仕事 → 画像）。E2E は つなぐ画面（番号・指紋・残り時間・一覧・取り消しの確認）・診断・AI 生成の印を 320・1280、ライト・ダーク。
+**確かめていないこと**: 本物の ControlDeck との通信（ControlDeck 側の PR のあと）・LAN を越えた経路（TLS の後ろ）・長時間の運転での change_log・jobs の増え方（change_log は物の数が上限＋削除の印 90 日、jobs は終わって 30 日の行を消す）・100 万件規模での trigger の書き込みの増え（まとめ書きの 1 トランザクションの中で、更新した行ごとに 1 行の入れ替え）。
+
 ## 4. 配布（Linux → QPKG）
 
 **2026-11-24: QPKG を作った。作り方・入れ方・データの置き場・最初の管理者の一回限りの番号・確かめ方は `docs/QPKG.md`（こちらが正）。**
