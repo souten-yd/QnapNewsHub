@@ -331,7 +331,7 @@ def test_settings_defaults_and_validation(admin_client):
     cfg = body["settings"]
     assert cfg["digest_daily"] == {"enabled": True, "time": "06:30"} and cfg["digest_weekly"] == {"enabled": True, "weekday": 0, "time": "07:00"}
     assert cfg["llm"]["gist_enabled"] is False and cfg["llm"]["prep_model"] == llm.DEFAULT_MODEL
-    assert cfg["llm"]["daily_limit"] == 800 and cfg["llm"]["minute_limit"] == 15 and body["prep_batch"] == 30
+    assert cfg["llm"]["daily_limit"] == 800 and cfg["llm"]["minute_limit"] == 15 and body["prep_batch"] == 15
     assert "rag" not in cfg and "imagegen" not in cfg
     assert body["weekdays"][0] == "月" and body["interval_minutes"] == 30 and body["llm_stats"]["key_set"] is False
     for bad in ({"digest_daily": {"time": "6:30"}}, {"digest_weekly": {"weekday": 7}}, {"feed_refresh_minutes": 0},

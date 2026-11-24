@@ -32,7 +32,10 @@ from qnapnewshub.topics import extract_topics
 
 logger = logging.getLogger("qnapnewshub.prep")
 
-BATCH = 30
+# 1 回の件数。2026-11-24 の実測（docs/research-free-llm-batch.md の追記）: 要素の取り出し（entities・facts）を足すと 1 件あたり
+# 約 400 トークンの出力になり、30 件では出力の上限で JSON が切れた（Nemotron・DeepSeek Flash とも）。15 件なら形は崩れない。
+BATCH = 15
+TOKENS_PER_ITEM = 500          # 出力の上限 = 件数 × これ（最小 2,000・最大 12,000）
 PREP_DONE = 100          # prep_tries がこの値なら下ごしらえ済み
 MAX_TRIES = 3
 RETRY_WINDOW_DAYS = 7
@@ -218,7 +221,7 @@ async def _ask(cfg: dict, part: list[dict], *, strict: bool = False, extract_onl
         model = llm_models.current(chain)
         tried.append(model)
         try:
-            text = await llm.complete(model, messages, max_tokens=6000, purpose=purpose, abandon=lambda m=model: llm_models.switched_away(m))
+            text = await llm.complete(model, messages, max_tokens=max(2000, min(12000, TOKENS_PER_ITEM * len(part))), purpose=purpose, abandon=lambda m=model: llm_models.switched_away(m))
             break
         except llm.LlmDailyLimit:
             raise

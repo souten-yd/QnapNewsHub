@@ -79,18 +79,18 @@ class Server:
         return self.answer_fn(body["messages"], len(self.calls))
 
 
-def test_prep_batches_30_per_call_saves_and_presents(monkeypatch, keyed):
-    """目的: 下ごしらえは 30 件で 1 回の呼び出し。日本語の概要・画像の描写・話題の語を保存し、一覧は訳を出して元の抜粋も返す。呼び出し回数を数える。切のときは呼ばない。
+def test_prep_batches_15_per_call_saves_and_presents(monkeypatch, keyed):
+    """目的: 下ごしらえは 15 件で 1 回の呼び出し（2026-11-24 に要素の取り出しを足して 30 → 15）。日本語の概要・画像の描写・話題の語を保存し、一覧は訳を出して元の抜粋も返す。呼び出し回数を数える。切のときは呼ばない。
     根拠: 2026-11-24 利用者「ある程度のまとまりを送って構造的に個別に返してもらう」。件数は docs/research-free-llm-batch.md（20 → 30 に変更）。"""
     ids, rows = rows_of(31)
     server = Server()
     monkeypatch.setattr(llm, "_post", server)
     out = run(prep.run(rows))
-    assert prep.BATCH == 30 and out == {"done": 31, "calls": 2, "error": ""} and len(server.calls) == 2
+    assert prep.BATCH == 15 and out["done"] == 31 and out["calls"] == 3 and len(server.calls) == 3
     first = server.calls[0]["messages"][1]["content"]
-    assert "30. Title number 29" in first and "31. " not in first             # 1 回目は 30 件ちょうど
+    assert "15. Title number 14" in first and "16. " not in first             # 1 回目は 15 件ちょうど
     assert server.calls[0]["model"] == llm.DEFAULT_MODEL and server.calls[0]["reasoning"] == {"enabled": False}
-    assert prep.calls_today() == 2 and llm.stats()["total"] == 2
+    assert prep.calls_today() == 3 and llm.stats()["total"] == 3
     writer.flush("test")      # まとめ書きの前の分は、保存してから DB で確かめる
     with news_db.session() as db:
         row = db.get(NewsItem, ids[0])
@@ -100,7 +100,7 @@ def test_prep_batches_30_per_call_saves_and_presents(monkeypatch, keyed):
     assert shown["translated"] is True and shown["summary"] == row.summary_ja and "English excerpt number 0" in shown["summary_original"]
     cfg = settings.load(); cfg["llm"]["prep_enabled"] = False; settings.save(cfg)      # 切のときは呼ばない
     _, rows2 = rows_of(1, "e2")
-    assert run(prep.run(rows2))["done"] == 0 and len(server.calls) == 2
+    assert run(prep.run(rows2))["done"] == 0 and len(server.calls) == 3
 
 
 def test_prep_parse_rejects_broken_and_misnumbered_replies():
@@ -157,7 +157,7 @@ def test_prep_respects_per_run_limit(monkeypatch, keyed):
     server = Server()
     monkeypatch.setattr(llm, "_post", server)
     out = run(prep.run(rows))
-    assert out["done"] == 100 and len(server.calls) == 4
+    assert out["done"] == 100 and len(server.calls) == 7      # 15 件ずつ（2026-11-24 に 30 → 15）
 
 
 def test_prep_leaves_tries_untouched_when_the_llm_is_unavailable(monkeypatch, keyed):
@@ -192,8 +192,10 @@ def test_prep_without_key_does_nothing_and_does_not_call(monkeypatch):
 
 
 def test_daily_limit_stops_and_resumes_next_day(monkeypatch, keyed):
-    """目的: 1 日の上限（設定 daily_limit）に達したら、それ以上送らず次の日まで止まる。日が変われば数え直す。記事の試行回数は増やさない。
+    """（1 回 30 件の前提で数を書いた試験。件数ではなく上限の働きを見るので BATCH を 30 に固定する）
+    目的: 1 日の上限（設定 daily_limit）に達したら、それ以上送らず次の日まで止まる。日が変われば数え直す。記事の試行回数は増やさない。
     根拠: 無料のモデルの 1 日の上限に当たる前に自分で止める（docs/research-free-llm-batch.md「既定の上限は 1 日 300 回」）。"""
+    monkeypatch.setattr(prep, "BATCH", 30)
     cfg = settings.load(); cfg["llm"]["daily_limit"] = 2; cfg["llm"]["quota"] = None; settings.save(cfg)
     ids, rows = rows_of(100)
     server = Server()
