@@ -155,8 +155,24 @@ export function NewsRuntimeCards() {
             <input type="number" min={10} max={100000} aria-label="まとめ書きの件数の上限" value={draft.storage.max_items} disabled={dis}
               onChange={(e) => set({ storage: { ...draft.storage, max_items: num(e.target.value, 10, 100000, 1000) } })} className={`${field} mt-1 w-full`} /></label>
         </div>
+        <label className={label}>古い記事の抜粋を圧縮する年数（0 は圧縮しない。圧縮した記事は検索の対象が題・概要・物だけになります）
+          <input type="number" min={0} max={30} aria-label="圧縮する年数" data-testid="compress-years" value={draft.storage.compress_years} disabled={dis}
+            onChange={(e) => set({ storage: { ...draft.storage, compress_years: num(e.target.value, 0, 30, 1) } })} className={`${field} mt-1 w-full sm:w-1/2`} /></label>
         <Toggle label="ログをファイルにも書く（再起動で効く）" hint="既定は切（ログはメモリだけ）。書くと書き込みが増えます" value={draft.storage.log_file} disabled={dis} onChange={(on) => set({ storage: { ...draft.storage, log_file: on } })} />
         <Toggle label="アクセスのログを出す（再起動で効く）" hint="既定は切" value={draft.storage.access_log} disabled={dis} onChange={(on) => set({ storage: { ...draft.storage, access_log: on } })} />
+        {saveButton}
+      </Card>
+
+      <Card id="news-body" title="本文の取り出し" hint="重要な記事から、記事のページの本文を取り出して圧縮して保存します（robots.txt を守り、有料・ロボット確認・ログインの記事は取りません。取れなかった記事は二度と試しません）。本文はここでは表示せず、下ごしらえ（LLM）の入力と検索の質に使います。">
+        <Toggle label="本文を取り出す" hint="切にすると、取り出しを止めます（保存済みの本文は残ります）" value={draft.body.enabled} disabled={dis} onChange={(on) => set({ body: { ...draft.body, enabled: on } })} />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={label}>1 日の件数の上限（件。取れなかった試行も数えます）
+            <input type="number" min={0} max={5000} aria-label="本文の取り出しの 1 日の件数" data-testid="body-per-day" value={draft.body.per_day} disabled={dis}
+              onChange={(e) => set({ body: { ...draft.body, per_day: num(e.target.value, 0, 5000, 200) } })} className={`${field} mt-1 w-full`} /></label>
+          <label className={label}>1 分の件数の上限（件）
+            <input type="number" min={1} max={60} aria-label="本文の取り出しの 1 分の件数" data-testid="body-per-minute" value={draft.body.per_minute} disabled={dis}
+              onChange={(e) => set({ body: { ...draft.body, per_minute: num(e.target.value, 1, 60, 6) } })} className={`${field} mt-1 w-full`} /></label>
+        </div>
         {saveButton}
       </Card>
 

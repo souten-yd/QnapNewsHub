@@ -1,10 +1,10 @@
-"""記事の下ごしらえ（外部の LLM。新しい記事を 30 件ずつ 1 回の呼び出しで、構造化して返させる）。
+"""記事の下ごしらえ（外部の LLM。新しい記事を 20 件ずつ 1 回の呼び出しで、構造化して返させる）。
 
 2026-11-24 利用者「記事一個一個ずつやっていたらすごく費用がかかりそう…ある程度のまとまりを送って構造的に個別に返してもらう」
 「参照元の記事の名前や概要をそのまま記載し、LLM で変換が終わったものから順次変えていく」（= 訳ができるまでは元の題と抜粋を出す）。
-件数の根拠は docs/research-free-llm-batch.md（30 件は 30 秒以内・形の崩れ無し・日本語で返らない記事は回ごとにばらつく → 記事ごとに検査して送り直す）。
+件数の根拠は docs/research-free-llm-batch.md（30 件の実測は 30 秒以内・形の崩れ無し・日本語で返らない記事は回ごとにばらつく → 記事ごとに検査して送り直す）。
 
-- 1 回の呼び出しで 30 件。返すのは記事の番号ごとの JSON {"ja": 日本語の 1〜2 文の概要（英語なら訳）, "img": 画像生成のための英語の短い描写, "topics": [話題の語 1〜3]}。
+- 1 回の呼び出しで 20 件（2026-11-24 に 30 → 20）。返すのは記事の番号ごとの JSON {"ja": 日本語の 1〜2 文の概要（英語なら訳）, "img": 画像生成のための英語の短い描写, "topics": [話題の語 1〜3]}。
   ja → news_items.summary_ja（画面が抜粋の代わりに出す。題は訳さない）、img → img_prompt（ControlDeck の画像生成が使う）、topics → 話題の語に足す。
 - 記事ごとの検査: JSON として読めない・番号が欠けた・概要 ja が日本語でない（抜粋が空の記事は ja が空でよい）→ 合わない記事だけを、同じ回の中で 1 回だけ
   「必ず日本語で」を強めた指示で送り直す。それでもだめな記事は prep_tries を +1 して次の取得へ回す（3 回で諦め、元の題と抜粋のまま）。
@@ -268,7 +268,7 @@ def _parse_or_empty(text: str, count: int, sources: list[str] | None = None, ext
 
 
 async def run(items: list[dict]) -> dict:
-    """items（store.item_dict の形。新しい・抜粋が変わった記事）と、前に失敗した記事を 30 件ずつ 1 回の呼び出しで下ごしらえする。
+    """items（store.item_dict の形。新しい・抜粋が変わった記事）と、前に失敗した記事を 20 件ずつ 1 回の呼び出しで下ごしらえする。
     {"done": 件数, "calls": 呼び出し回数, "error": 理由 or ""}。設定が切・対象が無ければ何もしない（呼び出しも 0 回）。"""
     cfg = settings.load()["llm"]
     if not cfg["prep_enabled"] or rest.blocks_analysis():
@@ -286,7 +286,7 @@ async def run(items: list[dict]) -> dict:
 
 
 def batch_size(cfg: dict) -> int:
-    """いまのモデルに合わせた 1 回の件数。OpenRouter は 30 件、ゲートウェイ（ローカルのモデル。ControlDeck のチャット・開発を邪魔しない）は設定の件数（既定 10）。"""
+    """いまのモデルに合わせた 1 回の件数。OpenRouter は 20 件、ゲートウェイ（ローカルのモデル。ControlDeck のチャット・開発を邪魔しない）は設定の件数（既定 10）。"""
     model = llm_models.current(llm_models.build_chain(cfg))
     return int(cfg["gateway"]["batch"]) if llm.is_gateway(model) else BATCH
 

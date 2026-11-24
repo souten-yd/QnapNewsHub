@@ -1,4 +1,4 @@
-import { TranslatedMark } from "./TranslatedMark";
+import { BodyMark, TranslatedMark } from "./TranslatedMark";
 import { useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { ENTITY_TYPE_LABEL, KIND_STYLE, relativeTime, useNewsAction, type NewsAction, type NewsItem } from "../../api/news";
@@ -47,6 +47,7 @@ export function NewsCard({ item, channel, label, hideRemoves = false, dimRead = 
           <span>{style.icon} {style.label}</span>
           <span className="src">{item.source}</span>
           <span>· {relativeTime(item.published_at)}</span>
+          <BodyMark item={item} />
           {!!item.event && item.event.others > 0 && <Link to={`/events/${item.event.id}`} data-testid="news-event" title={`同じ出来事を報じる記事のまとまり（出どころ ${item.event.sources}）`} className="font-semibold text-accent-700 dark:text-accent-300">· ほか {item.event.others} 件{item.event.primary ? "（一次情報あり）" : ""}</Link>}
           {!!item.also && !item.event && <span title={(item.also_sources ?? []).join("、")} data-testid="news-also">· ほか {item.also} か所が報道</span>}
         </p>

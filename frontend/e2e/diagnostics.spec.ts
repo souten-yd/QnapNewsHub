@@ -23,6 +23,14 @@ for (const vp of SIZES) {
         await expect(page.getByTestId("io-write")).toContainText("1.0 MB");
         await expectNoHorizontalOverflow(page);
         await shot(page, `diag-top-${vp.name}-${scheme}`);
+        await expect(page.getByTestId("search-index")).toContainText("日本語 4210 件");
+        await expect(page.getByTestId("body-today")).toContainText("38 / 200 件");
+        await expect(page.getByTestId("body-reasons")).toContainText("robots.txt が許していません 12");
+        await expect(page.getByTestId("body-pack")).toContainText("29%");
+        await page.getByTestId("rebuild-search").click();
+        expect(state.calls.some((c) => c.path === "/diagnostics/search/rebuild")).toBe(true);
+        await page.locator("#diag-search").scrollIntoViewIfNeeded();
+        await shot(page, `diag-search-${vp.name}-${scheme}`);
         await page.getByRole("button", { name: "点検する" }).click();
         await expect(page.getByTestId("selfcheck")).toContainText("LLM の鍵");
         await expect(page.getByTestId("selfcheck")).toContainText("直し方");

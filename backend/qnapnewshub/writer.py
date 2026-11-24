@@ -561,6 +561,17 @@ class Coordinator:
             logger.exception("認証 DB の checkpoint に失敗しました")
         return out
 
+    def checkpoint_if_large(self) -> None:
+        """WAL が大きいとき（大量の作り直しの途中）だけ checkpoint（書き手のスレッドから）。ふだんのまとめ書きの checkpoint はそのまま。"""
+        try:
+            from qnapnewshub import db as news_db
+
+            wal = Path(str(news_db.path()) + "-wal")
+            if wal.exists() and wal.stat().st_size > WAL_TRUNCATE_BYTES:
+                self._checkpoint()
+        except OSError:
+            pass
+
     def shutdown(self) -> dict:
         """停止: バッファを書いて、WAL を空にして、スレッドを止める。"""
         info: dict = {}

@@ -32,7 +32,9 @@ def index_step(rows: int = searchindex.BATCH_ROWS) -> dict:
 
     def do() -> dict:
         with news_db.engine().begin() as conn:
-            return searchindex.backfill_batch(conn, rows)
+            got = searchindex.backfill_batch(conn, rows)
+        writer.get().checkpoint_if_large()      # 作り直しの途中で WAL を膨らませない
+        return got
 
     return writer.run("news.index", do, user=False)
 

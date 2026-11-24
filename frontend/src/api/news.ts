@@ -13,7 +13,7 @@ export interface NewsItem {
   /** チャンネルの id（どのチャンネルに属するか。無ければ null） */
   channel?: string | null;
   /** 英語の抜粋を日本語に訳したもの（summary がその訳になり、元の抜粋は summary_original） */
-  translated?: boolean; summary_original?: string;
+  translated?: boolean; summary_original?: string; has_body?: boolean;
   /** 同じ記事の別の出どころの数（代表の記事だけ。一覧では 1 件にまとめて出す）と、その出どころの名前 */
   also?: number; also_sources?: string[];
   /** 同じ出来事（イベント）の記事を 1 つにまとめたとき: イベントの id・ほかの記事の数・出どころの数・一次情報の有無 */
@@ -119,7 +119,8 @@ export interface NewsRuntimeSettings {
   digest_weekly: { enabled: boolean; weekday: number; time: string };
   quiet: { enabled: boolean; start: string; end: string };
   rest: { enabled: boolean; start: string; end: string; mode: "keep_memory" | "stop_all" | "flush_at_limit" };
-  storage: { flush_minutes: number; max_items: number; max_mb: number; log_file: boolean; access_log: boolean };
+  storage: { flush_minutes: number; max_items: number; max_mb: number; log_file: boolean; access_log: boolean; compress_years: number };
+  body: { enabled: boolean; per_day: number; per_minute: number };
   llm: { digest_model: string; gist_enabled: boolean; gist_model: string; digest_focus: string; prep_enabled: boolean; prep_model: string; prep_max_per_run: number; daily_limit: number; minute_limit: number;
     extract_enabled: boolean; fallback_models: string[]; quota: Record<string, number>; night_from: number; backfill_enabled: boolean; gateway: GatewaySettings };
 }

@@ -45,6 +45,20 @@ for (const [width, height, scheme] of [[390, 844, "light"], [1280, 800, "dark"]]
     await expect(noImg).toHaveCount(1);
     await expect(noImg.locator("img")).toHaveCount(0);
     await expect(page.locator("[data-news-card]", { hasText: "新しい量子化" }).locator("img")).toHaveCount(1);
+    await expect(page.getByTestId("body-mark")).toHaveCount(1);
+    // 日本語の部分一致の検索（本物の FTS5 trigram・3 文字以上は索引・2 文字は LIKE）
+    const open = page.getByRole("button", { name: "検索を開く" });
+    if (await open.isVisible()) await open.click();
+    const box = page.getByRole("searchbox", { name: "アーカイブ全体を検索" });
+    await box.fill("しい量子");
+    await expect(page.getByText("「しい量子」の検索結果")).toBeVisible();
+    await expect(page.locator("[data-news-card]", { hasText: "の新しい量子化が入りました" })).toHaveCount(1);
+    await expect(page.locator("[data-news-card]", { hasText: "NAS で動かす" })).toHaveCount(0);
+    await shot(page, `real-search-${width}-${scheme}`);
+    await box.fill("運用");      // 2 文字
+    await expect(page.locator("[data-news-card]", { hasText: "画像のない記事" })).toHaveCount(1);
+    await box.fill("");
+    await expect(page.getByText("の検索結果")).toHaveCount(0);
     // 本物の操作の保存（隠す → 一覧から消える → 元に戻す）
     const card = page.locator("[data-news-card]", { hasText: "NAS で動かす" });
     await card.getByRole("button", { name: "隠す" }).click();

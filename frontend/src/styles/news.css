@@ -488,3 +488,5 @@
 .nw-bar-title { min-width: 0; flex-shrink: 0; }
 .nw-bar-title .nw-head { white-space: nowrap; }
 @media (max-width: 420px) { .nw-bar-title .nw-kicker { display: none; } }
+
+.nw-body { display: inline-block; padding: 0 7px; border: 1px solid var(--nw-line); border-radius: 999px; font-size: .68rem; line-height: 1.5; color: var(--nw-muted); white-space: nowrap; }

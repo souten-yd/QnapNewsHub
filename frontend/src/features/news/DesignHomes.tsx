@@ -1,4 +1,4 @@
-import { TranslatedMark } from "./TranslatedMark";
+import { BodyMark, TranslatedMark } from "./TranslatedMark";
 import type { CSSProperties, ReactNode } from "react";
 import { KIND_STYLE, relativeTime, type NewsHome, type NewsItem, type NewsPrefs } from "../../api/news";
 import { ArchiveSection, ChannelSections, external, HomeAside, NumbersSection, Trio, visible } from "./BroadcastHome";
@@ -53,7 +53,7 @@ function Lead({ item, home, onOpen, onTopic, testId }: { item: NewsItem; home: N
     <article className="nwd-lead" data-testid={testId} style={channel ? ({ "--ch": channel.color } as CSSProperties) : undefined}>
       <Media item={item} color={channel?.color} className="nwd-lead-media">{null}</Media>
       <div className="nwd-lead-copy">
-        <p className="card-meta">{channel && <span className="nwd-tag">{channel.name}</span>}<span>{style.icon} {style.label}</span><span className="src">{item.source}</span><span>· {relativeTime(item.published_at)}</span></p>
+        <p className="card-meta">{channel && <span className="nwd-tag">{channel.name}</span>}<span>{style.icon} {style.label}</span><span className="src">{item.source}</span><span>· {relativeTime(item.published_at)}</span><BodyMark item={item} /></p>
         <h2 className="nw-head nwd-lead-title"><Title item={item} onOpen={onOpen} /></h2>
         {item.summary && <p className="nwd-lead-sum">{item.summary}</p>}
         <TranslatedMark item={item} />

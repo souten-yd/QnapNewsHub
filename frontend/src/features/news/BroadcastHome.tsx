@@ -1,4 +1,4 @@
-import { TranslatedMark } from "./TranslatedMark";
+import { BodyMark, TranslatedMark } from "./TranslatedMark";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useSwipe } from "../../components/useSwipe";
 import { relativeTime, type NewsHome, type NewsItem, type NewsPrefs } from "../../api/news";
@@ -30,7 +30,7 @@ function OnAir({ home, onTopic, onOpen }: { home: NewsHome; onTopic: (t: string)
             <h2 className="nw-head nw-onair-title" data-testid="onair-title"><ArticleLink item={item} onOpen={() => onOpen(item.id)}>{item.title}</ArticleLink></h2>
             {item.summary && <p className="nw-muted" style={{ margin: 0, lineHeight: 1.6 }}>{item.summary}</p>}
             <TranslatedMark item={item} />
-            <p className="card-meta"><span>{item.source}</span><span>· {relativeTime(item.published_at)}</span></p>
+            <p className="card-meta"><span>{item.source}</span><span>· {relativeTime(item.published_at)}</span><BodyMark item={item} /></p>
             {item.topics.length > 0 && <ul className="card-chips" aria-label="話題">{item.topics.slice(0, 4).map((t) => <li key={t}><button type="button" onClick={() => onTopic(t)}>{t}</button></li>)}</ul>}
             {item.url && <span style={{ alignSelf: "flex-start" }}><ArticleLink item={item} onOpen={() => onOpen(item.id)} className="nw-btn on" label="読む →">読む →</ArticleLink></span>}
           </>

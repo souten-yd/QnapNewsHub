@@ -26,6 +26,12 @@ export interface Diagnostics {
   };
   machine: { cpu_pct: number; load: number[]; rss: number; uptime_seconds: number; version: string; python: string; cpus: number };
   update: { version: string; install: string; can_install: boolean; checked_at: string; error: string; latest: string; include_prerelease: boolean; etag_hits: number; checks: number; job: string; last: UpdateLast | null; rollback: string | null };
+  search: {
+    index: { available: boolean; building: boolean; cursor: number; hi: number; articles: number; docs?: { tri: number; word: number } };
+    body: { enabled: boolean; per_day: number; per_minute: number; today: number; ok: number; failed: number; reasons: Record<string, number>; reason_labels: Record<string, string>; raw_bytes: number; packed_bytes: number;
+      cold: { items: number; raw_bytes: number; packed_bytes: number } };
+    compress_years: number;
+  };
   problems: { area: string; level: "error" | "warn"; text: string }[];
 }
 export interface SelfCheck { at: string; ok: boolean; checks: { name: string; ok: boolean; detail: string; fix: string }[] }
@@ -35,6 +41,10 @@ const key = ["diag"] as const;
 export const useDiagnostics = () => useQuery({ queryKey: [...key, "all"], queryFn: () => api<Diagnostics>("/diagnostics"), refetchInterval: 30_000 });
 export const useDiagNotice = () => useQuery({ queryKey: [...key, "notice"], queryFn: () => api<DiagNotice>("/diagnostics/notice"), staleTime: 60_000, retry: false });
 export const useSelfCheck = () => useMutation({ mutationFn: () => api<SelfCheck>("/diagnostics/selfcheck", { method: "POST" }) });
+export function useRebuildSearch() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: () => api<{ queued: boolean; articles: number }>("/diagnostics/search/rebuild", { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: key }) });
+}
 export function useFlushNow() {
   const qc = useQueryClient();
   return useMutation({ mutationFn: () => api<DiagFlush>("/diagnostics/flush", { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: key }) });

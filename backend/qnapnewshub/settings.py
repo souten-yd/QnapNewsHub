@@ -5,7 +5,7 @@ OpenRouter の無料 LLM の利用を想定している。もちろんローカ�
 
 - 更新: ホームのフィードの読み直しの間隔・日刊のまとめの時刻・週刊のまとめの曜日と時刻・取得しない時間帯。
   ニュースのページの取得の間隔（分）は従来どおり channels.json の interval_minutes（設定の「アーカイブ」）。
-- LLM: 用途ごと（まとめ・一言要約と話題の語・記事の下ごしらえ〔概要・画像の描写・話題の語を 30 件ずつ 1 回で〕）に OpenRouter のモデルを選ぶ。
+- LLM: 用途ごと（まとめ・一言要約と話題の語・記事の下ごしらえ〔概要・画像の描写・話題の語を 20 件ずつ 1 回で〕）に OpenRouter のモデルを選ぶ。
   まとめの重点（digest_focus）は利用者が書く自由記述。1 日・1 分の回数の上限（daily_limit・minute_limit）。
 形は厳密に検査し、足りない項目は既定で補う。
 """
@@ -37,7 +37,7 @@ DEFAULTS: dict = {
     "storage": {"flush_minutes": 30, "max_items": 1000, "max_mb": 128, "log_file": False, "access_log": False, "compress_years": 1},
     # 本文の取り出し（bodies.py）: 重要度の高い記事から、1 日 per_day 件・1 分 per_minute 件まで
     "body": {"enabled": True, "per_day": 200, "per_minute": 6},
-    # モデルは OpenRouter のモデル名（無料は :free で終わる）。下ごしらえは 30 件ずつ・1 日 daily_limit 回・1 分 minute_limit 回まで（llm.py）
+    # モデルは OpenRouter のモデル名（無料は :free で終わる）。下ごしらえは 20 件ずつ・1 日 daily_limit 回・1 分 minute_limit 回まで（llm.py）
     "llm": {"digest_model": DEFAULT_MODEL, "gist_enabled": False, "gist_model": DEFAULT_MODEL, "digest_focus": "", "prep_enabled": True,
             "prep_model": DEFAULT_MODEL, "prep_max_per_run": 100, "daily_limit": DEFAULT_DAILY_LIMIT, "minute_limit": DEFAULT_MINUTE_LIMIT,
             # 要素の取り出し（下ごしらえと同じ 1 回の呼び出しで）・次のモデル（1 番目は prep_model。空でよい）・用途ごとの割り当て・夜の後回しの仕事

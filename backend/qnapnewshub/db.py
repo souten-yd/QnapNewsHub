@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -368,6 +369,14 @@ def _add_missing_columns(conn) -> None:
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} ON {table} ({column})"))
 
 
+def _cache_kb() -> int:
+    """SQLite のページのキャッシュの上限（KiB）。既定 256MB。NEWSHUB_SQLITE_CACHE_MB で変える（使った分だけ確保される）。"""
+    try:
+        return max(2, int(os.environ.get("NEWSHUB_SQLITE_CACHE_MB", "256"))) * 1024
+    except ValueError:
+        return 256 * 1024
+
+
 def _open(file: Path) -> Engine:
     file.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{file}", connect_args={"timeout": 10, "check_same_thread": False})
@@ -379,6 +388,7 @@ def _open(file: Path) -> Engine:
         cur.execute("PRAGMA synchronous=NORMAL")
         cur.execute("PRAGMA wal_autocheckpoint=0")      # checkpoint は Write Coordinator が、まとめ書きの直後にだけ行う
         cur.execute("PRAGMA busy_timeout=10000")
+        cur.execute(f"PRAGMA cache_size=-{_cache_kb()}")      # ページのキャッシュ（ARCHITECTURE 9: 256〜512MB が目安。使った分だけ確保される）
         cur.execute("PRAGMA foreign_keys=ON")
         cur.close()
 

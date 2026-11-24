@@ -44,7 +44,7 @@ export const ENTITY_DETAIL: EntityDetail = {
 
 export const ITEMS: NewsItem[] = [
   mk(1, { entities: [{ id: 1, name: "llama.cpp", type: "software" }, { id: 2, name: "Qwen 3.5", type: "model" }, { id: 5, name: "量子化", type: "tech" }], title: "llama.cpp の新しい量子化が入りました", summary: "GPU が無くても動く軽い量子化。速度と精度の比較が公開されました。", image_url: "https://img.example.test/1.png", topics: ["llama.cpp", "量子化"] }),
-  mk(2, { title: "画像のない記事: ローカル LLM の運用メモ", summary: "画像の部分は出さず、細い線だけが付きます。", topics: ["運用"] }),
+  mk(2, { has_body: true, title: "画像のない記事: ローカル LLM の運用メモ", summary: "画像の部分は出さず、細い線だけが付きます。", topics: ["運用"] }),
   mk(3, { event: { id: 1, others: 3, sources: 4, primary: true }, entities: [{ id: 1, name: "llama.cpp", type: "software" }], kind: "release", source: "llama.cpp", source_key: "llama-cpp", title: "llama.cpp b9000 を公開", summary: "新しい量子化と修正。", topics: ["llama.cpp"] }),
   mk(4, { kind: "forum", source: "フォーラム", source_key: "forum", title: "24GB でどこまで動くか", summary: "実測の報告が集まっています。", channel: "infra", topics: ["VRAM"] }),
   mk(5, { kind: "model", source: "Hugging Face", source_key: "hf", title: "新しい GGUF モデルが話題に", summary: "小さくて速いモデル。", image_url: "https://img.example.test/2.png", channel: "ai", topics: ["GGUF"] }),
@@ -94,7 +94,8 @@ export const PREFS: NewsPrefs = {
 export const SETTINGS: NewsRuntimeSettings = {
   feed_refresh_minutes: 15,
   digest_daily: { enabled: true, time: "06:30" }, digest_weekly: { enabled: true, weekday: 0, time: "07:00" }, quiet: { enabled: false, start: "01:00", end: "05:00" },
-  rest: { enabled: false, start: "01:00", end: "06:00", mode: "keep_memory" }, storage: { flush_minutes: 30, max_items: 1000, max_mb: 128, log_file: false, access_log: false },
+  rest: { enabled: false, start: "01:00", end: "06:00", mode: "keep_memory" }, storage: { flush_minutes: 30, max_items: 1000, max_mb: 128, log_file: false, access_log: false, compress_years: 1 },
+  body: { enabled: true, per_day: 200, per_minute: 6 },
   llm: { digest_model: "example/free-model:free", gist_enabled: false, gist_model: "example/free-model:free", digest_focus: "", prep_enabled: true, prep_model: "example/free-model:free", prep_max_per_run: 100, daily_limit: 800, minute_limit: 15,
     extract_enabled: true, fallback_models: [], quota: { prep: 300, gist: 150, digest: 20, card: 150, trend: 10, event: 100, spare: 70 }, night_from: 21, backfill_enabled: true,
     gateway: { enabled: false, base_url: "", model: "auto", first: true, batch: 10, timeout_seconds: 300, minute_limit: 6, cooldown_minutes: 10 } },
@@ -230,6 +231,10 @@ const diagnostics = (state: MockState) => ({
   machine: { cpu_pct: 0.2, load: [0.1, 0.2, 0.2], rss: 126_000_000, uptime_seconds: 93_000, version: "0.1.1", python: "3.12", cpus: 2 },
   update: { version: state.update.version, install: state.update.install, can_install: state.update.can_install, checked_at: state.update.checked_at, error: state.update.error, latest: state.update.latest?.version ?? "",
     include_prerelease: state.update.include_prerelease, etag_hits: state.update.etag_hits, checks: state.update.checks, job: state.update.job.phase, last: state.update.last, rollback: state.update.rollback },
+  search: { index: { available: true, building: false, cursor: 0, hi: 0, articles: 4210, docs: { tri: 4210, word: 4210 } },
+    body: { enabled: true, per_day: 200, per_minute: 6, today: 38, ok: 120, failed: 31, reasons: { robots: 12, paywall: 8, short: 7, blocked: 4 },
+      reason_labels: { robots: "robots.txt が許していません", paywall: "有料の記事です", short: "本文を取り出せませんでした（短い・空）", blocked: "アクセスが制限されています（ログイン・有料・拒否）" },
+      raw_bytes: 1_800_000, packed_bytes: 520_000, cold: { items: 900, raw_bytes: 400_000, packed_bytes: 230_000 } }, compress_years: 1 },
   problems: state.diagProblems ? [{ area: "fetch", level: "warn", text: "取得が止まった可能性のある取得先が 1 件あります" }] : [],
 });
 
@@ -357,6 +362,7 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("POST", "/diagnostics/selfcheck")) return json(route, { at: ago(0), ok: false, checks: [
       { name: "DB の整合（PRAGMA quick_check）", ok: true, detail: "ok", fix: "" }, { name: "全文検索（FTS）の整合", ok: true, detail: "記事 6 件・索引 6 件", fix: "" },
       { name: "LLM の鍵", ok: state.keySet, detail: state.keySet ? "入っています" : "未設定です", fix: "設定の AI の欄で OpenRouter の鍵を入れてください" }, { name: "時計", ok: true, detail: "ずれなし", fix: "" }] });
+    if (is("POST", "/diagnostics/search/rebuild")) return json(route, { queued: true, articles: 4210 });
     if (is("POST", "/diagnostics/flush")) return json(route, { ok: true, reason: "manual", items: 0 });
     state.unhandled.push(`${method} ${path}`);
     return json(route, { detail: "模擬にない API です" }, 404);
