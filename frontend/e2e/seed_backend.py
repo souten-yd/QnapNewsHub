@@ -17,4 +17,9 @@ with news_db.session() as db:
     items = [sources.make_item(kind=k, source=src, source_key=src, title=t, url=u, summary=s, image=img, published=now - timedelta(hours=h))
              for k, src, t, u, s, img, h in ROWS]
     store.upsert_items(db, items)
+    from sqlalchemy import update
+    from qnapnewshub.db import NewsItem
+
+    db.execute(update(NewsItem).where(NewsItem.title.like("画像のない記事%")).values(body_state=1))      # 「本文あり」の印の見本
+    db.commit()
 print("seeded", len(ROWS))

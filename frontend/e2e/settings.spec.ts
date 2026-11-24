@@ -19,6 +19,10 @@ for (const vp of VIEWPORTS) {
         await expect(page.getByTestId("llm-stats")).toContainText("14 / 800");
         await expectNoHorizontalOverflow(page);
         await shot(page, `settings-top-${vp.name}-${scheme}`);
+        await page.locator("#news-body").scrollIntoViewIfNeeded();
+        await expect(page.getByTestId("body-per-day")).toHaveValue("200");
+        await expect(page.getByTestId("compress-years")).toHaveValue("1");
+        await shot(page, `settings-body-${vp.name}-${scheme}`);
         await page.locator("#news-key").scrollIntoViewIfNeeded();
         await shot(page, `settings-key-${vp.name}-${scheme}`);
         expect(state.unhandled).toEqual([]);

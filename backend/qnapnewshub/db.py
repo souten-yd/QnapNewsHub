@@ -9,12 +9,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event, inspect, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -68,6 +69,42 @@ class NewsItem(Base):
     dup_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 要素の取り出し（entities.py）の版。0 なら未（夜の後回しの仕事が拾う）。下ごしらえと同じ 1 回の呼び出しで取り出したら EXTRACT_VERSION が入る
     extract_v: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # 本文の取り出し（bodies.py）: 0 未・1 取れた（news_body に圧縮した本文）・2 取れない（理由は news_body.reason。二度と試さない）
+    body_state: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # 1 年より古い記事の抜粋を圧縮して news_cold へ移した印（summary は空。索引からは抜粋を外す）
+    cold: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class NewsBody(Base):
+    """記事の本文（Trafilatura で取り出したもの）を Zstandard で圧縮した BLOB。細かいファイルを作らず DB の中に持つ。
+    state=1 なら body に圧縮した本文（raw_len は圧縮前のバイト数）。state=2 なら取れなかった理由（reason）だけで、二度と試さない。"""
+
+    __tablename__ = "news_body"
+    __table_args__ = {"sqlite_with_rowid": False}
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    state: Mapped[int] = mapped_column(Integer, default=1)
+    body: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    raw_len: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str] = mapped_column(String(40), default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class NewsCold(Base):
+    """古い記事の抜粋（summary）を Zstandard で圧縮したもの。raw_len は圧縮前のバイト数（診断の「圧縮の効果」用）。"""
+
+    __tablename__ = "news_cold"
+    __table_args__ = {"sqlite_with_rowid": False}
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    z: Mapped[bytes] = mapped_column(LargeBinary)
+    raw_len: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class NewsMeta(Base):
+    """検索の索引の状態などの小さな値（search_v・search_cursor・search_hi）。"""
+
+    __tablename__ = "news_meta"
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
 
 
 class NewsAction(Base):
@@ -308,7 +345,8 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("news_items", "simhash", "BIGINT"), ("news_items", "dup_of", "INTEGER"),
                                         ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0"),
                                         ("ana_count", "lag_sum", "BIGINT NOT NULL DEFAULT 0"), ("ana_count", "lag_n", "INTEGER NOT NULL DEFAULT 0"),
-                                        ("ana_count", "lag_fast", "INTEGER NOT NULL DEFAULT 0")]
+                                        ("ana_count", "lag_fast", "INTEGER NOT NULL DEFAULT 0"),
+                                        ("news_items", "body_state", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "cold", "INTEGER NOT NULL DEFAULT 0")]
 # 後から足した索引（既にあるファイルにも足す）
 _LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at")]
 
@@ -331,6 +369,14 @@ def _add_missing_columns(conn) -> None:
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} ON {table} ({column})"))
 
 
+def _cache_kb() -> int:
+    """SQLite のページのキャッシュの上限（KiB）。既定 256MB。NEWSHUB_SQLITE_CACHE_MB で変える（使った分だけ確保される）。"""
+    try:
+        return max(2, int(os.environ.get("NEWSHUB_SQLITE_CACHE_MB", "256"))) * 1024
+    except ValueError:
+        return 256 * 1024
+
+
 def _open(file: Path) -> Engine:
     file.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{file}", connect_args={"timeout": 10, "check_same_thread": False})
@@ -342,16 +388,17 @@ def _open(file: Path) -> Engine:
         cur.execute("PRAGMA synchronous=NORMAL")
         cur.execute("PRAGMA wal_autocheckpoint=0")      # checkpoint は Write Coordinator が、まとめ書きの直後にだけ行う
         cur.execute("PRAGMA busy_timeout=10000")
+        cur.execute(f"PRAGMA cache_size=-{_cache_kb()}")      # ページのキャッシュ（ARCHITECTURE 9: 256〜512MB が目安。使った分だけ確保される）
         cur.execute("PRAGMA foreign_keys=ON")
         cur.close()
 
-    from qnapnewshub.fts import create_fts
+    from qnapnewshub.searchindex import ensure as ensure_search
 
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         _add_missing_columns(conn)
         try:
-            create_fts(conn)
+            ensure_search(conn)
         except Exception as exc:  # noqa: BLE001 - 検索は LIKE に落ちる
             logger.warning("全文検索の索引を用意できません: %s", exc)
     return engine

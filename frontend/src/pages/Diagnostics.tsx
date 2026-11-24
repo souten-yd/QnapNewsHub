@@ -1,4 +1,4 @@
-import { useDiagnostics, useFlushNow, useSelfCheck, type DiagPoint, type Diagnostics } from "../api/diag";
+import { useDiagnostics, useFlushNow, useRebuildSearch, useSelfCheck, type DiagPoint, type Diagnostics } from "../api/diag";
 import { useToasts } from "../stores";
 import { Card, ghost, primary } from "../features/news/settingsUi";
 
@@ -55,6 +55,7 @@ function SelfCheckCard() {
 export default function DiagnosticsPage() {
   const q = useDiagnostics();
   const flush = useFlushNow();
+  const rebuild = useRebuildSearch();
   const toast = useToasts((s) => s.show);
   if (q.isLoading) return <div className="p-6 text-sm text-zinc-500" role="status">読み込み中…</div>;
   if (q.isError || !q.data) return <div className="p-6 text-sm" role="alert">診断を読み込めませんでした。{q.error instanceof Error ? q.error.message : ""}</div>;
@@ -134,6 +135,19 @@ export default function DiagnosticsPage() {
           </div>
         )}
         <button type="button" className={ghost} disabled={flush.isPending} onClick={() => flush.mutate(undefined, { onSuccess: () => toast("保存しました", "success"), onError: (e) => toast(e instanceof Error ? e.message : "保存できませんでした", "error") })}>いますぐ保存する</button>
+      </Card>
+
+      <Card id="diag-search" title="検索と本文・圧縮" hint="日本語の部分一致（trigram）と英語の索引、本文の取り出し（Trafilatura・Zstandard）、古い記事の圧縮の状態です。">
+        <dl>
+          <Row k="検索の索引" v={!d.search.index.available ? "使えません（LIKE で検索）" : d.search.index.building ? `作り直し中（${d.search.index.cursor} / ${d.search.index.hi}）` : `日本語 ${d.search.index.docs?.tri ?? 0} 件・英語 ${d.search.index.docs?.word ?? 0} 件（記事 ${d.search.index.articles} 件）`} id="search-index" />
+          <Row k="本文の取り出し（今日）" v={d.search.body.enabled ? `${d.search.body.today} / ${d.search.body.per_day} 件（1 分 ${d.search.body.per_minute} 件まで）` : "切"} id="body-today" />
+          <Row k="本文の成否（合計）" v={`取れた ${d.search.body.ok} 件・取れない ${d.search.body.failed} 件`} id="body-result" />
+          {Object.keys(d.search.body.reasons).length > 0 && <Row k="取れない理由" v={Object.entries(d.search.body.reasons).map(([r, n]) => `${d.search.body.reason_labels[r] ?? r} ${n}`).join("・")} id="body-reasons" />}
+          <Row k="本文の圧縮の効果" v={d.search.body.raw_bytes ? `${bytes(d.search.body.raw_bytes)} → ${bytes(d.search.body.packed_bytes)}（${Math.round(d.search.body.packed_bytes * 100 / d.search.body.raw_bytes)}%）` : "まだありません"} id="body-pack" />
+          <Row k="古い記事の抜粋の圧縮" v={d.search.compress_years === 0 ? "しない設定" : `${d.search.compress_years} 年より古い ${d.search.body.cold.items} 件${d.search.body.cold.raw_bytes ? `（${bytes(d.search.body.cold.raw_bytes)} → ${bytes(d.search.body.cold.packed_bytes)}）` : ""}`} id="cold-pack" />
+        </dl>
+        <button type="button" className={ghost} disabled={rebuild.isPending || d.search.index.building} data-testid="rebuild-search"
+          onClick={() => rebuild.mutate(undefined, { onSuccess: () => toast("索引の作り直しを予約しました（1 分ごとに 2 万件ずつ進みます）", "success"), onError: (e) => toast(e instanceof Error ? e.message : "予約できませんでした", "error") })}>検索の索引を作り直す</button>
       </Card>
 
       <Card id="diag-machine" title="機械">

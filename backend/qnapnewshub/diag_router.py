@@ -50,3 +50,16 @@ async def flush_now(user: User = Depends(require_admin)):
 @router.get("/rest")
 def get_rest(user: User = Depends(get_current_user)):
     return rest.state()
+
+
+@router.post("/search/rebuild")
+async def rebuild_search(user: User = Depends(require_admin)):
+    """検索の索引を空にして、作り直しの仕事を予約する（入れるのは 1 分ごとの巡回が 2 万件ずつ。お休み中は進めない）。"""
+    from qnapnewshub import db as news_db, searchindex, writer
+
+    def do():
+        with news_db.engine().begin() as conn:
+            return searchindex.request_rebuild(conn)
+
+    top = await asyncio.to_thread(writer.run, "news.index", do)
+    return {"queued": True, "articles": top}

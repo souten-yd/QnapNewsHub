@@ -21,7 +21,7 @@
 ## 3. 今の状態（2026-11-24）
 | PR | 中身 |
 |---|---|
-| #1 | 0.5・1 段: ControlDeck のニュースの核を移植（取得・目録 472 件・取得先ごとの間隔と履歴・通信確認・一覧の巡回・フィードの生成・記事 DB・FTS5・画像・Google ニュース・チャンネル・好み）、OpenRouter の下ごしらえ（30 件ずつ・上限・送り直し）、認証（管理者の session・読み取りの API トークン）、暗号化した鍵、`./hub.sh` |
+| #1 | 0.5・1 段: ControlDeck のニュースの核を移植（取得・目録 472 件・取得先ごとの間隔と履歴・通信確認・一覧の巡回・フィードの生成・記事 DB・FTS5・画像・Google ニュース・チャンネル・好み）、OpenRouter の下ごしらえ（20 件ずつ。2026-11-24 に 30 → 20、理由は research-free-llm-batch.md の追記・上限・送り直し）、認証（管理者の session・読み取りの API トークン）、暗号化した鍵、`./hub.sh` |
 | #2・#3・#4 | 設計: 知識化 → 設計 v2（ARCHITECTURE.md）→ 無料 LLM を QNAP 側の主力に・新着の傾向・診断 |
 | #5 | 画面（React ＋ Vite。ControlDeck の 5 デザイン・まとめのバブル・取得先の管理・設定・ログイン）・PWA とアイコン（iOS・QPKG 用）・E2E |
 | #6 | v0.1: Write Coordinator（まとめ書き 30 分）・お休みモード・診断・systemd のユーザーの単位の生成 |
@@ -31,6 +31,7 @@
 | v0.1.1 | **Release 済み**（GitHub の Release、署名つき） |
 | v0.2 前半（feat/llm-worker） | 無料の外部 LLM の係（予算 1 日 800 回・1 分 15 回・用途ごとの割り当て・夜の後回し・モデルの順番と切り替え）・**ControlDeck のゲートウェイ**（OpenAI 互換。先に使い、つながらなければ OpenRouter へ）・概要と要素の取り出しを 1 回の呼び出しで・物（entities）と fact（claims）の保存・`/api/v1/entities`・画面「物」・カードの札・`./hub.sh llm-try`。ARCHITECTURE 5.1 の「実装と違った点」・DESIGN 10 章 |
 | v0.2 後半の一部（feat/events-trends） | イベントへの粗いまとめ（`events.py`・表 events／event_articles・まとめ書きで増分）・イベントの画面・ニュースの「ほか N 件」・イベントの要約（用途 event・既定 100）・新着の傾向（分析の節）と「今日の傾向」の解説（用途 trend）・物のホットトピック。ARCHITECTURE 4・7.5 の「実装と違った点」・DESIGN 11 章 |
+| v0.2 後半（feat/search-storage） | **日本語の全文検索**（trigram＋英語 porter の 2 つの索引・BM25・短い語は LIKE・古い DB はバッチで作り直し）・**本文の取り出し**（Trafilatura・robots・Zstandard の BLOB・1 日 200 件・1 分 6 件・取れない記事は二度と試さない・下ごしらえは本文の頭 1,500 文字）・**保存の圧縮**（1 年より古い記事の抜粋を圧縮・索引から外す）・性能の実測（`backend/tools/bench_search.py`）・画面（「本文あり」の印・設定・診断）。ARCHITECTURE 8・9 章の「実装と違った点」・DESIGN 12 章 |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
 - 試験: backend 245 件・E2E 135 件（分析の第 1 版の時点）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
@@ -40,10 +41,12 @@
 - 既知の小さなずれ: 古い設定ファイルに保存済みの 1 日 300 回は、そのまま残る（既定の 800 回は新しい設定だけ）。まとめ・一言要約はモデルの順番に乗っていない（固定のモデル）。試験で StarletteDeprecationWarning が 1 件出る（動作に影響なし）。
 
 ## 4. 次にやること（順番）
+**利用者の決定（2026-11-24）: QNAP の QPKG への変換は、計画したもの（v1.0 まで）をすべて Linux で完成させてから。それまで Linux（この PC の systemd のユーザーのサービス）で評価する。**
+
 1. 開発の PC で動かす（利用者「24 時間も待たなくて良い」〔2026-11-24〕。長時間の運転は並行して、結果を待たずに次へ進む）（`./hub.sh install-service` か `./hub.sh run`、目録から 50〜100 件を有効に）。取得の実績・失敗・書き込みの量・メモリを診断の画面で見る。
 2. QPKG を利用者の QNAP に入れてもらう（`./hub.sh qpkg` の .qpkg を渡す。手順は docs/QPKG.md。型番と CPU も QTS の画面で確認してもらう）。動いたら v0.1 を Release（.qpkg を Release の添付に）。
 3. （済）分析の第 1 版（集計の表・API・画面）。続き: 実データを 1 週間ためてホットトピックの上位が一般語にならないか見る（ストップワードの調整）・集計の表の作り直しが長い（100 万件で約 34 秒）ので、必要なら分割する。
-4. v0.2 の後半: （前半の無料 LLM の係・要素の取り出し・物の画面は済）**本物のゲートウェイ・OpenRouter での取り出しの評価**（`./hub.sh llm-try`。30 件のままでよいか・名寄せの精度）・本文の取り出し（Trafilatura）・FTS5 ＋ trigram・zstd・集計の表・100 万件の模擬データでの性能。
+4. v0.2 の後半: （前半の無料 LLM の係・要素の取り出し・物の画面は済。**検索（trigram＋英語）・本文の取り出し（Trafilatura）・zstd・保存の圧縮・性能の実測は済〔10 万件・100 万件の温まった P95 は 1 秒以内。DESIGN 12〕**〔feat/search-storage〕）残り: **本物のゲートウェイ・OpenRouter での取り出しの評価**（`./hub.sh llm-try`。20 件のままでよいか・名寄せの精度）・粗いイベント・新着の傾向（7.5）。
 5. （済）v0.1.1 は Release 済み。残り: 実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
 6. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
 
@@ -98,7 +101,7 @@
 - 名前は「QNAP ニュースハブ」。ニュースハブが 24 時間集めて正本を持ち、ControlDeck は必要なデータを受け取る（ニュースハブが止まっているときだけ自分で集める）。ControlDeck の News の設定で、機能の入・切（画像生成を含む）と受け取る範囲を変えられる。設定はそれぞれ別。
 - ControlDeck で生成した画像（とリーダーの要約・訳）はニュースハブへ送って保存する。
 - 1 日 1,000 件は読み切れないので、Obsidian のように要素を取り出して知識（カード・つながりの地図・履歴と矛盾）にし、ホットトピック（上位 10）・新着の傾向・分析の画面・ControlDeck の Web 調査との組み合わせに使う。
-- OpenRouter の無料 LLM を積極的に使い、QNAP 側で処理する。無料モデルの上限はアカウントで 1 日 1,000 回（ニュースハブは既定 800 回）。1 回 30 件（実測の根拠あり）。
+- OpenRouter の無料 LLM を積極的に使い、QNAP 側で処理する。無料モデルの上限はアカウントで 1 日 1,000 回（ニュースハブは既定 800 回）。1 回 20 件（2026-11-24 に 30 → 20。理由は research-free-llm-batch.md の追記）（実測の根拠あり）。
 - 数百万件を非力な CPU で速く。メモリのキャッシュを使ってよい（16GB を占有しない）。書き込みはまとめて、常に書き続けない。お休みモード（既定 切）。
 - 画像が抽出できなかった記事は画像を出さない。グラフィカルな画面。アプリとアイコン（iOS のホーム画面・QPKG）。
 - Linux で先に作り、そのあと QPKG。CI は極力使わず、手元の試験で。開発の決まりは ControlDeck と同じ。
@@ -107,3 +110,12 @@
   `store.apply_staged` は「保存で初めて画像が付いた記事」を返す（画像のある数の増分のため）。直接 `upsert_items` で入れた記事（E2E の seed など）は増分に入らないので、集計の表は次の読みの作り直しで揃う（`ana_meta` が無いか指紋が違うとき）。
   E2E の分析の数字は模擬（`frontend/e2e/mock.ts` の HOT・OVERVIEW など）で、実データではない。
 - **ECharts**: `frontend/src/features/analytics/echarts.ts` で部品を選び、`Chart.tsx` が動的 import で描く。版を上げるときは `package.json` の固定の版と別チャンクの大きさ（約 590KB）を見る。
+
+- **検索の索引・本文・圧縮（v0.2 後半）**:
+  - 索引は `searchindex.py`（news_items のトリガーが追う）。**news_items の列を足す・名前を変えるとき**は、トリガーと `_row()` の式（`title, summary_ja, 物の名前, summary, source`）を見る。トリガーを作り直すには、古い DB では `ensure` が `CREATE TRIGGER IF NOT EXISTS` のため、先に落とす。
+  - 試験で「古い DB」を模擬するときは、列・表を落とす前にトリガー（`news_items_ai/ad/au`）も落とす（トリガーが物の表を参照していて、先に表を落とすと ALTER が失敗する）。
+  - 本文の取り出しの試験は `bodies._http` を差し替える（`net.get` ではない）。`bodies._robots`・`_deferred`・`_host_last` はモジュールの状態なので試験の前に空にし、`HOST_PACE` を 0 に。
+  - `trafilatura.extract` に `deduplicate=True` を付けない（プロセスの中で見た段落を覚えていて、同じ段落を持つ別の記事の本文が消える）。
+  - 本文はまとめ書きに積む（`writer.stage_body`）。取れた・取れないの記録は 1 日の上限の数え（`bodies.used_today`＝保存済み＋未保存）に入る。再起動で未保存の分が消えると、その記事はまた試される（上限を少し超えうる）。
+  - **NHK・BBC は X-Robots-Tag: noarchive を返す**ので、本文は取らない（取れない理由に「保存しない指示」と出る）。これは仕様。
+  - 100 万件の索引は約 3GB（trigram が大半）。QNAP の SSD の容量に注意。圧縮（抜粋）では DB は縮まない（VACUUM が要る）。

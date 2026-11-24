@@ -105,6 +105,10 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
     from qnapnewshub import analytics
 
     analytics.apply_entity_deltas(db, deltas)
+
+    from qnapnewshub import searchindex
+
+    searchindex.reindex_ids(db.connection(), [i for i in staged if i in published])      # 物の名前も検索の索引へ（同じトランザクション）
     return done
 
 

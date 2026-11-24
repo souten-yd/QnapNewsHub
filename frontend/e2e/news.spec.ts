@@ -116,6 +116,8 @@ test.describe("新着・アーカイブ・検索・好み", () => {
     const state = await open(page);
     await page.getByRole("tab", { name: "新着" }).click();
     await expect(page.locator("[data-news-card]")).toHaveCount(6);
+    await expect(page.getByTestId("body-mark")).toHaveCount(1);      // 本文を取り出してある記事の印（本文そのものは出さない）
+    await expect(page.locator("[data-news-card]", { hasText: "画像のない記事" }).getByTestId("body-mark")).toHaveText("本文あり");
     await page.getByRole("group", { name: "チャンネル" }).getByRole("button", { name: /インフラ/ }).click();
     await page.getByRole("button", { name: "全チャンネル" }).click();
     const card = page.locator("[data-news-card]", { hasText: "NAS で動かす" });

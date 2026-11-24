@@ -286,25 +286,27 @@ def test_news_tables_live_in_their_own_file_not_the_auth_db():
     assert file.name == "news.sqlite3" and file.parent.name == "news" and file.exists()
     with sqlite3.connect(file) as c:
         names = {r[0] for r in c.execute("SELECT name FROM sqlite_master")}
-        assert {"news_items", "news_actions", "news_digests", "news_items_fts", "news_items_ai", "news_items_ad", "news_items_au"} <= names
+        assert {"news_items", "news_actions", "news_digests", "news_fts_tri", "news_fts_word", "news_items_ai", "news_items_ad", "news_items_au"} <= names
         assert "users" not in names and "sessions" not in names      # 認証は別のファイル（auth.sqlite3）
         assert c.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
 def test_fts_triggers_follow_insert_update_delete():
+    """目的: 検索の索引（trigram・英語）が、記事の挿入・更新・削除に付いてくること。根拠: v0.2 の索引は中身を持たない表で、トリガーが書き込みのたびに入れ直す（searchindex.py）。"""
     add("https://a.test/1", title="日本語のタイトルです")
     with news_db.session() as db:
         row = db.scalar(select(NewsItem))
         row.title = "書き換えた題名です"
         db.commit()
+    q = "SELECT rowid FROM news_fts_tri WHERE news_fts_tri MATCH '\"題名で\"'"
     with sqlite3.connect(news_db.path()) as c:
-        assert c.execute("SELECT rowid FROM news_items_fts WHERE news_items_fts MATCH '\"題名で\"'").fetchall() != []
-        assert c.execute("SELECT rowid FROM news_items_fts WHERE news_items_fts MATCH '\"タイトル\"'").fetchall() == []
+        assert c.execute(q).fetchall() != []
+        assert c.execute("SELECT rowid FROM news_fts_tri WHERE news_fts_tri MATCH '\"タイトル\"'").fetchall() == []
     with news_db.session() as db:
         db.execute(delete(NewsItem))
         db.commit()
     with sqlite3.connect(news_db.path()) as c:
-        assert c.execute("SELECT rowid FROM news_items_fts WHERE news_items_fts MATCH '\"題名で\"'").fetchall() == []
+        assert c.execute(q).fetchall() == []
 
 
 def test_late_columns_are_added_to_an_existing_file(tmp_path, monkeypatch):

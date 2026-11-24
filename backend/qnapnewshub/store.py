@@ -2,7 +2,7 @@
 
 - 同じ url は 1 行（題・抜粋・画像・話題だけ更新。published_at は最初の値を保つ＝アーカイブの並びが動かない）。
 - 保存期間: アーカイブなので消さない。ただし MAX_ITEMS を超えたら古い順に消す（star された記事は残す）。
-- 全文検索は SQLite なら FTS5（trigram: 3 文字以上）、それ以外・短い語・FTS5 が無いときは LIKE。
+- 全文検索は SQLite なら FTS5 の 2 つの索引（日本語は trigram で 3 文字以上の部分一致・英語は porter）を BM25 で合わせて順位づける（searchindex.py）。短い語・FTS5 が無いときは LIKE。
 - 日の区切りは、サーバーの地域の時刻（日本なら日本時間の 0 時）。DB には UTC で持つ。
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from qnapnewshub import channels as channels_mod
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsAction, NewsItem
-from qnapnewshub import prefs, profile, writer
+from qnapnewshub import prefs, profile, searchindex, writer, ztext
 from qnapnewshub import sources as sources_mod
 from qnapnewshub.sources import plain, safe_url
 from qnapnewshub.topics import extract_topics
@@ -158,6 +158,8 @@ def stage_items(items: list[dict]) -> dict:
                 changed.append(item_dict(in_buf))
             continue
         base = pending.get(url) or existing.get(url)
+        if base is not None and getattr(base, "cold", 0):      # 1 年より古い（抜粋を圧縮した）記事の取り直しは何もしない
+            continue
         if base is None:
             item_id = coord.allocate_id()
             rec = NewsItem(id=item_id, kind=data["kind"], source=data["source"], source_key=data["source_key"], title=data["title"], url=url,
@@ -280,6 +282,8 @@ def prune(db: Session, limit: int | None = None, removed_urls: list[str] | None 
         for i in range(0, len(ids), 500):
             removed_urls += list(db.scalars(select(NewsItem.url).where(NewsItem.id.in_(ids[i:i + 500]), NewsItem.kind != "event")))
     for i in range(0, len(ids), 500):
+        db.execute(delete(news_db.NewsBody).where(news_db.NewsBody.item_id.in_(ids[i:i + 500])))
+        db.execute(delete(news_db.NewsCold).where(news_db.NewsCold.item_id.in_(ids[i:i + 500])))
         db.execute(delete(NewsItem).where(NewsItem.id.in_(ids[i:i + 500])))
     if commit:
         db.commit()
@@ -302,17 +306,61 @@ def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def search_clause(db: Session, q: str):
-    """全文検索の条件。語はすべて含む（AND）。3 文字以上の語だけなら FTS5、それ以外は LIKE。"""
+class SearchPlan:
+    """検索の計画: clause は記事の条件、order は {記事の id: 順位（0 が最良）}（索引で順位づけできたときだけ。短い語だけ・索引が無いときは None）。"""
+
+    def __init__(self, clause, order: dict[int, int] | None):
+        self.clause, self.order = clause, order
+
+
+def _like_all(terms: list[str]):
+    return and_(*[or_(NewsItem.title.like(f"%{_like_escape(t)}%", escape="\\"), NewsItem.summary_ja.like(f"%{_like_escape(t)}%", escape="\\"),
+                      NewsItem.summary.like(f"%{_like_escape(t)}%", escape="\\"), NewsItem.source.like(f"%{_like_escape(t)}%", escape="\\")) for t in terms])
+
+
+def search_plan(db: Session, q: str) -> SearchPlan | None:
+    """検索の計画。語はすべて含む（AND）。索引で探せる語（ASCII の語・3 文字以上の語）は FTS5 の BM25、短い語は LIKE。
+    作り直し中（古い DB の移行）は、未索引の範囲を LIKE で補う。"""
     terms = [t for t in q.split() if t][:8]
     if not terms:
         return None
-    if db.get_bind().dialect.name == "sqlite" and all(len(t) >= 3 for t in terms) and db.execute(
-            text("SELECT 1 FROM sqlite_master WHERE name = 'news_items_fts'")).first():
-        match = " ".join('"' + t.replace('"', '""') + '"' for t in terms)
-        return NewsItem.id.in_(select(text("rowid")).select_from(text("news_items_fts")).where(text("news_items_fts MATCH :m")).params(m=match))
-    return and_(*[or_(NewsItem.title.like(f"%{_like_escape(t)}%", escape="\\"), NewsItem.summary.like(f"%{_like_escape(t)}%", escape="\\"),
-                      NewsItem.source.like(f"%{_like_escape(t)}%", escape="\\")) for t in terms])
+    res = searchindex.search(db.connection(), q) if db.get_bind().dialect.name == "sqlite" else None
+    if res is None:
+        return SearchPlan(_like_all(terms), None)
+    ids = [i for i, _ in res["hits"]]
+    clause = NewsItem.id.in_(ids) if ids else NewsItem.id.is_(None)
+    if res["short"]:
+        clause = and_(clause, _like_all(res["short"]))
+    prog = searchindex.progress(db.connection())
+    if prog["building"]:      # まだ索引に入れていない範囲は LIKE で（移行の間だけ）
+        clause = or_(clause, and_(NewsItem.id > prog["cursor"], NewsItem.id <= prog["hi"], _like_all(terms)))
+    return SearchPlan(clause, {i: n for n, i in enumerate(ids)})
+
+
+def search_clause(db: Session, q: str):
+    plan = search_plan(db, q)
+    return plan.clause if plan else None
+
+
+def hydrate(db: Session, rows: list[NewsItem]) -> list[NewsItem]:
+    """古い記事（cold）の抜粋を news_cold から展開して重ねたコピーを返す（DB の行は変えない）。cold が無ければそのまま。"""
+    ids = [r.id for r in rows if getattr(r, "cold", 0)]
+    if not ids:
+        return rows
+    zs = dict(db.execute(select(news_db.NewsCold.item_id, news_db.NewsCold.z).where(news_db.NewsCold.item_id.in_(ids))).all())
+    out = []
+    for r in rows:
+        if r.id in zs:
+            c = writer.clone(r)
+            try:
+                c.summary = ztext.unpack(zs[r.id])
+            except ValueError:
+                logger.warning("圧縮した抜粋を展開できません: id=%s", r.id)
+            if getattr(r, "_unsaved", False):
+                c._unsaved = True
+            r = c
+        out.append(r)
+    return out
 
 
 def action_exists(user_id: int, action: str):
@@ -332,7 +380,7 @@ def mute_conds(user_id: int) -> list:
 
 
 def filters(db: Session, user_id: int, *, kinds: list[str] | None = None, source: str = "", topic: str = "", q: str = "",
-            day: str = "", mute: bool = False) -> list:
+            day: str = "", mute: bool = False, search: SearchPlan | None = None) -> list:
     conds = [visible(user_id)] + (mute_conds(user_id) if mute else [])
     if kinds:
         conds.append(NewsItem.kind.in_(kinds))
@@ -340,9 +388,9 @@ def filters(db: Session, user_id: int, *, kinds: list[str] | None = None, source
         conds.append(or_(NewsItem.source_key == source, NewsItem.source == source))
     if topic:
         conds.append(NewsItem.topics.like(f'%"{_like_escape(topic)}"%', escape="\\"))
-    clause = search_clause(db, q.strip()) if q.strip() else None
-    if clause is not None:
-        conds.append(clause)
+    plan = search if search is not None else (search_plan(db, q.strip()) if q.strip() else None)
+    if plan is not None:
+        conds.append(plan.clause)
     if day:
         start, end = day_range(day)
         conds += [NewsItem.published_at >= start, NewsItem.published_at < end]
@@ -392,6 +440,8 @@ def present(item: NewsItem, state: dict, score: float | None = None) -> dict:
            "image_url": safe_url(item.image_url),
            "published_at": iso(item.published_at),
            "topics": topics_of(item), "state": state, "persisted": not getattr(item, "_unsaved", False)}
+    if getattr(item, "body_state", 0) == 1:      # 本文を取り出してある印（本文は出さない。元のページを開く）
+        row["has_body"] = True
     if item.summary_ja:      # 訳した概要を summary に出し、元の抜粋は開いたとき見られるよう別に持つ
         row["translated"], row["summary_original"] = True, item.summary
     if score is not None:
@@ -407,7 +457,8 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
     limit = max(1, min(int(limit or PAGE_DEFAULT), PAGE_MAX))
     now = now or datetime.now(_UTC)
     searching = bool(q.strip() or day)
-    conds = filters(db, user_id, kinds=kinds, source=source, topic=topic, q=q, day=day, mute=not searching)
+    plan = search_plan(db, q.strip()) if q.strip() else None
+    conds = filters(db, user_id, kinds=kinds, source=source, topic=topic, q=q, day=day, mute=not searching, search=plan)
     if view == "starred":
         conds.append(action_exists(user_id, "star"))
     elif not searching:
@@ -416,6 +467,8 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
     pend = [] if view == "starred" else pending_for(user_id, **pend_kw)      # まだ書いていない記事（操作が付かないので、星は無い）
     if channel is not None:
         return _channel_page(db, user_id, channel, conds, view=view, before=before, limit=limit, now=now, pend=pend)
+    if plan is not None and plan.order is not None:
+        return _ranked_page(db, user_id, plan, conds, pend, before=before, limit=limit)
     if view == "recommended" and not searching:
         since = utc_naive(now - timedelta(days=RECOMMEND_WINDOW_DAYS))
         rows = [writer.get().effective(r) for r in db.scalars(select(NewsItem).where(*conds, NewsItem.published_at >= since)
@@ -434,7 +487,7 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
             conds.append(or_(NewsItem.published_at < cut, and_(NewsItem.published_at == cut, NewsItem.id < int(last or 0))))
         except ValueError:
             pass
-    rows = [writer.get().effective(r) for r in db.scalars(select(NewsItem).where(*conds).order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(limit + 1)).all()]
+    rows = [writer.get().effective(r) for r in hydrate(db, db.scalars(select(NewsItem).where(*conds).order_by(NewsItem.published_at.desc(), NewsItem.id.desc()).limit(limit + 1)).all())]
     if pend:
         if before:
             stamp, _, last = before.partition("|")
@@ -449,6 +502,21 @@ def list_items(db: Session, user_id: int, *, view: str = "latest", kinds: list[s
     st = states(db, user_id, [r.id for r in rows])
     return {"items": attach_also(db, [present(r, st[r.id]) for r in rows], collapse=view != "starred" and not searching),
             "next": f"{iso(rows[-1].published_at)}|{rows[-1].id}" if more and rows else None}
+
+
+def _ranked_page(db: Session, user_id: int, plan: SearchPlan, conds: list, pend: list, *, before: str, limit: int) -> dict:
+    """検索の結果を BM25 の順で。候補は索引の上位（searchindex.CANDIDATES 件）から表示の条件で絞った分。ページは o:<位置>。
+    まだ書いていない記事（pend）は先頭、索引に無い記事（移行の間の LIKE の分）は最後に新しい順。"""
+    order = plan.order or {}
+    rows = [writer.get().effective(r) for r in hydrate(db, db.scalars(select(NewsItem).where(*conds)).all())]
+    seen = {r.id for r in rows}
+    rows = [*[p for p in pend if p.id not in seen], *rows]
+    big = len(order) + 1
+    rows.sort(key=lambda r: (-1 if getattr(r, "_unsaved", False) and r.id not in order else order.get(r.id, big), -utc_naive(r.published_at).timestamp(), -r.id))
+    offset = int(before[2:]) if before.startswith("o:") and before[2:].isdigit() else 0
+    page = rows[offset:offset + limit]
+    st = states(db, user_id, [r.id for r in page])
+    return {"items": attach_also(db, [present(r, st[r.id]) for r in page]), "next": f"o:{offset + limit}" if offset + limit < len(rows) else None}
 
 
 CHANNEL_CANDIDATES = 1500

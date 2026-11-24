@@ -47,7 +47,7 @@ def _check_url(url: str, *, https_only: bool) -> None:
         raise NetError("https の URL だけを使えます" if https_only else "http/https の URL だけを使えます")
 
 
-async def _read(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> tuple[int, dict, bytes]:
+async def _read(client: httpx.AsyncClient, method: str, url: str, *, max_bytes: int = MAX_BYTES, **kwargs) -> tuple[int, dict, bytes]:
     try:
         async with client.stream(method, url, **kwargs) as resp:
             if resp.status_code in (301, 302, 303, 307, 308):
@@ -55,7 +55,7 @@ async def _read(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> t
             chunks, size = [], 0
             async for chunk in resp.aiter_bytes():
                 size += len(chunk)
-                if size > MAX_BYTES:
+                if size > max_bytes:
                     raise NetError("応答が大きすぎます")
                 chunks.append(chunk)
             return resp.status_code, {k.lower(): v for k, v in resp.headers.items()}, b"".join(chunks)
@@ -68,14 +68,14 @@ async def _read(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> t
 
 
 async def get(url: str, *, params: dict | None = None, accept: str = "application/json", headers: dict | None = None,
-              timeout: float = 25, follow: bool = True) -> tuple[int, dict, bytes]:
+              timeout: float = 25, follow: bool = True, max_bytes: int = MAX_BYTES) -> tuple[int, dict, bytes]:
     """GET 1 回。follow なら 3 段までリダイレクトを追う（各段を検査。認証のヘッダーは別のホストへ付けない）。(status, headers, 本文)。"""
     _check_url(url, https_only=False)
     current = url
     async with egress.guarded_client(timeout=timeout, headers={"User-Agent": UA, "Accept": accept, "Accept-Language": "ja,en;q=0.8"}) as client:
         for _ in range(MAX_REDIRECTS + 1):
             same = urlsplit(current).hostname == urlsplit(url).hostname
-            status, head, body = await _read(client, "GET", current, params=params if current == url else None, headers=headers if same else None)
+            status, head, body = await _read(client, "GET", current, params=params if current == url else None, headers=headers if same else None, **({} if max_bytes == MAX_BYTES else {"max_bytes": max_bytes}))
             if follow and status in (301, 302, 303, 307, 308) and head.get("location"):
                 current = urljoin(current, head["location"])
                 _check_url(current, https_only=False)
