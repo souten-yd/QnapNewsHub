@@ -394,14 +394,21 @@ class Coordinator:
         else:
             try:
                 with news_db.session() as db:
-                    store.apply_staged(db, list(snap.new.values()), snap.updates, snap.patches)
+                    gained = store.apply_staged(db, list(snap.new.values()), snap.updates, snap.patches)
                     if snap.fetchlog:
                         fetchlog.record(db, snap.fetchlog, commit=False)
+                    if snap.new or gained or snap.fetchlog:      # 分析の集計の表へ、増えた分だけを同じトランザクションで足す
+                        from qnapnewshub import analytics
+
+                        analytics.apply(db, list(snap.new.values()), gained, snap.fetchlog)
                     if snap.new or snap.updates:
                         from qnapnewshub import channels
 
                         store.prune(db, channels.load()["archive_keep"], commit=False)
                     db.commit()
+                from qnapnewshub import analytics
+
+                analytics.bump()
                 for fn in snap.states.values():
                     fn()
                 if snap.token_used:

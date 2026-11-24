@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from qnapnewshub import __version__, auth, auth_router, diag_router, logbuf, metrics, router, service, settings, update_router, updater, writer
+from qnapnewshub import __version__, analytics, analytics_router, auth, auth_router, diag_router, logbuf, metrics, router, service, settings, update_router, updater, writer
 
 logger = logging.getLogger("qnapnewshub.main")
 
@@ -27,6 +27,14 @@ async def sampler() -> None:
         await asyncio.sleep(metrics.SAMPLE_SECONDS)
 
 
+async def _analytics_ready() -> None:
+    """起動の後、集計の表が無い（初回・移行）なら作る。失敗しても API は動く（読むとき再び試す）。"""
+    try:
+        await asyncio.to_thread(analytics.ensure)
+    except Exception:  # noqa: BLE001
+        logger.exception("分析の集計の表を用意できませんでした")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logbuf.install(file_log=bool(settings.load()["storage"]["log_file"]))
@@ -34,7 +42,7 @@ async def lifespan(app: FastAPI):
     token = await asyncio.to_thread(auth.ensure_setup_token)
     if token:      # 番号そのものはログに出さない（置き場のファイルと、QPKG なら QTS のシステムのログで見る）
         logger.warning("最初の管理者を作るには一回限りの番号が要ります（データの置き場の %s）", auth.SETUP_TOKEN_FILE)
-    tasks = [asyncio.create_task(sampler())]
+    tasks = [asyncio.create_task(sampler()), asyncio.create_task(_analytics_ready())]
     if os.environ.get("NEWSHUB_AUTO") != "0":
         tasks.append(asyncio.create_task(service.news_loop()))
         tasks.append(asyncio.create_task(updater.loop()))
@@ -97,6 +105,7 @@ def create_app() -> FastAPI:
     api.include_router(router.router)
     api.include_router(diag_router.router)
     api.include_router(update_router.router)
+    api.include_router(analytics_router.router)
     app.include_router(api)
     root = web_dir()
     if root is not None:

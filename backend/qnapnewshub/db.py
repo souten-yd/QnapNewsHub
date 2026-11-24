@@ -117,6 +117,72 @@ class NewsFetchLog(Base):
     skipped: Mapped[str] = mapped_column(Text, default="")
 
 
+class AnaCount(Base):
+    """分析の集計の表（analytics.py）: 記事の数。日ごと（grain=d）・時間ごと（grain=h）に、分け方（dim）ごとの数。
+    t は地域の時刻の文字（日は YYYY-MM-DD、時間は YYYY-MM-DD HH）。n は記事の数、indep は近い重複を除いた数、img は画像のある記事の数。"""
+
+    __tablename__ = "ana_count"
+    __table_args__ = {"sqlite_with_rowid": False}
+    grain: Mapped[str] = mapped_column(String(1), primary_key=True)
+    dim: Mapped[str] = mapped_column(String(8), primary_key=True)
+    t: Mapped[str] = mapped_column(String(13), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    lang: Mapped[str] = mapped_column(String(2), primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    indep: Mapped[int] = mapped_column(Integer, default=0)
+    img: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AnaTopic(Base):
+    """話題の語の数（日ごと d・時間ごと h）。term は小文字にそろえた語、label は表示の表記（最後に見た表記）。"""
+
+    __tablename__ = "ana_topic"
+    __table_args__ = {"sqlite_with_rowid": False}
+    grain: Mapped[str] = mapped_column(String(1), primary_key=True)
+    t: Mapped[str] = mapped_column(String(13), primary_key=True)
+    term: Mapped[str] = mapped_column(String(80), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    lang: Mapped[str] = mapped_column(String(2), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(30), primary_key=True)
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    indep: Mapped[int] = mapped_column(Integer, default=0)
+    label: Mapped[str] = mapped_column(String(80), default="")
+
+
+class AnaTopicSrc(Base):
+    """語ごとの出どころ（取得先）の組。時間ごとだけ・直近 72 時間だけ持つ（独立した出どころの数を数えるため）。"""
+
+    __tablename__ = "ana_topic_src"
+    __table_args__ = {"sqlite_with_rowid": False}
+    t: Mapped[str] = mapped_column(String(13), primary_key=True)
+    term: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    lang: Mapped[str] = mapped_column(String(2), primary_key=True)
+
+
+class AnaFetch(Base):
+    """取得先ごと・日ごとの取得の成否。runs は取得した回数（見送りは含めない）、ok は成功、s304 は 304（変更なし）、new は新着の記事の数。"""
+
+    __tablename__ = "ana_fetch"
+    __table_args__ = {"sqlite_with_rowid": False}
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    runs: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[int] = mapped_column(Integer, default=0)
+    s304: Mapped[int] = mapped_column(Integer, default=0)
+    new: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AnaMeta(Base):
+    """集計の表の状態（sig: 作ったときのチャンネル・出どころの設定の指紋、built_at）。"""
+
+    __tablename__ = "ana_meta"
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+
+
 # 後から足した列（既にあるファイルにも足す。そのファイルを初めて開いたとき 1 回）。（表, 列, 宣言）
 _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOLEAN NOT NULL DEFAULT 0"), ("news_items", "summary_ja", "TEXT DEFAULT ''"),
                                         ("news_items", "img_prompt", "TEXT DEFAULT ''"), ("news_items", "prep_tries", "INTEGER NOT NULL DEFAULT 0"),

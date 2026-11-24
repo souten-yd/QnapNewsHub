@@ -199,21 +199,30 @@ def stage_items(items: list[dict]) -> dict:
     return {"new": new, "updated": updated, "changed": changed, "new_ids": new_ids, "new_urls": [u for u in by_url if u in new_urls]}
 
 
-def apply_staged(db: Session, new: list, updates: dict[str, dict], patches: dict[int, dict]) -> None:
-    """バッファを DB へ（コミットは呼ぶ側。1 トランザクション）。Write Coordinator の保存から呼ぶ。"""
+def apply_staged(db: Session, new: list, updates: dict[str, dict], patches: dict[int, dict]) -> list[NewsItem]:
+    """バッファを DB へ（コミットは呼ぶ側。1 トランザクション）。Write Coordinator の保存から呼ぶ。
+    返すのは、この保存で初めて画像が付いた既存の記事（分析の集計の「画像のある数」を足すため）。"""
+    gained: list[NewsItem] = []
     for rec in new:
         db.add(writer.clone(rec))
     db.flush()
     urls = list(updates)
     for i in range(0, len(urls), 400):
         for row in db.execute(select(NewsItem).where(NewsItem.url.in_(urls[i:i + 400]))).scalars():
+            had = bool(row.image_url)
             for k, v in updates[row.url].items():
                 setattr(row, k, v)
+            if not had and row.image_url:
+                gained.append(row)
     ids = list(patches)
     for i in range(0, len(ids), 400):
         for row in db.execute(select(NewsItem).where(NewsItem.id.in_(ids[i:i + 400]))).scalars():
+            had = bool(row.image_url)
             writer.apply_patch(row, patches[row.id])
+            if not had and row.image_url:
+                gained.append(row)
     db.flush()
+    return gained
 
 
 def changes_persisted(db: Session, after_id: int = 0, limit: int = 500) -> list[dict]:
