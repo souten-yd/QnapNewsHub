@@ -53,13 +53,14 @@ class _Buf:
         self.extractions: dict[int, dict] = {}         # 記事の id -> 要素の取り出し（物・fact。entities.apply_extractions が書く）
         self.event_summaries: dict[int, dict] = {}     # イベントの id -> 要約（events.apply_summaries が書く）。{"tries": 1} は失敗の記録
         self.trend_notes: list[dict] = []              # 「今日の傾向」の解説（trend.save_note が書く）
+        self.bodies: dict[int, dict] = {}              # 記事の id -> 本文の取り出しの結果（bodies.apply が書く。state 1 は圧縮した本文・2 は取れない理由）
         self.bytes = 0
 
     def empty(self) -> bool:
-        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes)
+        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes or self.bodies)
 
     def count(self) -> int:
-        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes)
+        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes or self.bodies)
 
 
 def merge_patch(old: dict | None, new: dict) -> dict:
@@ -302,6 +303,22 @@ class Coordinator:
         with self.lock:
             return [*self.inflight.trend_notes, *self.buf.trend_notes]
 
+    def stage_body(self, item_id: int, rec: dict) -> None:
+        """本文の取り出しの結果を積む（{"state": 1|2, "body": 圧縮した本文, "raw_len", "reason", "at"}）。記事の body_state の印も一緒に積む。"""
+        with self.lock:
+            self.buf.bodies[item_id] = rec
+        self.patch_item(item_id, set={"body_state": rec["state"]})
+        self._touch(len(rec.get("body") or b"") + 100)
+
+    def has_unsaved_body(self, item_id: int) -> bool:
+        with self.lock:
+            return any(item_id in b.bodies for b in (self.inflight, self.buf))
+
+    def bodies_today(self, since: datetime) -> int:
+        """まだ書いていない本文の試行（成功・失敗とも）のうち、since 以降の数（1 日の上限の数え）。"""
+        with self.lock:
+            return sum(1 for b in (self.inflight, self.buf) for r in b.bodies.values() if r["at"] >= since)
+
     def stage_token_used(self, token_id: int, at: str) -> None:
         with self.lock:
             self.buf.token_used[token_id] = at
@@ -378,7 +395,7 @@ class Coordinator:
         with self.lock:
             b = self.buf
             return {"items": len(b.new), "updates": len(b.updates), "patches": len(b.patches), "fetchlog": len(b.fetchlog),
-                    "states": len(b.states), "extractions": len(b.extractions), "total": b.count(), "bytes": b.bytes, "inflight": self.inflight.count()}
+                    "states": len(b.states), "extractions": len(b.extractions), "bodies": len(b.bodies), "total": b.count(), "bytes": b.bytes, "inflight": self.inflight.count()}
 
     def unsaved_total(self) -> int:
         with self.lock:
@@ -431,6 +448,10 @@ class Coordinator:
                         from qnapnewshub import entities
 
                         entities.apply_extractions(db, snap.extractions)
+                    if snap.bodies:
+                        from qnapnewshub import bodies
+
+                        bodies.apply(db, snap.bodies)
                     if snap.fetchlog:
                         fetchlog.record(db, snap.fetchlog, commit=False)
                     if snap.event_summaries:
@@ -506,6 +527,8 @@ class Coordinator:
         for k, v in older.event_summaries.items():
             into.event_summaries.setdefault(k, v)
         into.trend_notes[:0] = older.trend_notes
+        for k, v in older.bodies.items():
+            into.bodies.setdefault(k, v)
         for k, v in older.token_used.items():
             into.token_used.setdefault(k, v)
         into.bytes += older.bytes

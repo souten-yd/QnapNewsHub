@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text
 
-from qnapnewshub import channels, entities as entities_mod, events as events_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, updater, writer
+from qnapnewshub import bodies as bodies_mod, searchindex, channels, entities as entities_mod, events as events_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, updater, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.config import data_dir
 from qnapnewshub.db import NewsFetchLog, NewsItem
@@ -182,6 +182,18 @@ def storage_section() -> dict:
             "daily": metrics.daily_history()}
 
 
+def search_section(db) -> dict:
+    """検索の索引・本文の取り出し・保存の圧縮の状態（読むだけ）。"""
+    conn = db.connection()
+    prog = searchindex.progress(conn)
+    have = searchindex.has_index(conn)
+    n_items = db.scalar(select(func.count(NewsItem.id))) or 0
+    info = bodies_mod.stats(db)
+    return {"index": {"available": have, "building": prog["building"], "cursor": prog["cursor"], "hi": prog["hi"], "articles": int(n_items),
+                      **({"docs": searchindex.counts(conn)} if have else {})},
+            "body": info, "compress_years": settings.load()["storage"]["compress_years"]}
+
+
 def problems(section: dict) -> list[dict]:
     """自動の判定（level: error / warn）。ホームの一行の知らせもここから。"""
     out: list[dict] = []
@@ -205,6 +217,12 @@ def problems(section: dict) -> list[dict]:
         out.append({"area": "storage", "level": "error", "text": "ディスクの空きが 1GB を切りました"})
     if s["flush_failures"]:
         out.append({"area": "storage", "level": "error", "text": "まとめ書きに失敗しています（メモリに残しています）"})
+    se = section.get("search") or {}
+    if se.get("index", {}).get("building"):
+        out.append({"area": "search", "level": "warn", "text": "検索の索引を作り直しています（終わるまで、新しい検索の一部は遅くなります）"})
+    bd = se.get("body") or {}
+    if bd.get("enabled") and bd.get("ok", 0) + bd.get("failed", 0) >= 20 and bd.get("ok", 0) * 10 < bd.get("failed", 0):
+        out.append({"area": "search", "level": "warn", "text": "本文の取り出しが取れない記事ばかりです（取得先の許可・制限を確かめてください）"})
     up = section.get("update") or {}
     if up.get("last") and not up["last"]["ok"]:
         out.append({"area": "update", "level": "warn", "text": up["last"]["message"]})
@@ -214,7 +232,7 @@ def problems(section: dict) -> list[dict]:
 
 
 def build(db) -> dict:
-    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary()}
+    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary(), "search": search_section(db)}
     section["problems"] = problems(section)
     return section
 
@@ -253,12 +271,17 @@ def selfcheck() -> dict:
         add("DB の整合（PRAGMA quick_check）", False, f"開けません: {type(exc).__name__}", "データの置き場とディスクを確かめてください")
     try:
         with news_db.engine().connect() as conn:
-            if conn.execute(text("SELECT 1 FROM sqlite_master WHERE name='news_items_fts'")).first() is None:
+            if not searchindex.has_index(conn):
                 add("全文検索（FTS）の整合", True, "FTS5 は使っていません（LIKE で検索します）")
             else:
                 n_items = conn.execute(text("SELECT count(*) FROM news_items")).scalar() or 0
-                n_fts = conn.execute(text("SELECT count(*) FROM news_items_fts_docsize")).scalar() or 0
-                add("全文検索（FTS）の整合", n_items == n_fts, f"記事 {n_items} 件・索引 {n_fts} 件", "索引の作り直しが要ります（設定の保存と I/O から）")
+                docs = searchindex.counts(conn)
+                prog = searchindex.progress(conn)
+                if prog["building"]:
+                    add("全文検索（FTS）の整合", True, f"索引を作り直し中です（{prog['cursor']}/{prog['hi']}）")
+                else:
+                    add("全文検索（FTS）の整合", docs["tri"] == n_items and docs["word"] == n_items, f"記事 {n_items} 件・索引 {docs['tri']}（trigram）/ {docs['word']}（英語）件",
+                        "索引の作り直しが要ります（診断の「検索の索引」から）")
     except Exception as exc:  # noqa: BLE001
         add("全文検索（FTS）の整合", False, f"確かめられません: {type(exc).__name__}", "DB の整合の結果を先に直してください")
     add("LLM の鍵", llm.key_is_set(), "入っています" if llm.key_is_set() else "未設定です", "設定の AI の欄で OpenRouter の鍵を入れてください")

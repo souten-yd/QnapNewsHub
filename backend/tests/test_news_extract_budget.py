@@ -463,6 +463,8 @@ def test_old_database_is_migrated_with_columns_and_tables(tmp_path, monkeypatch)
     news_db._engines.clear()
     path = news_db.path()
     con = sqlite3.connect(path)
+    for trig in ("news_items_ai", "news_items_ad", "news_items_au"):      # 古い DB の索引のトリガーは物の表を知らない（開くとき作り直される）
+        con.execute(f"DROP TRIGGER {trig}")
     for table in ("claims", "article_entities", "entity_aliases", "entities"):
         con.execute(f"DROP TABLE {table}")
     con.execute("ALTER TABLE news_items DROP COLUMN extract_v")

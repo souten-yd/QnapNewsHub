@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from qnapnewshub import __version__, analytics, analytics_router, auth, auth_router, diag_router, entities_router, events_router, logbuf, metrics, router, service, settings, update_router, updater, writer
+from qnapnewshub import __version__, maintenance, analytics, analytics_router, auth, auth_router, diag_router, entities_router, events_router, logbuf, metrics, router, service, settings, update_router, updater, writer
 
 logger = logging.getLogger("qnapnewshub.main")
 
@@ -46,6 +46,7 @@ async def lifespan(app: FastAPI):
     if os.environ.get("NEWSHUB_AUTO") != "0":
         tasks.append(asyncio.create_task(service.news_loop()))
         tasks.append(asyncio.create_task(updater.loop()))
+        tasks.append(asyncio.create_task(maintenance.loop()))
     try:
         yield
     finally:

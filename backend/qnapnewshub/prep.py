@@ -67,9 +67,27 @@ def _line(text: object, limit: int) -> str:
     return extract.clean_text(text, limit)
 
 
+LEAD_CHARS = 1500      # 本文（bodies.py）があるとき、抜粋の代わりに送る本文の頭の文字数
+
+
+def _excerpt(item: dict) -> str:
+    """送る抜粋: 本文を取り出してある記事は本文の頭（LEAD_CHARS 文字）、無ければ抜粋（400 文字）。"""
+    return _line(item["lead"], LEAD_CHARS) if item.get("lead") else _line(item.get("summary") or "", 400)
+
+
 def source_text(item: dict) -> str:
-    """LLM に送った原文（題と抜粋）。fact の数字がここにあるかを確かめる。"""
-    return f"{_line(item['title'], 400)} {_line(item.get('summary') or '', 400)}"
+    """LLM に送った原文（題と抜粋〔本文があれば本文の頭〕）。fact の数字がここにあるかを確かめる。"""
+    return f"{_line(item['title'], 400)} {_excerpt(item)}"
+
+
+async def attach_leads(items: list[dict]) -> None:
+    """本文のある記事に lead（本文の頭）を付ける（送る文だけが変わる。DB は変えない）。"""
+    from qnapnewshub import bodies
+
+    found = await asyncio.to_thread(bodies.leads, [i["id"] for i in items if i.get("id") is not None], LEAD_CHARS)
+    for item in items:
+        if item.get("id") in found:
+            item["lead"] = found[item["id"]]
 
 
 def build_prompt(items: list[dict], *, strict: bool = False, extract_only: bool = False, with_extract: bool = True) -> str:
@@ -91,7 +109,7 @@ def build_prompt(items: list[dict], *, strict: bool = False, extract_only: bool 
         lines[-1:] = [STRICT.strip(), ""]
     lines.append("=== 記事（ここから）===")
     for n, item in enumerate(items, 1):
-        lines.append(f"{n}. {_line(item['title'], 400)}（{_line(item['source'], 80)}） {_line(item.get('summary') or '', 400)}")
+        lines.append(f"{n}. {_line(item['title'], 400)}（{_line(item['source'], 80)}） {_excerpt(item)}")
     lines.append("=== 記事（ここまで）===")
     return "\n".join(lines)
 
@@ -263,6 +281,7 @@ async def run(items: list[dict]) -> dict:
     todo = todo[:limit]
     if not todo:
         return {"done": 0, "calls": 0, "error": ""}
+    await attach_leads(todo)
     return await _run_batches(todo, lambda: batch_size(cfg), lambda part, strict=False: _ask(cfg, part, strict=strict))
 
 
@@ -325,6 +344,7 @@ async def run_backfill() -> dict:
     if datetime.now().hour < cfg["night_from"] or st["calls"]["backfill"] >= st["leftover"] or not st["key_set"]:
         return {"done": 0, "calls": 0, "error": ""}
     todo = await asyncio.to_thread(_backfill_candidates, BACKFILL_MAX_PER_RUN)
+    await attach_leads(todo)
     done = calls = 0
     start = 0
     while start < len(todo):
