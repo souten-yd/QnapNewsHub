@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useSwipe } from "../components/useSwipe";
 import { relativeTime, DEFAULT_PREFS, LEGACY_DESIGNS, useNewsAction, useNewsChannels, useNewsHome, useNewsItems, useNewsPrefs, useNewsSources, useRefreshNews, type NewsDesign, type NewsItem, type NewsView } from "../api/news";
 import { useDiagNotice } from "../api/diag";
+import { useUpdateNotice } from "../api/update";
 import { useToasts } from "../stores";
 import { DesignHome } from "../features/news/DesignHomes";
 import { BroadcastHome } from "../features/news/BroadcastHome";
@@ -20,6 +21,7 @@ const CHIPS = [["", "すべて"], ["release", "更新"], ["news", "ニュース"
 export default function NewsPage() {
   const toast = useToasts((s) => s.show);
   const notice = useDiagNotice();
+  const updNotice = useUpdateNotice();
   const prefsQuery = useNewsPrefs();
   const prefs = prefsQuery.data ?? DEFAULT_PREFS;
   const [tab, setTab] = useState<Tab>("home");
@@ -75,6 +77,11 @@ export default function NewsPage() {
 
   return (
     <div className="mx-auto max-w-6xl p-2 md:p-6">
+      {updNotice.data?.message && (
+        <Link to="/settings#app-update" role="status" data-testid="update-notice" className="mb-2 flex min-h-11 items-center gap-2 rounded-xl border border-accent-600/50 bg-accent-600/10 px-3 py-2 text-xs font-medium text-accent-800 dark:text-accent-200">
+          <span aria-hidden>↑</span><span className="min-w-0 flex-1">{updNotice.data.message}</span><span className="shrink-0 underline">更新を開く</span>
+        </Link>
+      )}
       {notice.data?.message && (
         <Link to="/diagnostics" role="status" data-testid="diag-notice" className={`mb-2 flex min-h-11 items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium ${notice.data.level === "error" ? "border-red-500/50 bg-red-500/10 text-red-800 dark:text-red-300" : "border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-300"}`}>
           <span aria-hidden>●</span><span className="min-w-0 flex-1">{notice.data.message}</span><span className="shrink-0 underline">診断を開く</span>

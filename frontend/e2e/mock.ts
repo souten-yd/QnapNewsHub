@@ -1,6 +1,7 @@
 /** E2E の API の模擬（page.route）。画面は本物のバックエンドが配る build をそのまま使い、/api/v1 だけを差し替える。
  *  模擬に無い API が呼ばれたら 404 を返して unhandled に記録する（試験の終わりに空であることを確かめる）。 */
 import type { Page, Route } from "@playwright/test";
+import type { UpdateStatus, UpdateRelease } from "../src/api/update";
 import type { Digest, NewsHome, NewsItem, NewsPrefs, NewsRuntimeSettings } from "../src/api/news";
 
 const NOW = Date.now();
@@ -87,17 +88,27 @@ const IMPORT_ROWS = [
   { line: 5, name: "使えない行", url: "ftp://bad.example.test/x", category: "", origin: "", origin_guess: "other", interval: 0, enabled: true, kind: "rss", status: "invalid", reason: "https の URL ではありません" },
 ];
 
+export const UPDATE_NOTES = [
+  "## 0.2.0", "- **更新の機能**が入りました", "- 設定の「アプリの更新」から `今すぐ確認` できます", "", "```", "./hub.sh setup", "```", "",
+  "<script>window.__pwned = 1</script>", "<img src=x onerror=\"window.__pwned = 2\">", "[公式](https://github.com/example/repo) [危険](javascript:alert(1))",
+].join("\n");
+export const UPDATE_LATEST: UpdateRelease = { version: "0.2.0", tag: "v0.2.0", prerelease: false, notes: UPDATE_NOTES, url: "https://github.com/example/repo/releases/tag/v0.2.0", published_at: ago(5), size: 95_000_000 };
+export const UPDATE_BASE: UpdateStatus = {
+  version: "0.1.1", install: "qpkg", can_install: true, include_prerelease: false, checked_at: ago(2), checking: false, error: "", latest: null, update_available: false, rollback: null,
+  job: { phase: "idle", kind: "", target: "", message: "", percent: 0, started_at: "" }, last: null, rest: { active: false, ends_at: null }, etag_hits: 2, checks: 3, manual_steps: [],
+};
+
 export interface MockState {
   authenticated: boolean; setupNeeded: boolean; setupTokenRequired?: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
   hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
   /** 画像の無い記事だけの一覧にしたいとき等、一覧を差し替える */
   items: NewsItem[];
-  restActive: boolean; diagProblems: boolean;
+  restActive: boolean; diagProblems: boolean; update: UpdateStatus;
 }
 
 export function newState(over: Partial<MockState> = {}): MockState {
   return { authenticated: true, setupNeeded: false, username: "admin", keySet: false, prefs: structuredClone(PREFS), settings: structuredClone(SETTINGS),
-    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, ...over };
+    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, update: structuredClone(UPDATE_BASE), ...over };
 }
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -120,7 +131,9 @@ const diagnostics = (state: MockState) => ({
     rest: { enabled: state.settings.rest.enabled, active: state.restActive, mode: state.settings.rest.mode, start: "01:00", end: "06:00", ends_at: state.restActive ? "2026-11-25T06:00:00" : null },
     rest_writes: state.restActive ? [{ at: ago(0.1), name: "prefs.save", user: true }] : [], rest_app_writes: 0, writes_by_name: { "prefs.save": 1 }, flush_history: [],
   },
-  machine: { cpu_pct: 0.2, load: [0.1, 0.2, 0.2], rss: 126_000_000, uptime_seconds: 93_000, version: "0.1.0", python: "3.12", cpus: 2 },
+  machine: { cpu_pct: 0.2, load: [0.1, 0.2, 0.2], rss: 126_000_000, uptime_seconds: 93_000, version: "0.1.1", python: "3.12", cpus: 2 },
+  update: { version: state.update.version, install: state.update.install, can_install: state.update.can_install, checked_at: state.update.checked_at, error: state.update.error, latest: state.update.latest?.version ?? "",
+    include_prerelease: state.update.include_prerelease, etag_hits: state.update.etag_hits, checks: state.update.checks, job: state.update.job.phase, last: state.update.last, rollback: state.update.rollback },
   problems: state.diagProblems ? [{ area: "fetch", level: "warn", text: "取得が止まった可能性のある取得先が 1 件あります" }] : [],
 });
 
@@ -205,6 +218,15 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("POST", "/news/refresh")) return json(route, { started: true, reason: "", new: 2, failed: 0 });
     if (is("PUT", "/news/channels")) return json(route, body);
 
+    if (is("GET", "/update")) return json(route, state.update);
+    if (is("GET", "/update/notice")) return json(route, state.update.update_available && state.update.latest ? { available: true, version: state.update.latest.version, message: `新しい版 ${state.update.latest.version} があります（いまは ${state.update.version}）` } : { available: false, version: "", message: null });
+    if (is("POST", "/update/check")) { state.update.checked_at = new Date().toISOString(); return json(route, state.update); }
+    if (is("PUT", "/update/settings")) { state.update.include_prerelease = (body as { include_prerelease: boolean }).include_prerelease; return json(route, state.update); }
+    if (is("POST", "/update/install") || is("POST", "/update/rollback")) {
+      const kind = path.endsWith("rollback") ? "rollback" : "update";
+      state.update.job = { phase: "downloading", kind, target: (body as { version: string }).version, message: "取得しています", percent: 40, started_at: new Date().toISOString() };
+      return json(route, state.update);
+    }
     if (is("GET", "/diagnostics")) return json(route, diagnostics(state));
     if (is("GET", "/diagnostics/notice")) return json(route, state.diagProblems ? { message: "取得が止まった可能性のある取得先が 1 件あります", level: "warn", count: 1 } : { message: null, level: null, count: 0 });
     if (is("POST", "/diagnostics/selfcheck")) return json(route, { at: ago(0), ok: false, checks: [

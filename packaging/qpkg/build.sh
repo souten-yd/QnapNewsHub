@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HERE="$ROOT/packaging/qpkg"
 CACHE="$ROOT/packaging/.cache"
 STAGE="$CACHE/stage"
-OUT="$ROOT/dist"
+OUT="${NEWSHUB_QPKG_OUT:-$ROOT/dist}"      # 試験（run-sim.sh update）が別の置き場・別の版で作るとき用
 
 PY_TAG="20261110"
 PY_NAME="cpython-3.12.16+${PY_TAG}-x86_64-unknown-linux-gnu-install_only.tar.gz"
@@ -35,6 +35,12 @@ fetch() {   # fetch <url> <file> <sha256>
 
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$ROOT/backend/qnapnewshub/__init__.py")"
 [ -n "$VERSION" ] || { echo "版が読めません" >&2; exit 1; }
+# 試験用: 組み立てた QPKG の中の版だけを書き換える（古い版の QPKG を作って、更新の試験に使う。リポジトリの版は変えない）
+if [ -n "${NEWSHUB_QPKG_VERSION:-}" ]; then
+  echo "$NEWSHUB_QPKG_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "NEWSHUB_QPKG_VERSION の形が正しくありません" >&2; exit 1; }
+  VERSION="$NEWSHUB_QPKG_VERSION"
+  OVERRIDE=1
+fi
 [ -f "$ROOT/frontend/dist/index.html" ] || { echo "先に ./hub.sh build で画面を build してください" >&2; exit 1; }
 [ -x "$ROOT/.venv/bin/python" ] || { echo "先に ./hub.sh setup を実行してください" >&2; exit 1; }
 command -v podman >/dev/null || { echo "podman が要ります（QDK をコンテナの中で使うため）" >&2; exit 1; }
@@ -44,7 +50,7 @@ fetch "$PY_URL" "$PY_NAME" "$PY_SHA"
 fetch "$QDK_URL" "$QDK_DEB" "$QDK_SHA"
 
 echo "組み立て: $STAGE"
-rm -rf "$STAGE"
+rm -rf "$STAGE" 2>/dev/null || podman unshare rm -rf "$STAGE"      # 前の podman が作ったファイルは持ち主が違って消せないことがある
 mkdir -p "$STAGE/QnapNewsHub/x86_64" "$STAGE/QnapNewsHub/shared" "$STAGE/QnapNewsHub/icons"
 P="$STAGE/QnapNewsHub"
 sed "s/^QPKG_VER=.*/QPKG_VER=\"$VERSION\"/" "$HERE/qpkg.cfg" > "$P/qpkg.cfg"
@@ -62,6 +68,7 @@ rm -rf "$X/python/lib/python3.12/test" "$X/python/lib/python3.12/idlelib" "$X/py
 rm -rf "$X/site/bin" "$X/site/greenlet/tests"
 mkdir -p "$X/app"
 cp -r "$ROOT/backend/qnapnewshub" "$X/app/qnapnewshub"
+[ -z "${OVERRIDE:-}" ] || sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" "$X/app/qnapnewshub/__init__.py"
 find "$X/app" -name "__pycache__" -type d -prune -exec rm -rf {} +
 cp -r "$ROOT/frontend/dist" "$X/web"
 # .pyc は同梱の Python で作る（版が合う）。中身の hash で照合する形にして、時刻のずれで無効にならないように

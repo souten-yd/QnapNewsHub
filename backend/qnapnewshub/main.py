@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from qnapnewshub import __version__, auth, auth_router, diag_router, logbuf, metrics, router, service, settings, writer
+from qnapnewshub import __version__, auth, auth_router, diag_router, logbuf, metrics, router, service, settings, update_router, updater, writer
 
 logger = logging.getLogger("qnapnewshub.main")
 
@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
     tasks = [asyncio.create_task(sampler())]
     if os.environ.get("NEWSHUB_AUTO") != "0":
         tasks.append(asyncio.create_task(service.news_loop()))
+        tasks.append(asyncio.create_task(updater.loop()))
     try:
         yield
     finally:
@@ -95,6 +96,7 @@ def create_app() -> FastAPI:
     api.include_router(auth_router.router)
     api.include_router(router.router)
     api.include_router(diag_router.router)
+    api.include_router(update_router.router)
     app.include_router(api)
     root = web_dir()
     if root is not None:

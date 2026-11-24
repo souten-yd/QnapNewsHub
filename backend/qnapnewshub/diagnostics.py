@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text
 
-from qnapnewshub import channels, fetchlog, llm, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, writer
+from qnapnewshub import channels, fetchlog, llm, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, updater, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.config import data_dir
 from qnapnewshub.db import NewsFetchLog, NewsItem
@@ -192,13 +192,16 @@ def problems(section: dict) -> list[dict]:
         out.append({"area": "storage", "level": "error", "text": "ディスクの空きが 1GB を切りました"})
     if s["flush_failures"]:
         out.append({"area": "storage", "level": "error", "text": "まとめ書きに失敗しています（メモリに残しています）"})
+    up = section.get("update") or {}
+    if up.get("last") and not up["last"]["ok"]:
+        out.append({"area": "update", "level": "warn", "text": up["last"]["message"]})
     if m["rss"] > RSS_TARGET:
         out.append({"area": "machine", "level": "warn", "text": "常駐のメモリが目標の 512MB を超えています"})
     return out
 
 
 def build(db) -> dict:
-    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine()}
+    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary()}
     section["problems"] = problems(section)
     return section
 

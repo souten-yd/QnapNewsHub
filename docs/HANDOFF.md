@@ -26,6 +26,7 @@
 | #5 | 画面（React ＋ Vite。ControlDeck の 5 デザイン・まとめのバブル・取得先の管理・設定・ログイン）・PWA とアイコン（iOS・QPKG 用）・E2E |
 | #6 | v0.1: Write Coordinator（まとめ書き 30 分）・お休みモード・診断・systemd のユーザーの単位の生成 |
 | #9 | v0.1: QPKG（x86_64）`./hub.sh qpkg`・QTS の模擬での確かめ（`packaging/qpkg/test/run-sim.sh`）・LAN に待ち受けるときの最初の管理者の一回限りの番号（`NEWSHUB_SETUP_TOKEN=1`）。docs/QPKG.md |
+| 更新（0.1.1） | 署名つきの Release（Ed25519）・更新の確認（1 日 1 回・ETag・メモリだけ）・QPKG の入れ替え（切り離した子で `sh <qpkg>`）・前の版への戻し・設定の更新の節・ホームの知らせ・診断。docs/UPDATE.md。`./hub.sh release <版>` が Release の台本（作るだけ。実際の Release は司令塔が作る） |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
 - 試験: backend 208 件・E2E 110 件（#9 の時点）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
@@ -38,7 +39,8 @@
 1. 開発の PC で動かす（利用者「24 時間も待たなくて良い」〔2026-11-24〕。長時間の運転は並行して、結果を待たずに次へ進む）（`./hub.sh install-service` か `./hub.sh run`、目録から 50〜100 件を有効に）。取得の実績・失敗・書き込みの量・メモリを診断の画面で見る。
 2. QPKG を利用者の QNAP に入れてもらう（`./hub.sh qpkg` の .qpkg を渡す。手順は docs/QPKG.md。型番と CPU も QTS の画面で確認してもらう）。動いたら v0.1 を Release（.qpkg を Release の添付に）。
 3. v0.2: 無料 LLM の係（ARCHITECTURE 5.1）・概要と要素の取り出しを 1 回で・粗いイベント・本文の取り出し（Trafilatura）・新着の傾向（7.5）・FTS5 ＋ trigram・zstd・集計の表・100 万件の模擬データでの性能。
-4. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
+4. 更新の機能（0.1.1）の最初の Release: 司令塔が `./hub.sh release 0.1.1 --notes …` で作る。そのあと実機の QNAP で「古い版 → 更新」を確かめる（利用者の QNAP は 0.1.0 を手で入れた場合、更新の機能が無いので、0.1.1 だけは手で入れ直す）。
+5. v0.3 以降は PLAN.md の順。ControlDeck 側の変更は ControlDeck のリポジトリで、その決まり（関門・PR）で行う。
 
 ## 5. 開発の仕方
 ```
@@ -68,6 +70,8 @@
 - **子エージェントの利用の上限**: 上限で途中で止まると、コミットされていない変更が作業の場所に残る。引き継ぐときは `git status` と `./hub.sh test` で状態を見てから続ける。
 
 - **QPKG**: QDK の QPKG はインストールの成功で終了コード **10** を返す（0 ではない）。QDK はシステム全体に入れる作りなので、手元では podman のコンテナの中で使う（build.sh）。依存の wheel は manylinux2014 だけ（QTS の glibc が古い）。依存を足したら `packaging/qpkg/requirements.lock` も直し、`run-sim.sh` を流す。
+
+- **更新の落とし穴**: 更新の試験用の差し替え（`NEWSHUB_UPDATE_TEST_FEED`）は `NEWSHUB_INSTALL=qpkg-sim` のときだけ効く（本番の qpkg では無視する）。署名の秘密鍵は `~/.keys/qnapnewshub-release.pem`（`NEWSHUB_SIGNING_KEY`）。読むだけ・中身を出さない・コミットしない。版を上げるときは `__init__.py`・`pyproject.toml`・`frontend/package.json`・`package-lock.json` の 4 か所（`./hub.sh release` が確かめる。`qpkg.cfg` の版は build が書く）。
 
 ## 7. 守ること（要点。全文は AGENTS.md）
 - **公開のリポジトリ**: 鍵・パスワード・トークン・利用者の名前・メール・ホスト名・私的な IP・手元の絶対パスを入れない。push の前に差分を grep で確かめる。試験の見本の値は実行時に組み立てる。
