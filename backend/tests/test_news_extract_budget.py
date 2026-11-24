@@ -195,7 +195,7 @@ def test_prep_extracts_in_the_same_call_and_saves_with_markers(monkeypatch, keye
     server = Server(lambda messages, n: chat(body_for(messages, good)))
     monkeypatch.setattr(llm, "_post", server)
     out = run(prep.run(rows))
-    assert out == {"done": 30, "calls": 2, "error": ""}      # 15 件ずつ 2 回（呼び出しは概要だけのときと同じ回数）
+    assert out == {"done": 30, "calls": 2, "error": ""}      # 20 件と 10 件の 2 回（呼び出しは概要だけのときと同じ回数）
     prompt = server.calls[0]["messages"][1]["content"]
     assert "entities" in prompt and "facts" in prompt and "tools" not in server.calls[0]
     assert writer.get().counts()["extractions"] == 30
