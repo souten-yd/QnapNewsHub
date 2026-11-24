@@ -152,7 +152,10 @@ def pair(code: str, name: str, public_key: str, ip: str) -> dict:
             raise LinkError(403, "番号が違うか、期限が切れています。ニュースハブの画面で新しい番号を出してください")
         _pairing = None      # 1 回だけ使える
         user_id = cur["user_id"]
-    token = auth.create_token(user_id, f"ControlDeck: {name}", scope="link")
+    from qnapnewshub import settings
+
+    sens = "public,confidential" if settings.load()["link"]["allow_confidential"] else "public"      # つないだときの設定で、読める区分の範囲が決まる（既定 public だけ）
+    token = auth.create_token(user_id, f"ControlDeck: {name}", scope="link", sens=sens)
     fp = fingerprint(pub)
 
     def save() -> int:
@@ -160,15 +163,16 @@ def pair(code: str, name: str, public_key: str, ip: str) -> dict:
                                       (token["id"], name, base64.b64encode(pub).decode(), fp, _now())).lastrowid)
     peer_id = writer.run("auth.link_peer", save)
     logger.info("ControlDeck とつなぎました: 相手 #%s", peer_id)
-    return {"token": token["token"], "peer_id": peer_id, **hub_identity()}
+    return {"token": token["token"], "peer_id": peer_id, "sensitivities": token["sens"].split(","), **hub_identity()}
 
 
 # ---- つないだ相手 ----
 
 def list_peers() -> list[dict]:
-    rows = auth._db().execute("SELECT p.id, p.name, p.fingerprint, p.created_at, t.last_used_at, t.revoked_at, t.id FROM link_peers p JOIN api_tokens t ON t.id = p.token_id ORDER BY p.id DESC").fetchall()  # noqa: SLF001
+    rows = auth._db().execute("SELECT p.id, p.name, p.fingerprint, p.created_at, t.last_used_at, t.revoked_at, t.id, t.sens FROM link_peers p JOIN api_tokens t ON t.id = p.token_id ORDER BY p.id DESC").fetchall()  # noqa: SLF001
     staged = writer.get().buf.token_used
-    return [{"id": r[0], "name": r[1], "fingerprint": r[2], "created_at": r[3], "last_seen_at": staged.get(r[6]) or r[4] or "", "revoked": bool(r[5])} for r in rows]
+    return [{"id": r[0], "name": r[1], "fingerprint": r[2], "created_at": r[3], "last_seen_at": staged.get(r[6]) or r[4] or "", "revoked": bool(r[5]),
+             "sensitivities": (r[7] or "public").split(",")} for r in rows]
 
 
 def revoke_peer(peer_id: int) -> bool:

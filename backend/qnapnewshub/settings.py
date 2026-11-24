@@ -37,6 +37,9 @@ DEFAULTS: dict = {
     "storage": {"flush_minutes": 30, "max_items": 1000, "max_mb": 128, "log_file": False, "access_log": False, "compress_years": 1},
     # 本文の取り出し（bodies.py）: 重要度の高い記事から、1 日 per_day 件・1 分 per_minute 件まで
     "body": {"enabled": True, "per_day": 200, "per_minute": 6},
+    # ControlDeck とのつなぎ（link.py）。allow_confidential は **つなぐとき** に読む: true でつなぐと、そのトークンは機密（confidential）の区分も読める
+    # （要求のたびに confidential=true を付けたときだけ）。既定は false＝公開（public）だけ。つないだあとに変えても、つないだ相手は変わらない（つなぎ直す）
+    "link": {"allow_confidential": False},
     # モデルは OpenRouter のモデル名（無料は :free で終わる）。下ごしらえは 20 件ずつ・1 日 daily_limit 回・1 分 minute_limit 回まで（llm.py）
     "llm": {"digest_model": DEFAULT_MODEL, "gist_enabled": False, "gist_model": DEFAULT_MODEL, "digest_focus": "", "prep_enabled": True,
             "prep_model": DEFAULT_MODEL, "prep_max_per_run": 100, "daily_limit": DEFAULT_DAILY_LIMIT, "minute_limit": DEFAULT_MINUTE_LIMIT,
@@ -211,6 +214,8 @@ def normalize(raw: object) -> dict:
     body = _table(raw, "body")
     out["body"] = {"enabled": _bool(body, "enabled", True), "per_day": _int(body.get("per_day", 200), "本文の取り出しの 1 日の件数", 0, 5000),
                    "per_minute": _int(body.get("per_minute", 6), "本文の取り出しの 1 分の件数", 1, 60)}
+    lk = _table(raw, "link")
+    out["link"] = {"allow_confidential": _bool(lk, "allow_confidential", False)}
     llm = _table(raw, "llm")
     out["llm"] = {"digest_model": _model(llm.get("digest_model", DEFAULT_MODEL), "まとめ"), "gist_enabled": _bool(llm, "gist_enabled", False),
                   "gist_model": _model(llm.get("gist_model", DEFAULT_MODEL), "一言要約"), "digest_focus": _focus(llm.get("digest_focus", "")),

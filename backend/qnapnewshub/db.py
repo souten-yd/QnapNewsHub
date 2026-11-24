@@ -344,6 +344,9 @@ class Relationship(Base):
 Index("ix_rel_subject", Relationship.subject_id, Relationship.confidence)
 Index("ix_rel_object", Relationship.object_id, Relationship.confidence)
 Index("ix_rel_type", Relationship.type)
+# 次数・最後の辺の日時を索引だけで数える（v0.6。点の次数を返す・ハブを見分ける）。既にあるファイルには _LATE_INDEX_SQL が足す
+Index("ix_rel_subj_deg", Relationship.subject_id, Relationship.sensitivity, Relationship.last_at)
+Index("ix_rel_obj_deg", Relationship.object_id, Relationship.sensitivity, Relationship.last_at)
 
 
 class EntityNote(Base):
@@ -590,11 +593,13 @@ class ResearchRecord(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     digest: Mapped[str] = mapped_column(String(64))
     peer_id: Mapped[int] = mapped_column(Integer, default=0)
-    theme: Mapped[str] = mapped_column(String(200))
+    theme: Mapped[str] = mapped_column(String(200), index=True)
     sources: Mapped[str] = mapped_column(Text, default="[]")
     facts: Mapped[str] = mapped_column(Text, default="[]")
     conclusion: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # 機密の区分（v0.6）。ControlDeck が送る調査の記録は公開の調査だけ（機密の会話の調査は ControlDeck の store に残す）なので、既定は public。読む API は区分で絞る
+    sensitivity: Mapped[str] = mapped_column(String(12), default="public", server_default="public")
 
 
 class AnaMeta(Base):
@@ -619,9 +624,13 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("entities", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"), ("entities", "ai_use", "VARCHAR(12) NOT NULL DEFAULT 'allowed'"),
                                         ("documents", "tier", "INTEGER NOT NULL DEFAULT 1"), ("documents", "tier_reason", "VARCHAR(160) NOT NULL DEFAULT ''"),
                                         ("documents", "tier_at", "DATETIME"), ("documents", "abstract", "TEXT NOT NULL DEFAULT ''"),
-                                        ("documents", "meta", "TEXT NOT NULL DEFAULT ''"), ("documents", "connector", "VARCHAR(40) NOT NULL DEFAULT ''")]
+                                        ("documents", "meta", "TEXT NOT NULL DEFAULT ''"), ("documents", "connector", "VARCHAR(40) NOT NULL DEFAULT ''"),
+                                        ("research_records", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'")]
 # 後から足した索引（既にあるファイルにも足す）
-_LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id"), ("documents", "tier")]
+_LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id"), ("documents", "tier"), ("research_records", "theme")]
+# 複数の列の索引で、あとから足したもの（既にあるファイルにも足す）
+_LATE_INDEX_SQL = ["CREATE INDEX IF NOT EXISTS ix_rel_subj_deg ON relationships (subject_id, sensitivity, last_at)",
+                   "CREATE INDEX IF NOT EXISTS ix_rel_obj_deg ON relationships (object_id, sensitivity, last_at)"]
 
 _engines: dict[str, Engine] = {}
 _lock = threading.Lock()
@@ -658,6 +667,8 @@ def _add_missing_columns(conn) -> None:
     for table, column in _LATE_INDEXES:
         if column in {c["name"] for c in have.get_columns(table)}:
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} ON {table} ({column})"))
+    for sql in _LATE_INDEX_SQL:
+        conn.execute(text(sql))
     _rebuild_claims(conn)
 
 

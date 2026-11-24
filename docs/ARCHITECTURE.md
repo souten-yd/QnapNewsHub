@@ -211,6 +211,26 @@
 - **SQLite のページのキャッシュ**を 256MB に（`NEWSHUB_SQLITE_CACHE_MB`。使った分だけ確保される。9 章の 256〜512MB の目安の下の端）。
 - 試験の追加: `tests/test_search_storage.py`（16 件）。診断: 「検索と本文・圧縮」の節（索引の状態・本文の今日の使用・成否・取れない理由・圧縮の効果）。
 
+
+### 8 章（検索と調査）の v0.6: ControlDeck の MPKR が使う検索の道具の API と、設計と違った点（2026-11-25・feat/retrieval-api）
+MPKR 本体（計画・融合・reranker・埋め込み）は ControlDeck 側。ここは軽い道具だけで、既存を使い回した（全文は `searchindex`、物は `entities`、イベントは `events`、辺は `kg_view`、文書の索引は v0.7 前半の `docstore.doc_fts`）。
+`retrieval.py`（種・PPR・根拠・調査）・`retrieval_router.py`（API）・`rcache.py`（キャッシュ・時間・大きさの上限）・`kg_view.py`（neighbors の拡張・辺の読み出し）。
+- **`POST /retrieve/seeds`**: 問いの文から語を取り（形態素解析なし。ASCII の語・カタカナ・漢字の連なり、5 文字以上は 3 文字の窓も）、①全文＝既存の 2 つの索引（trigram・英語）を **OR** で引き BM25 を足す（`searchindex.search_any`。既存の検索は AND のまま）②物＝正規化のキーの完全一致・別名・「名前が問いの文に含まれる」・部分一致 ③イベント＝題の語・強く一致した物に関わるもの ④ニュース以外の文書＝`doc_fts` の BM25＋題の部分一致。
+  返すのは種類つき（document・entity・event）の `items`（点数・`position`＝語が最初に出る場所〔題・概要・抜粋の文字位置と前後〕・日時・区分・段）。`limit` は**種類ごとの上限**。点数は種類をまたいで比べられない（種類の中の順は `rank`）。
+  **設計と違う点**: 2 文字以下の語（日本語）は全文では引けない（trigram のため）ので、物の名前の照合にだけ使い、短い語しか無い問いは新しい題から LIKE（時間の上限つき）。`unsearched_short_terms` で知らせる。記事が `documents` にまだ対応づいていなければ `id` は null（`article_id` を返す）。
+- **`POST /graph/neighbors` の拡張**（応答は互換。段ごとにまとめる方針のまま）: `direction`・`type_directions`（型ごとの向き。out＝入り口の物が主語・in＝逆向き。向きの無い型は常に両方）・`order`（weight・recent＝最後の日時が新しい順・evidence）・`only_contradicts`・`hub_k`（入り口の物 1 つにつき k 本まで・順は order。読み捨てたハブは `suppressed`）・物に `degree`（区分の範囲の辺の数）と `last_edge_at`・辺に `via`（入り口の物）。
+  期限（`budget_ms`）を過ぎたら 2 段目以降へ進まない（`stopped`）。1 段目は必ず返す。
+- **`POST /graph/ppr`**: 局所 PPR（Andersen–Chung–Lang の push 法。ラウンドごとに隣接をまとめて読む＝物ごとに問い合わせない）。ε・`max_nodes`・時間・押す回数の上限、辺の重みは確かさ（下限 0.05）か均等、向き、ハブは hub_k 本（既定 100）。戻りは score の大きい順と `via`（いちばん多く質量を送った物＝経路の手がかり）・`stats`（残りの質量 `residual_total` など）。
+  **注意**: ε は「次数あたりの残り」の基準なので、ハブの種では質量の多くが残る（誤差の上限どおり）。順位は近い物の順として使い、厳密な値としては使わない。
+- **`POST /retrieve/evidence`**: 物・主張・関係の id から根拠（引用・位置・文書の題・URL・日時・区分・AI_USE）を種類ごとの IN でまとめて返す。範囲外と無い id は同じ `missing`。
+- **`GET /research?topic=`**: 同じテーマ（正規化して一致・包含）・類似のテーマ（2 文字の組の Jaccard）・`last_at`（前回）・`previous`。`research_records` に `sensitivity`（既定 public）を足した。
+- **区分の強制**: `auth.read_user`（読むだけの POST にトークンを通す依存。書き込みには付けない）・`api_tokens.sens`（つないだときに許した区分）・`kg_router.scopes_for(user, confidential, sensitivity)`（範囲外は 403。黙って落とさない）。link のトークンは、**つないだときの設定 `link.allow_confidential`** が true のときだけ confidential を許される（読み取りだけの read トークンは常に public だけ）。管理者の session は全部。
+  読む API は既定で public だけ（`confidential=true` か `sensitivity=["confidential"]` を付けたときだけ範囲を広げる）。**v0.5 の見落としも直した**: `/entities`・`/entities/{id}` は区分で絞っていなかった（機密の文書だけから作った物の名前が出た）。
+- **キャッシュと上限**（`rcache.py`）: 応答の JSON を (道具・区分・本文・DB の版) のキーで LRU（32MB・5 分）。版は `PRAGMA data_version`（別の接続のコミットで変わる）＝どの経路で DB が変わっても無効になる。`X-Cache`・`X-Data-Version`。
+  時間は `budget_ms`（既定 400・最大 3,000。ラウンド・段の間で見る）と SQLite の progress handler（期限の 3 倍で 503）。応答は 1MB を超えたら件数を減らして `truncated`・`size_limited`。
+- **datetime の警告**: Python 3.12 の sqlite3 の既定の変換は、`text()` や生の SQL に datetime を直接束縛すると出る。`kg._sql_dt` など文字列で渡す形にして（書式は DateTime 列と同じ）0 にした。pytest の `filterwarnings` で再発したら落ちる。
+- **まだ無いもの**: MMR・ブリッジ・reranker（ControlDeck 側）・意味（埋め込み）の検索（I8）・種の検索の 2 文字語の全文・つないだ相手の区分の範囲をあとから変える画面（いまはつなぎ直し）・本物の MPKR からの呼び出しでの評価（I0・I4）。
+
 ## 9. 書き込みと読み込みを最小に（最重要の要件の 1 つ）
 - **Write Coordinator**: すべての永続化（記事・履歴・集計・知識・ジョブの状態・画像・ログ・WAL の checkpoint・FTS のマージ・バックアップ）を 1 つの係が束ね、まとめて書く。各処理が勝手にディスクを書かない。
 - 既定: 記事のまとめ書き 30 分ごと・バッファ 1,000 件 / 128MB・単一の書き手・WAL の checkpoint は保存の直後と保守の時間だけ（自動の checkpoint を切る）・索引の更新はまとめて・ログはメモリ（リングバッファ）・アクセスのログは既定で切・一時ファイルはメモリ優先・DB の最適化とバックアップは指定の時間・QNAP の上の LLM は既定で切。

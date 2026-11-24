@@ -252,9 +252,10 @@ def test_link_token_cannot_call_any_management_api(client, cd):
     for route in api_routes(client.app):
         calls = _calls(route.dependant)
         admin = auth.require_admin in calls
+        readonly_post = auth.read_user in calls      # 読むだけの POST（検索の道具。トークンも通る。副作用が無いことは test_retrieval が確かめる）
         for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
             allowed = (method, route.path) in allowed_writes
-            if not admin and (method == "GET" or allowed):
+            if not admin and (method == "GET" or allowed or readonly_post):
                 continue
             if route.path in ("/api/v1/auth/login", "/api/v1/auth/setup", "/api/v1/auth/logout", "/api/v1/health"):
                 continue
@@ -498,7 +499,7 @@ def test_expired_lease_returns_to_the_queue_and_dead_after_max_tries(client, cd,
 
     def expire() -> None:
         with news_db.session() as db:
-            db.execute(news_db.text("UPDATE jobs SET lease_until = :t"), {"t": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)})
+            db.execute(news_db.text("UPDATE jobs SET lease_until = :t"), {"t": (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S.%f")})
             db.commit()
     for attempt in (2, 3):
         writer.run("news.jobs.test", expire)

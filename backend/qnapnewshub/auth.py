@@ -53,6 +53,7 @@ class AuthUser:
     via: str          # "session" か "token"
     scope: str = ""   # トークンの権限: read（読み取りだけ）・link（つないだ ControlDeck: 読み取り＋仕事を返す＋生成物を送る。管理はできない）
     token_id: int = 0
+    sens: str = "public"      # トークンに許した機密の区分（カンマ区切り。既定 public だけ。link ではつないだときに設定で明示した場合だけ confidential を足す）。session は全部
 
 
 def _now() -> datetime:
@@ -87,6 +88,8 @@ CREATE TABLE IF NOT EXISTS link_peers (id INTEGER PRIMARY KEY, token_id INTEGER 
   public_key TEXT NOT NULL, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS link_secrets (name TEXT PRIMARY KEY, peer_id INTEGER NOT NULL, received_at TEXT NOT NULL);
 """)
+            if "sens" not in {r[1] for r in conn.execute("PRAGMA table_info(api_tokens)")}:      # 許した機密の区分（v0.6）。前の版の表にも足す（既定は public だけ＝fail-closed）
+                conn.execute("ALTER TABLE api_tokens ADD COLUMN sens TEXT NOT NULL DEFAULT 'public'")
             if "scope" not in {r[1] for r in conn.execute("PRAGMA table_info(api_tokens)")}:      # 権限の区分（read: 読み取りだけ・link: つないだ ControlDeck）。前の版の表にも足す
                 conn.execute("ALTER TABLE api_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'read'")
             conns[key] = conn
@@ -246,17 +249,19 @@ def session_user(token: str) -> AuthUser | None:
 SCOPES = ("read", "link")
 
 
-def create_token(user_id: int, name: str, scope: str = "read") -> dict:
-    """トークンを作る。本体（"token"）は戻り値でだけ見える（保存はハッシュ）。scope は read（既定）か link（link.py のつなぐ操作だけが作る）。"""
+def create_token(user_id: int, name: str, scope: str = "read", sens: str = "public") -> dict:
+    """トークンを作る。本体（"token"）は戻り値でだけ見える（保存はハッシュ）。scope は read（既定）か link（link.py のつなぐ操作だけが作る）。
+    sens は許す機密の区分（public・public,confidential）。read のトークンは常に public だけ（confidential を許せるのは、つないだ link だけ）。"""
     if scope not in SCOPES:
         raise ValueError("トークンの権限が正しくありません")
+    sens = "public,confidential" if scope == "link" and sens == "public,confidential" else "public"
     name = " ".join(str(name or "").split())[:60]
     if not name:
         raise ValueError("トークンの名前を入れてください")
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
-    cur = writer.run("auth.create_token", lambda: _db().execute("INSERT INTO api_tokens (user_id, name, token_hash, hint, created_at, scope) VALUES (?, ?, ?, ?, ?, ?)",
-                                                                 (user_id, name, _sha(token), token[:9] + "…", _iso(_now()), scope)))
-    return {"id": int(cur.lastrowid), "name": name, "token": token, "hint": token[:9] + "…", "scope": scope}
+    cur = writer.run("auth.create_token", lambda: _db().execute("INSERT INTO api_tokens (user_id, name, token_hash, hint, created_at, scope, sens) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                                                 (user_id, name, _sha(token), token[:9] + "…", _iso(_now()), scope, sens)))
+    return {"id": int(cur.lastrowid), "name": name, "token": token, "hint": token[:9] + "…", "scope": scope, "sens": sens}
 
 
 def list_tokens() -> list[dict]:
@@ -274,12 +279,12 @@ def token_user(token: str) -> AuthUser | None:
     if not token.startswith(TOKEN_PREFIX):
         return None
     conn = _db()
-    row = conn.execute("SELECT t.id, u.id, u.username, t.scope FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND u.active = 1",
+    row = conn.execute("SELECT t.id, u.id, u.username, t.scope, t.sens FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ? AND t.revoked_at IS NULL AND u.active = 1",
                        (_sha(token),)).fetchone()
     if not row:
         return None
     writer.get().stage_token_used(row[0], _iso(_now()))      # 最終使用の時刻は、まとめ書きのときに（API を呼ぶたびに書かない）
-    return AuthUser(row[1], row[2], "token", row[3], row[0])
+    return AuthUser(row[1], row[2], "token", row[3], row[0], row[4] or "public")
 
 
 def apply_token_used(rows: dict[int, str]) -> None:
@@ -328,6 +333,33 @@ async def current_user(request: Request) -> AuthUser:
     if request.method not in _SAFE and not _same_origin(request):
         raise HTTPException(status_code=403, detail="別のサイトからの操作は受け付けません")
     return user
+
+
+async def read_user(request: Request) -> AuthUser:
+    """読むだけの API（POST でも副作用が無いもの。検索の道具: /retrieve/*・/graph/*）。session か Bearer トークン（read・link）。
+    current_user との違いは、トークンの POST を通すこと（読むだけの POST。書き込みは通さない＝この依存を付けるのは副作用の無い API だけ）。"""
+    import asyncio
+
+    token = _bearer(request)
+    if token:
+        user = await asyncio.to_thread(token_user, token)
+        if user is None:
+            raise HTTPException(status_code=401, detail="トークンが正しくありません")
+        return user
+    cookie = request.cookies.get(COOKIE, "")
+    user = await asyncio.to_thread(session_user, cookie) if cookie else None
+    if user is None:
+        raise HTTPException(status_code=401, detail="ログインしてください")
+    if request.method not in _SAFE and not _same_origin(request):
+        raise HTTPException(status_code=403, detail="別のサイトからの操作は受け付けません")
+    return user
+
+
+def allowed_sensitivities(user: AuthUser) -> frozenset[str]:
+    """この利用者が読んでよい機密の区分。session（管理者）は全部、トークンは作ったときに許した範囲だけ（既定 public）。"""
+    if user.via == "session":
+        return frozenset({"public", "confidential"})
+    return frozenset(x for x in (user.sens or "public").split(",") if x in ("public", "confidential")) or frozenset({"public"})
 
 
 async def link_user(request: Request) -> AuthUser:

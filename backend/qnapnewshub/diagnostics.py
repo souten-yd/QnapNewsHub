@@ -201,7 +201,10 @@ def link_section(db) -> dict:
 
     peers = [p for p in link.list_peers() if not p["revoked"]]
     seen = max((p["last_seen_at"] for p in peers), default="")
-    return {"peers": [{"id": p["id"], "name": p["name"], "last_seen_at": p["last_seen_at"]} for p in peers], "last_seen_at": seen, "jobs": jobs.summary(db),
+    from qnapnewshub import rcache      # retrieval_cache: 検索の道具のキャッシュ（hit・miss・件数・バイト数。miss ばかりなら DB が頻繁に変わっている）
+
+    return {"peers": [{"id": p["id"], "name": p["name"], "last_seen_at": p["last_seen_at"], "sensitivities": p.get("sensitivities", ["public"])} for p in peers], "last_seen_at": seen,
+            "retrieval_cache": rcache.snapshot(), "jobs": jobs.summary(db),
             "secrets": [{"name": x["name"], "received_at": x["received_at"]} for x in link.list_secrets()], "change_seq": changes.latest_seq(db),
             "artifacts": int(db.scalar(select(func.count()).select_from(Artifact)) or 0), "research": int(db.scalar(select(func.count()).select_from(ResearchRecord)) or 0)}
 

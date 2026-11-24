@@ -200,3 +200,20 @@ def search(conn, q: str, limit: int = CANDIDATES) -> dict | None:
     if not hits and groups["word"] and not groups["tri"] and all(len(t) >= 3 for t in groups["word"]):
         hits = _rank(conn, groups["word"], [], limit)      # 英語の語で見つからなければ、部分一致（trigram）で
     return {"hits": hits, "short": groups["short"]}
+
+
+def search_any(conn, tri: list[str], word: list[str], limit: int = 200) -> list[tuple[int, float]]:
+    """問いの文から取った語の、どれかを含む（OR）記事の候補 [(記事の id, 点数)]（点数の大きい順）。点数は BM25 の符号を反転したもの（大きいほど合う）。
+    search（全部を含む＝AND）と同じ 2 つの索引・同じ重みを使い、語を OR でつなぐだけ（ControlDeck の MPKR が種を探すための道具。v0.6）。
+    trigram の側（3 文字以上の語）と英語の側（ASCII の語）は別々に引いて、記事の id で点数を足す。索引が無いときは空。"""
+    if not has_index(conn) or not (tri or word):
+        return []
+    scores: dict[int, float] = {}
+    for name, terms in ((TRI, tri), (WORD, word)):
+        if not terms:
+            continue
+        match = " OR ".join(_phrase(t) for t in terms)
+        sql = f"SELECT rowid, bm25({name}, {WEIGHTS}) AS r FROM {name} WHERE {name} MATCH :m ORDER BY r LIMIT :k"
+        for rid, r in conn.execute(text(sql), {"m": match, "k": limit}):
+            scores[int(rid)] = scores.get(int(rid), 0.0) - float(r)
+    return sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
