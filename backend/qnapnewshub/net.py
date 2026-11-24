@@ -102,9 +102,10 @@ async def reddit_oauth(path: str, params: dict):
 
 
 async def aget_bytes(url: str, *, timeout: float = 30) -> bytes:
-    """RSS などの取得（https だけ・リダイレクトは追わない・大きさの上限）。"""
+    """RSS などの取得（https だけ・リダイレクトは 3 段まで各段を検査して追う・大きさの上限）。
+    2026-11-24: Linux の評価で AWS の公式ブログの RSS が「リダイレクトは追いません」で取れなかったため、追うように変えた。"""
     _check_url(url, https_only=True)
-    status, _, body = await get(url, accept="*/*", timeout=timeout, follow=False)
+    status, _, body = await get(url, accept="*/*", timeout=timeout, follow=True)
     if 300 <= status < 400:
         raise NetError("リダイレクトは追いません")
     if status >= 400:
@@ -129,7 +130,7 @@ def parse_retry_after(value: str | None, now: float | None = None) -> float | No
 
 
 async def aget_conditional(url: str, *, etag: str = "", last_modified: str = "", timeout: float = 30) -> tuple[int, dict, bytes]:
-    """条件付きの GET（https だけ・リダイレクトは追わない）。ETag・Last-Modified があれば If-None-Match・If-Modified-Since を付ける。
+    """条件付きの GET（https だけ・リダイレクトは 3 段まで各段を検査して追う）。ETag・Last-Modified があれば If-None-Match・If-Modified-Since を付ける。
     304 は (304, 応答の見出し, b"") で返す（本文は読まない）。4xx・5xx は HttpError（Retry-After つき）。"""
     _check_url(url, https_only=True)
     headers = {}
@@ -137,7 +138,7 @@ async def aget_conditional(url: str, *, etag: str = "", last_modified: str = "",
         headers["If-None-Match"] = etag
     if last_modified:
         headers["If-Modified-Since"] = last_modified
-    status, head, body = await get(url, accept="*/*", timeout=timeout, follow=False, headers=headers or None)
+    status, head, body = await get(url, accept="*/*", timeout=timeout, follow=True, headers=headers or None)
     if status == 304:
         return status, head, b""
     if 300 <= status < 400:
