@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import logging
 import os
 import threading
@@ -659,6 +661,36 @@ def _add_missing_columns(conn) -> None:
     _rebuild_claims(conn)
 
 
+def _repair_split_topics(conn) -> None:
+    """一度だけ: 話題の語に紛れ込んだ 1 文字の語を外し、集計を作り直させる。
+    2026-11-25: 下ごしらえと一言要約が extract_topics(*語) と語を引数に展開していて、3 つ目の語が 1 文字ずつに分かれて
+    保存され、ホットトピックの上位が「n・s・e・t」になった（直したのは prep.py・gist.py）。"""
+    done = conn.exec_driver_sql("SELECT value FROM news_meta WHERE key = 'repair_topics_v1'").fetchone()
+    if done:
+        return
+    cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(news_items)").fetchall()}
+    if "topics" not in cols:      # 話題の列の無い古い版（崩れた語も無い）
+        conn.exec_driver_sql("INSERT OR REPLACE INTO news_meta (key, value) VALUES ('repair_topics_v1', '0')")
+        return
+    fixed = 0
+    rows = conn.exec_driver_sql("SELECT id, topics FROM news_items WHERE topics LIKE '[%'").fetchall()
+    for item_id, raw in rows:
+        try:
+            words = json.loads(raw or "[]")
+        except ValueError:
+            continue
+        if not isinstance(words, list):
+            continue
+        kept = [w for w in words if isinstance(w, str) and len(w.strip()) > 1]
+        if len(kept) != len(words):
+            conn.exec_driver_sql("UPDATE news_items SET topics = ? WHERE id = ?", (json.dumps(kept, ensure_ascii=False), item_id))
+            fixed += 1
+    if fixed:
+        conn.exec_driver_sql("DELETE FROM ana_meta WHERE key = 'sig'")      # 次のまとめ書きで集計を作り直す
+        logger.warning("話題の語の 1 文字の崩れを %d 件の記事で直しました（集計を作り直します）", fixed)
+    conn.exec_driver_sql("INSERT OR REPLACE INTO news_meta (key, value) VALUES ('repair_topics_v1', ?)", (str(fixed),))
+
+
 def _cache_kb() -> int:
     """SQLite のページのキャッシュの上限（KiB）。既定 256MB。NEWSHUB_SQLITE_CACHE_MB で変える（使った分だけ確保される）。"""
     try:
@@ -687,6 +719,7 @@ def _open(file: Path) -> Engine:
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
         _add_missing_columns(conn)
+        _repair_split_topics(conn)
         from qnapnewshub import changes
 
         changes.install(conn)

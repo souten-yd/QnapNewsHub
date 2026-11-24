@@ -299,3 +299,52 @@ def test_digest_and_gist_count_against_the_same_daily_budget(monkeypatch, keyed)
     with pytest.raises(llm.LlmDailyLimit):
         run(llm.complete("m", [{"role": "user", "content": "x"}], purpose="digest"))
     assert len(server.calls) == 3
+
+
+def test_llm_topics_are_not_split_into_letters(monkeypatch, keyed):
+    """目的: LLM の返した話題の語が 1 文字ずつに分かれて保存されないこと。
+    根拠: 2026-11-25、extract_topics(*語) と語を引数に展開していて、3 つ目の語（例 "tasks"）が "t" "a" "s" "k" に分かれ、
+    評価のハブのホットトピックの上位 10 が「n・s・e・t・r…」になった。"""
+    import json as _json
+
+    ids, rows = rows_of(1)
+
+    def three_words(messages, n):      # 3 つの語を返す（3 つ目が崩れていた）
+        body = json.loads(answer(messages))
+        for v in body.values():
+            v["topics"] = ["Google", "Gemini", "tasks"]
+        return chat(json.dumps(body, ensure_ascii=False))
+
+    server = Server(three_words)
+    monkeypatch.setattr(llm, "_post", server)
+    run(prep.run(rows))
+    writer.flush("test")
+    with news_db.session() as db:
+        topics = _json.loads(db.get(NewsItem, ids[0]).topics)
+    assert "tasks" in topics and not [t for t in topics if len(t) == 1]
+
+
+def test_old_split_topics_are_repaired_once(tmp_path, monkeypatch):
+    """目的: すでに崩れて保存された 1 文字の語を、起動のときに一度だけ外し、集計を作り直させる。根拠: 上と同じ不具合の残り。"""
+    import json as _json
+    import sqlite3
+
+    from qnapnewshub import db as dbmod
+
+    monkeypatch.setenv("NEWSHUB_DATA", str(tmp_path))
+    from sqlalchemy.orm import Session as _Session
+
+    eng = dbmod._open(tmp_path / "news.sqlite3")
+    with _Session(eng) as db:
+        db.add(NewsItem(kind="news", source="a", source_key="a", title="t", url="https://x.test/1", summary="",
+                        published_at=dbmod.utcnow(), topics=_json.dumps(["Gemini", "tasks", "t", "a", "s"])))
+        db.commit()
+    with eng.begin() as conn:
+        conn.exec_driver_sql("DELETE FROM news_meta WHERE key = 'repair_topics_v1'")
+        conn.exec_driver_sql("INSERT OR REPLACE INTO ana_meta (key, value) VALUES ('sig', 'x')")
+    eng.dispose()
+    dbmod._open(tmp_path / "news.sqlite3").dispose()
+    con = sqlite3.connect(tmp_path / "news.sqlite3")
+    assert _json.loads(con.execute("SELECT topics FROM news_items").fetchone()[0]) == ["Gemini", "tasks"]
+    assert con.execute("SELECT value FROM ana_meta WHERE key = 'sig'").fetchone() is None
+    assert con.execute("SELECT value FROM news_meta WHERE key = 'repair_topics_v1'").fetchone()[0] == "1"
