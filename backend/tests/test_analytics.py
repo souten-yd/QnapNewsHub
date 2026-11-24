@@ -182,3 +182,14 @@ def test_terms_extraction():
     t = analytics.title_terms("Nvidia releases new Blackwell GPU drivers; ゲーム用のカラオケアプリ")
     assert "blackwell" in t and "gpu drivers" in t and "the" not in t and "カラオケアプリ" in t
     assert analytics.lang_of("日本語") == "ja" and analytics.lang_of("English only") == "en"
+
+
+def test_a_word_covered_by_a_longer_phrase_is_not_listed_twice():
+    """目的: 「jensen」「huang」「jensen huang」のように同じ出来事の語が上位を埋めない。
+    根拠: 2026-11-24 の実データの撮影で、新しく出てきた語の上位 6 つのうち 4 つが同じ人の名前だった。
+    長い語の記事の数が短い語の 8 割以上なら、短い語を外す（ほかの文脈でも多く出る語は残す）。"""
+    from qnapnewshub.analytics import _drop_subsumed
+
+    rows = [{"term": "jensen", "count": 9}, {"term": "huang", "count": 9}, {"term": "jensen huang", "count": 9},
+            {"term": "nvidia", "count": 18}, {"term": "nvidia ceo", "count": 5}]
+    assert [r["term"] for r in _drop_subsumed(rows)] == ["jensen huang", "nvidia", "nvidia ceo"]

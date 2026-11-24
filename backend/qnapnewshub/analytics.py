@@ -546,6 +546,27 @@ def _topic_dict(term: str, label: str, score: float | None, cur: int, cur_all: i
             "baseline_sd": round(sd, 2), "growth_pct": round((cur - mean) / max(mean, 1.0) * 100) if mean is not None else None, "sources": sources}
 
 
+def _drop_subsumed(rows: list[dict], ratio: float = 0.8) -> list[dict]:
+    """2 語の組でほぼ説明できる 1 語を外す（「jensen」「huang」「jensen huang」が並ぶのを 1 つに）。
+    語 A の語の並びが、もっと長い語 B の中に含まれ、B の記事の数が A の ratio 以上なら A を外す。
+    2026-11-24 の実データの撮影で、同じ出来事の語が上位を埋めていたため。"""
+    toks = {r["term"]: str(r["term"]).lower().split() for r in rows}
+    keep = []
+    for r in rows:
+        a = toks[r["term"]]
+        covered = False
+        for other in rows:
+            b = toks[other["term"]]
+            if other is r or len(b) <= len(a):
+                continue
+            if any(b[i:i + len(a)] == a for i in range(len(b) - len(a) + 1)) and other["count"] >= ratio * r["count"]:
+                covered = True
+                break
+        if not covered:
+            keep.append(r)
+    return keep
+
+
 def hot_topics(db: Session, kind: str = "", lang: str = "", now: datetime | None = None) -> dict:
     kinds, lang = parse_filter(kind, lang)
 
@@ -621,6 +642,8 @@ def hot_topics(db: Session, kind: str = "", lang: str = "", now: datetime | None
                 s = score(indep, mean, sd, srcs.get(term, 1))
                 if s > 0:
                     by_channel[ch].append(_topic_dict(term, label, s, indep, n, mean, sd, srcs.get(term, 1)))
+        rows = _drop_subsumed(rows)
+        new = _drop_subsumed(new)
         rows.sort(key=lambda r: (-r["score"], -r["count"], r["term"]))
         new.sort(key=lambda r: (-r["count"], -r["sources"], r["term"]))
         top = rows[:TOP_N]
