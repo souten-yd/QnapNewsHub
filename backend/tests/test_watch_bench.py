@@ -48,7 +48,8 @@ def test_filter_status_and_value_parsing():
 
 
 def test_extract_clean_keeps_only_grounded_conditions():
-    """目的: extract.clean は値のある fact の cond だけ、原文（題・抜粋）に出る値で残す。値の無い fact・原文に無い条件は cond が付かない。プロンプトは cond を案内する。"""
+    """目的: extract.clean は値のある fact の cond だけ、原文（題・抜粋）に出る値で残す。値の無い fact・原文に無い条件は cond が付かない。
+    プロンプトは cond を案内しない（2026-11-26: 案内しても本物の LLM は 30 件で 1 度も書かなかった。トークンの無駄を戻さないため）。"""
     src = "Foo on RX 9700 hits 80 tok/s with llama.cpp"
     got = extract.clean({"entities": [{"name": "Foo", "type": "model"}], "facts": [
         {"about": "Foo", "kind": "benchmark", "text": "80 tok/s", "value": "80", "cond": {"hw": "RX 9700", "engine": "llama.cpp", "quant": "Q8_0"}},
@@ -56,7 +57,7 @@ def test_extract_clean_keeps_only_grounded_conditions():
     assert got["facts"][0]["cond"] == {"hw": "RX 9700", "engine": "llama.cpp"} and "cond" not in got["facts"][1]
     from qnapnewshub import prep
 
-    assert '"cond"' in prep.build_prompt([{"title": "T", "source": "S", "summary": "x", "id": 1}]) and extract.PROMPT_VERSION == "ex5"
+    assert '"cond"' not in prep.build_prompt([{"title": "T", "source": "S", "summary": "x", "id": 1}]) and extract.PROMPT_VERSION == "ex4"
 
 
 # ---- ③ 比較 ----

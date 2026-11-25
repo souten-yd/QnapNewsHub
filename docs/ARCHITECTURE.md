@@ -514,7 +514,7 @@ RSS 1.0・2.0・Atom の自動判別 / CSV と OPML の取り込み・書き出�
   `GET /watch/changes?since=&thing=&format=text|json` が「前回から何が変わったか」を**機械的に**集める（LLM は呼ばない。解説は用途 trend の枠で後から足せるが、この版では呼ばない）:
   新しい主張（数値・条件つき）・数値の変化（Metric の前の値との差）・新しい関係・版の更新（release・model・repo の文書）・イベント・変化点。**時刻は「世の中で新しくなった時刻」**（主張は記事の公開日 stated_at、関係は first_at、文書は公開日）。
   読むだけでは「前回見た」は進まない（LLM が何度引いても同じ範囲）。`POST /watch/seen`（管理者）で進める。区分は既存の `scopes_for`（機密は public の読み手に出ない）。
-- **条件つきの数値**（実装）: `claims.cond`（JSON: model・quant・hw・engine・ctx・version）。取り出しは既存の下ごしらえの facts に `cond` の欄を足した（プロンプト ex5・**呼び出しは増えない**）。
+- **条件つきの数値**（実装）: `claims.cond`（JSON: model・quant・hw・engine・ctx・version）。取り出しは文からの規則（`bench.cond_of`。LLM の呼び出しもトークンも増えない。プロンプトに足しても本物の LLM は書かなかった）。
   LLM の条件は原文に出る値だけ残し（`bench.clean_cond`）、欄が空・古い主張は文から規則（`bench.parse_cond`）で補う。補えない欄は「不明」のまま。`GET /metrics/compare?thing=&metric=&cond=` は
   （物・単位・条件）の組に分けて最新・最小・最大・点を返す。**平均・合算は出さない**。`cond=hw:R9700,quant:Q4_K_M` を渡すと、合う組・別の条件の組・条件が不明の組に分ける。Metric の時系列も同じ形。
 - **変化点**（実装）: `changepoint.py`。Metric は直前までの中央値から MAD の 3.5 倍かつ 20% 以上外れた点（直前 4 点以上）。言及の数は ana_entity の直近 3 日 vs 前 4 週（3 倍以上かつ 3 件以上、または 1/3 以下）。
