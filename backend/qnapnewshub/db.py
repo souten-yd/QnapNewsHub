@@ -413,6 +413,40 @@ class MentionCandidate(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class EntityMerge(Base):
+    """物の名寄せの記録（entity_merge.py）。loser を winner へ寄せた 1 回ぶん。snapshot は元に戻すための JSON（loser の行・別名・記事・主張・関係・根拠・集計の移動）。
+    mode: auto（規則だけで確かなもの）・confirmed（管理者が確定）。undone_at があれば元に戻した後。loser_key は、あとで同じ表記が取り出されたとき winner へ寄せるための鍵。"""
+
+    __tablename__ = "entity_merges"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    winner_id: Mapped[int] = mapped_column(Integer, index=True)
+    loser_id: Mapped[int] = mapped_column(Integer, index=True)
+    loser_key: Mapped[str] = mapped_column(String(200), index=True)
+    loser_name: Mapped[str] = mapped_column(String(200), default="")
+    mode: Mapped[str] = mapped_column(String(10), default="auto")
+    reason: Mapped[str] = mapped_column(String(40), default="")
+    snapshot: Mapped[str] = mapped_column(Text, default="{}")
+    merged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MergeCandidate(Base):
+    """名寄せの候補（迷うもの。管理者が確定する）。lo_id < hi_id で 1 組 1 行。status: candidate・dismissed（違う。作り直しても戻らない）・merged（寄せた）。
+    reason: rule_type（規則では同じだが種類が違う）・rule_paren（括弧を除くと同じ）・cross_script（日本語と英語の表記。同じ出来事の記事に別々に出る）。"""
+
+    __tablename__ = "merge_candidates"
+    __table_args__ = (UniqueConstraint("lo_id", "hi_id", name="uq_merge_candidate"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lo_id: Mapped[int] = mapped_column(Integer, index=True)
+    hi_id: Mapped[int] = mapped_column(Integer, index=True)
+    reason: Mapped[str] = mapped_column(String(20), default="")
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(10), default="candidate")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class NewsFetchLog(Base):
     """取得の履歴（ソースごと・1 回ごと。直近 200 回まで、古いものは消す）。画面「取得先の管理」の実績・成功率・履歴の元（app/news/fetchlog.py）。
     status は HTTP の状態（取れた = 200・失敗は読み取れた値。分からなければ NULL）。count は取れた記事の数、new は新着（初めて保存した記事）の数。"""

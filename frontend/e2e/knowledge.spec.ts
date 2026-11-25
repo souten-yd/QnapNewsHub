@@ -158,6 +158,23 @@ for (const vp of SIZES) {
         expect(state.unhandled).toEqual([]);
       });
 
+      test("名寄せ: 迷う候補を確定・却下でき、自動で寄せた記録は元に戻せる（管理者）", async ({ page }) => {
+        const state = newState();
+        await mockApi(page, state);
+        await page.goto("/entities");
+        await expect(page.getByTestId("merge-row")).toHaveCount(1);
+        await expect(page.getByTestId("merge-row")).toContainText("VRChat ← VRChat Inc.");
+        await expect(page.getByTestId("merge-history")).toContainText("Sony Corporation → Sony（自動）");
+        await expectNoHorizontalOverflow(page);
+        await shot(page, `merge-panel-${vp.name}-${scheme}`);
+        await page.getByTestId("merge-undo").click();
+        await expect(page.getByTestId("merge-history")).toHaveCount(0);
+        await page.getByTestId("merge-confirm").click();
+        await expect(page.getByTestId("merge-row")).toHaveCount(0);
+        expect(state.mergeActions).toEqual(["undo:1", "confirm:7"]);
+        expect(state.unhandled).toEqual([]);
+      });
+
       test("まとまりを押すと中を開く（その塊へ寄り、ほかは薄く）。主題の入口から地図へ", async ({ page }) => {
         const state = newState();
         await mockApi(page, state);
@@ -249,6 +266,7 @@ test.describe("全体の地図の重さ（1,500 点・3,500 本）", () => {
     await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-edges", "3500");
     expect(ready).toBeLessThan(3000);
     await shot(page, "map-big-overview");
+    expect(await cyCount(page, "node.big")).toBe(24);      // 全体の地図で、縮小したまま名前を出すのは次数の大きい 24 点だけ（残りは拡大するほど出す）
     const frame = await page.evaluate(async () => {
       const cy = (document.querySelector("[data-testid=map-canvas]") as unknown as { __cy: { zoom(o: unknown): void; pan(p: unknown): void; width(): number; height(): number; zoom(): number } }).__cy;
       const times: number[] = [];

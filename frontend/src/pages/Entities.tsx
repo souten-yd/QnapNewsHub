@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ENTITY_TYPE_LABEL, relativeTime, useEntities, useEntity, type EntityRow, type EntityType } from "../api/news";
+import { MERGE_REASON, useMergeAction, useMergeCandidates } from "../api/things";
 import KnowledgeCard from "../features/knowledge/KnowledgeCard";
 import { Card, field } from "../features/news/settingsUi";
 
@@ -29,6 +30,35 @@ function Row({ e, days }: { e: EntityRow; days: number }) {
   );
 }
 
+/** 名寄せの候補（管理者だけ。管理者でなければ 403 で何も出さない）。確かなものは夜に自動で寄せてあり、ここには迷うものと、寄せた記録（元に戻せる）が出る。 */
+function MergePanel() {
+  const q = useMergeCandidates();
+  const act = useMergeAction();
+  if (!q.data || (q.data.items.length === 0 && q.data.merges.length === 0)) return null;
+  const recent = q.data.merges.filter((m) => !m.undone).slice(0, 5);
+  return (
+    <Card id="merge-candidates" title={`名寄せの候補（${q.data.total} 件）`} hint="同じ物かもしれない別の表記です。確定すると、記事・主張・関係・別名を 1 つにまとめます（記録が残り、あとで元に戻せます）。確かな表記の違い（Inc.・版の .0 など）は夜に自動で寄せています。">
+      <ul className="space-y-1.5" data-testid="merge-list">
+        {q.data.items.map((c) => (
+          <li key={c.id} data-testid="merge-row" className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 px-3 py-2 text-xs dark:border-zinc-800">
+            <span className="min-w-0 flex-1"><span className="font-semibold">{c.keep.name}</span> ← {c.drop.name}<span className="ml-2 text-zinc-500">{MERGE_REASON[c.reason] ?? c.reason}・記事 {c.keep.article_count}／{c.drop.article_count}</span></span>
+            <button type="button" data-testid="merge-confirm" disabled={act.isPending} onClick={() => act.mutate({ path: `/merge-candidates/${c.id}/confirm` })} className="min-h-9 rounded-lg border border-accent-600 px-3 font-semibold">寄せる</button>
+            <button type="button" data-testid="merge-dismiss" disabled={act.isPending} onClick={() => act.mutate({ path: `/merge-candidates/${c.id}/dismiss` })} className="min-h-9 rounded-lg border border-zinc-300 px-3 dark:border-zinc-700">別の物</button>
+          </li>
+        ))}
+      </ul>
+      {recent.length > 0 && (
+        <ul className="mt-2 space-y-1 text-xs text-zinc-500" data-testid="merge-history">
+          {recent.map((m) => (
+            <li key={m.id} className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate">{m.loser.name} → {m.winner.name}（{m.mode === "auto" ? "自動" : "確定"}）</span>
+              {m.can_undo && <button type="button" data-testid="merge-undo" disabled={act.isPending} onClick={() => act.mutate({ path: `/merges/${m.id}/undo` })} className="min-h-9 rounded-lg border border-zinc-300 px-3 dark:border-zinc-700">元に戻す</button>}</li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 export default function EntitiesPage() {
   const [q, setQ] = useState("");
   const [type, setType] = useState("");
@@ -43,6 +73,7 @@ export default function EntitiesPage() {
         <Link to="/moc" data-testid="things-moc-link" className="inline-flex min-h-9 items-center rounded-lg border border-zinc-300 px-3 hover:border-accent-600 dark:border-zinc-700">主題の入口（まとまり・チャンネル）</Link>
         <Link to="/map" data-testid="things-map-link" className="inline-flex min-h-9 items-center rounded-lg border border-zinc-300 px-3 hover:border-accent-600 dark:border-zinc-700">知識の地図（全体）</Link>
       </p>
+      <MergePanel />
       <div className="grid gap-2 sm:grid-cols-4">
         <input type="search" aria-label="Thingsを探す" placeholder="名前で探す" value={q} onChange={(e) => setQ(e.target.value)} className={`${field} sm:col-span-2`} />
         <select aria-label="種類" value={type} onChange={(e) => setType(e.target.value)} className={field}>

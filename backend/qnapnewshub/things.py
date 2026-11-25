@@ -296,6 +296,49 @@ def louvain(edges: list[tuple[int, int, float]], passes: int = 10) -> dict[int, 
     return {n: lowest[c] for n, c in member.items()}
 
 
+_WORD = re.compile(r"[A-Za-z][A-Za-z0-9.+]{2,}|[ァ-ヴー]{3,}|[一-龥]{2,}")
+_WORD_STOP = frozenset({"the", "and", "for", "with", "new", "inc", "corp", "corporation", "ltd", "llc", "pro", "max", "mini", "plus", "series", "update", "release"})
+
+
+def community_names(groups: list[list[str]], words: int = 2) -> list[str]:
+    """まとまりの名前。groups は各まとまりの Things の名前（関係の多い順。先頭が代表）。名前 =「代表・特徴の語・特徴の語」（番号ではなく中身で付ける）。
+    特徴の語は、そのまとまりの Things の名前に出る語のうち、ほかのまとまりに少ない語（tf × idf。代表の名前に入っている語・定型語は除く）。足りなければ次に関係の多い Things の名前で補う。
+    同じ名前が重なったら、次の候補の語を足して区別する。"""
+    toks: list[dict[str, float]] = []
+    df: dict[str, int] = {}
+    for names in groups:
+        tf: dict[str, float] = {}
+        for rank, name in enumerate(names):
+            for w in {w.casefold() for w in _WORD.findall(unicodedata.normalize("NFKC", name))}:
+                tf[w] = tf.get(w, 0.0) + 1.0 / (1 + 0.1 * rank)
+        toks.append(tf)
+        for w in tf:
+            df[w] = df.get(w, 0) + 1
+    n = max(1, len(groups))
+    out: list[str] = []
+    used: set[str] = set()
+    for names, tf in zip(groups, toks):
+        rep = names[0] if names else ""
+        rep_words = {w.casefold() for w in _WORD.findall(unicodedata.normalize("NFKC", rep))} | {_fold(rep)}
+        scored = sorted(((v * math.log(1 + n / df[w]), w) for w, v in tf.items() if w not in rep_words and w not in _WORD_STOP and not any(w in rw or rw in w for rw in rep_words if len(rw) > 2)),
+                        key=lambda t: (-t[0], t[1]))
+        display = {}
+        for name in names:
+            for w in _WORD.findall(unicodedata.normalize("NFKC", name)):
+                display.setdefault(w.casefold(), w)
+        picks = [d for d in (display.get(w, w) for _, w in scored) if not (d.isascii() and d.islower() and d.isalpha())]      # 小文字だけの一般語（text・open・file）は特徴の語にしない
+        # 足りなければ、次に関係の多い Things の名前で補う
+        picks += [x for x in names[1:] if x and x not in picks]
+        label = ""
+        for take in range(words, words + 4):
+            label = "・".join(dict.fromkeys([rep, *picks[:take]]))
+            if label not in used:
+                break
+        used.add(label)
+        out.append(label)
+    return out
+
+
 def compute_communities(db: Session) -> dict:
     """public の関係から主題のまとまりを作り直す（コミットは呼ぶ側）。{"communities", "assigned"}。"""
     rows = db.execute(select(Relationship.subject_id, Relationship.object_id, Relationship.confidence, Relationship.type)
@@ -314,11 +357,13 @@ def compute_communities(db: Session) -> dict:
     db.execute(delete(EntityCommunity))
     db.execute(delete(Community))
     names = {e.id: e.name for e in db.scalars(select(Entity).where(Entity.id.in_({i for g in big for i in g})))} if big else {}
+    for members in big:
+        members.sort(key=lambda i: (-deg.get(i, 0), i))
+    labels = community_names([[names.get(i, "") for i in members] for members in big])
     now = _now()
     assigned = 0
     for cid, members in enumerate(big, 1):
-        members.sort(key=lambda i: (-deg.get(i, 0), i))
-        db.add(Community(id=cid, name=names.get(members[0], "")[:200], size=len(members), rep_id=members[0], top_ids=json.dumps(members[:8]), computed_at=now))
+        db.add(Community(id=cid, name=labels[cid - 1][:200], size=len(members), rep_id=members[0], top_ids=json.dumps(members[:8]), computed_at=now))
         db.execute(insert(EntityCommunity), [{"entity_id": i, "community_id": cid} for i in members])
         assigned += len(members)
     return {"communities": len(big), "assigned": assigned}
@@ -330,61 +375,171 @@ def _fold(s: str) -> str:
     return unicodedata.normalize("NFKC", str(s or "")).casefold()
 
 
+MENTION_TYPES = frozenset({"model", "software", "org", "product", "game", "tech", "person"})      # 文脈に合う種類（other・place・policy は一般語が多く、除く）
+MENTION_SEARCH = 400
+MENTION_GENERIC_DF = 20      # 文書頻度がこれ以上で、結びついた記事の MENTION_GENERIC_RATIO 倍を超えて出る名前は一般語（Metal・Windows など）として外す
+MENTION_GENERIC_RATIO = 3
+_ALNUM = re.compile(r"[0-9a-z]", re.I)
+_CAMEL = re.compile(r"\s+[A-Z][a-z0-9]+[A-Z]")      # 直後が EventBridge のような大文字混じりの語（Amazon EventBridge）＝より長い名前の一部
+_SPONSOR = re.compile(r"(sponsored|presented|brought to you|powered) by\s*$")
+_TITLE_TAIL = re.compile(r"\s+[-|–—:]\s+([^-|–—:]{2,40})$")
+
+
+_TAIL_WORDS = re.compile(r"(ブログ|blog|ニュース|news|メディア|公式|official|qiita|zenn|note)", re.I)
+
+
+def _strip_tail(title: str, source: str) -> str:
+    """題の末尾の「 | 出どころ」「 - 出どころ」を外す（取得元の名前・ブログ名は、記事の中身の言及ではない）。"""
+    m = _TITLE_TAIL.search(title or "")
+    if m is None:
+        return title or ""
+    tail = _fold(m.group(1))
+    src = _fold(source)
+    if (src and (tail in src or src in tail)) or _TAIL_WORDS.search(tail):
+        return title[:m.start()]
+    return title
+
+
+def _ambiguous(name: str) -> bool:
+    """一般の語と同じ綴りになりやすい名前（英字だけの 1 語・10 文字以内）。文脈（同じ記事に出る物）が合うときだけ候補にする。"""
+    return name.isascii() and name.isalpha() and len(name) <= 10
+
+
+def _name_ok(name: str, kind: str) -> bool:
+    n = name.strip()
+    if kind not in MENTION_TYPES:
+        return False
+    if n.isascii():
+        if len(n) < 4:      # 3 文字以下の英字（AI・Mac など）は一般語・略語と区別できない
+            return False
+        return not (kind == "person" and " " not in n)
+    return len(n) >= 3
+
+
+def _occurrences(hay: str, orig: str, name: str, longer: list[str]) -> int:
+    """題＋抜粋 hay（折りたたみ済み）で、name が独立した言及として出る回数。orig は NFKC のままの文（大文字小文字を見る）。
+    英数字の途中・ハイフンやドット＋英数字の続き（Qwen3.8-Flash）・より長い既知の名前の一部（Claude Code の Claude）・CamelCase の語が続く場合（Amazon EventBridge）は数えない。"""
+    f = _fold(name)
+    n = 0
+    pos = hay.find(f)
+    spans = [(m.start(), m.end()) for ln in longer for m in re.finditer(re.escape(ln), hay)] if longer and pos >= 0 else []
+    ascii_name = f.isascii()
+    exact = None
+    plain = name.replace(" ", "")
+    if ascii_name and plain.isalpha():      # 英字だけの名前は大文字小文字を見る（metal は金属、Metal は API。coding agent は一般の語、Coding Agent だけが名前）。1 語は Name・NAME も可
+        exact = ({name, name.upper(), name.capitalize()} if " " not in name else {name, name.upper()}) if name[0].isupper() or name.isupper() else {name}
+    while pos >= 0:
+        end = pos + len(f)
+        before = hay[pos - 1] if pos else " "
+        after = hay[end] if end < len(hay) else " "
+        ok = True
+        if ascii_name:
+            if _ALNUM.match(before) or _ALNUM.match(after) or before == "_" or after == "_":
+                ok = False
+            elif after in "-." and end + 1 < len(hay) and _ALNUM.match(hay[end + 1]):
+                ok = False
+            elif before in "-." and pos >= 2 and _ALNUM.match(hay[pos - 2]):
+                ok = False
+        if ok and any(a <= pos and end <= b and (a, b) != (pos, end) for a, b in spans):
+            ok = False
+        if ok and exact is not None and orig[pos:end] not in exact:
+            ok = False
+        if ok and ascii_name and _CAMEL.match(orig[end:end + 24]):
+            ok = False
+        if ok and _SPONSOR.search(hay[max(0, pos - 24):pos]):
+            ok = False      # 「9to5Mac is sponsored by Sony」のような提供元の定型句
+        if ok:
+            n += 1
+        pos = hay.find(f, pos + 1)
+    return n
+
+
 def compute_mentions(db: Session, now: datetime | None = None) -> dict:
-    """記事の多い物（public・allowed）の名前・別名が、記事の題・抜粋に出ているのに article_entities に無い記事を候補にする。
-    全文の索引（searchindex）で候補を引き、NFKC・大文字小文字をそろえた部分一致で確かめる（ASCII の語は前後が英数字でないこと）。確定・却下は残し、未確定の候補だけ作り直す。"""
+    """記事の多い物（public・allowed）の名前・別名が、記事の題・抜粋に出ているのに article_entities に無い記事を候補にする（雑音を減らした版）。
+    全文の索引で候補を引き、`_occurrences` で独立した言及だけを数える。外すもの: ①種類が文脈に合わない物（other・place・policy）・短い語 ②文書頻度が高く、結びついた記事の数に比べて多すぎる名前（一般語）
+    ③より長い既知の名前の一部・CamelCase・ハイフン続き ④取得元の名前・題の末尾の出どころ ⑤題に無く、抜粋に 1 回だけ出る言及 ⑥一般の語と同じ綴りの名前（Windows など）で、同じ記事に出る物が合わないもの。
+    確定・却下は残し、未確定の候補だけ作り直す。"""
     since = (now or _now()) - timedelta(days=MENTION_DAYS)
     conn = db.connection()
     if not searchindex.has_index(conn):
         return {"entities": 0, "candidates": 0}
-    ents = list(db.scalars(select(Entity).where(Entity.sensitivity == "public", Entity.ai_use == "allowed", Entity.article_count >= MENTION_MIN_ARTICLES)
+    ents = list(db.scalars(select(Entity).where(Entity.sensitivity == "public", Entity.ai_use == "allowed", Entity.article_count >= MENTION_MIN_ARTICLES, Entity.type.in_(MENTION_TYPES))
                            .order_by(Entity.article_count.desc(), Entity.id).limit(MENTION_ENTITIES)))
     aliases: dict[int, list[str]] = {}
     ids = [e.id for e in ents]
     for i in range(0, len(ids), 400):
         for eid, alias in db.execute(select(EntityAlias.entity_id, EntityAlias.alias).where(EntityAlias.entity_id.in_(ids[i:i + 400]))):
             aliases.setdefault(eid, []).append(alias)
+    # より長い既知の名前（どの物の名前・別名でも）
+    all_names = {_fold(n) for (n,) in db.execute(select(Entity.name).where(Entity.sensitivity == "public"))}
+    all_names |= {_fold(a) for (a,) in db.execute(select(EntityAlias.alias))}
+    all_names = {n for n in all_names if len(n) >= 4}
     db.execute(delete(MentionCandidate).where(MentionCandidate.status == "candidate"))
     decided = {(e, a) for e, a in db.execute(select(MentionCandidate.entity_id, MentionCandidate.article_id))}
     total = 0
     for ent in ents:
-        names = [n for n in dict.fromkeys([ent.name, *aliases.get(ent.id, [])]) if len(n.strip()) >= (4 if n.isascii() else 3)][:4]
+        names = [n for n in dict.fromkeys([ent.name, *aliases.get(ent.id, [])]) if _name_ok(n, ent.type)][:4]
         if not names:
             continue
         linked = {a for (a,) in db.execute(select(ArticleEntity.article_id).where(ArticleEntity.entity_id == ent.id))}
+        longers = {n: [x for x in all_names if x != _fold(n) and _fold(n) in x] for n in names}
         cand: dict[int, str] = {}
+        verified: set[int] = set()      # 言及として数えられる記事（結びつき済みを含む）＝文書頻度
+        texts: dict[int, tuple[str, str, str, str, str]] = {}
         for name in names:
-            res = searchindex.search(conn, name, limit=80)
-            for aid, _ in (res or {}).get("hits") or []:
-                if aid not in linked and aid not in cand and (ent.id, aid) not in decided:
-                    cand[aid] = name
+            res = searchindex.search(conn, name, limit=MENTION_SEARCH)
+            hits = [aid for aid, _ in (res or {}).get("hits") or []]
+            need = [a for a in hits if a not in texts]
+            for i in range(0, len(need), 400):
+                for aid, title, summary, source, key, dup in db.execute(select(NewsItem.id, NewsItem.title, NewsItem.summary, NewsItem.source, NewsItem.source_key, NewsItem.dup_of)
+                                                                         .where(NewsItem.id.in_(need[i:i + 400]))):
+                    o = unicodedata.normalize("NFKC", f"{_strip_tail(title, source)}\n{summary or ''}")
+                    texts[aid] = (o, _fold(o), _fold(title), _fold(f"{source} {key}"), "dup" if dup is not None else "")
+            for aid in hits:
+                if aid not in texts:
+                    continue
+                o, hay, _, _, _ = texts[aid]
+                if _occurrences(hay, o, name, longers[name]) > 0:
+                    verified.add(aid)
+                    if aid not in linked and aid not in cand and (ent.id, aid) not in decided:
+                        cand[aid] = name
+        if len(verified) >= MENTION_GENERIC_DF and len(verified) > MENTION_GENERIC_RATIO * max(1, ent.article_count):
+            continue      # 一般語（結びついた記事の数に比べて、文中に出すぎる）
         if not cand:
             continue
-        rows = db.execute(select(NewsItem.id, NewsItem.title, NewsItem.summary, NewsItem.published_at, NewsItem.dup_of).where(NewsItem.id.in_(list(cand)), NewsItem.published_at >= since)
-                          .order_by(NewsItem.published_at.desc())).all()
+        rows = db.execute(select(NewsItem.id, NewsItem.published_at).where(NewsItem.id.in_(list(cand)), NewsItem.published_at >= since)).all()
         public_docs = {n for (n,) in db.execute(select(NewsDocument.news_item_id).join(Document, Document.id == NewsDocument.document_id)
                                                 .where(NewsDocument.news_item_id.in_([r[0] for r in rows]), Document.sensitivity == "public"))} if rows else set()
+        ambiguous = any(_ambiguous(n) for n in names)
+        co: set[int] = set()
+        by_article: dict[int, set[int]] = {}
+        if ambiguous:      # 文脈: この物と一緒に出やすい物（結びついた記事に出る他の物の上位）
+            mine = select(ArticleEntity.article_id).where(ArticleEntity.entity_id == ent.id)
+            co = {i for (i,) in db.execute(select(ArticleEntity.entity_id).where(ArticleEntity.article_id.in_(mine), ArticleEntity.entity_id != ent.id)
+                                           .group_by(ArticleEntity.entity_id).order_by(func.count().desc()).limit(40))}
+            for aid, eid in db.execute(select(ArticleEntity.article_id, ArticleEntity.entity_id).where(ArticleEntity.article_id.in_([r[0] for r in rows]))):
+                by_article.setdefault(aid, set()).add(eid)
         kept = 0
-        for aid, title, summary, published, dup in rows:
-            if dup is not None or aid not in public_docs:
+        for aid, published in sorted(rows, key=lambda r: r[1], reverse=True):
+            if aid not in public_docs or texts[aid][4]:
                 continue
-            hay = _fold(f"{title}\n{summary or ''}")
+            o, hay, title_f, src, _ = texts[aid]
             name = cand[aid]
             f = _fold(name)
-            pos = hay.find(f)
-            ok = False
-            while pos >= 0:
-                before, after = hay[pos - 1] if pos else " ", hay[pos + len(f)] if pos + len(f) < len(hay) else " "
-                if not (f.isascii() and ((before.isascii() and before.isalnum()) or (after.isascii() and after.isalnum()))):
-                    ok = True
-                    break
-                pos = hay.find(f, pos + 1)
-            if ok:
-                db.add(MentionCandidate(entity_id=ent.id, article_id=aid, matched=name[:200], status="candidate", published_at=published))
-                kept += 1
-                total += 1
-                if kept >= MENTION_PER_ENTITY:
-                    break
+            if f in src or (_TITLE_TAIL.search(title_f) and f == _fold(_TITLE_TAIL.search(title_f).group(1)).strip()):
+                continue      # 取得元の名前・題の末尾の出どころ
+            in_title = _occurrences(title_f, unicodedata.normalize("NFKC", o.split("\n")[0]), name, longers[name]) > 0
+            if not in_title and _occurrences(hay, o, name, longers[name]) < 2:
+                continue      # 題に無く、抜粋に 1 回だけ（更新履歴の羅列など）は言及と言えない
+            if _ambiguous(name) and co and aid in by_article and not (by_article[aid] & co):
+                continue
+            if _ambiguous(name) and aid not in by_article and not in_title:
+                continue
+            db.add(MentionCandidate(entity_id=ent.id, article_id=aid, matched=name[:200], status="candidate", published_at=published))
+            kept += 1
+            total += 1
+            if kept >= MENTION_PER_ENTITY:
+                break
     return {"entities": len(ents), "candidates": total}
 
 

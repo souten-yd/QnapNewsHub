@@ -18,7 +18,7 @@ from datetime import datetime
 from sqlalchemy import func, or_, select
 
 from qnapnewshub import db as news_db
-from qnapnewshub import event_llm, extract, kg, llm, llm_models, llm_task, rest, settings, things, writer
+from qnapnewshub import entity_merge, event_llm, extract, kg, llm, llm_models, llm_task, rest, settings, things, writer
 from qnapnewshub.db import Claim, Entity, EntityCard, NewsItem, NewsMeta, Relationship, ArticleEntity
 
 logger = logging.getLogger("qnapnewshub.kg_job")
@@ -43,10 +43,11 @@ def aggregate() -> dict:
         with news_db.session() as db:
             mapped = kg.sync_documents(db, full=True)
             out = kg.rebuild_cooccur(db)
+            merged = entity_merge.compute_merges(db)      # 名寄せ（確かなものは自動・迷うものは候補）。関係が変わるので、まとまりの前
             comm = things.compute_communities(db)      # 主題のまとまり（関係が変わった後）
             ment = things.compute_mentions(db)      # リンクされていない言及（つなぐ候補）
             db.commit()
-            return {"mapped": mapped, **out, "communities": comm["communities"], "mention_candidates": ment["candidates"]}
+            return {"mapped": mapped, **out, "merged": merged["merged"], "merge_candidates": merged["candidates"], "communities": comm["communities"], "mention_candidates": ment["candidates"]}
 
     return writer.run("news.kg_aggregate", do, user=False)
 

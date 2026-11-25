@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from qnapnewshub import channels as channels_mod
 from qnapnewshub import db as news_db
-from qnapnewshub import entities, kg_view, rcache, things, writer
+from qnapnewshub import entities, entity_merge, kg_view, rcache, things, writer
 from qnapnewshub.auth import AuthUser as User
 from qnapnewshub.auth import current_user as get_current_user
 from qnapnewshub.auth import read_user, require_admin
@@ -59,6 +59,47 @@ def _contexts(db: Session, ids: list[int], scopes: list[str], max_relations: int
     ents = {e.id: e for e in db.query(Entity).filter(Entity.id.in_(ids), Entity.sensitivity.in_(scopes))}
     items = [things.context(db, ents[i], scopes, max_relations=max_relations, max_facts=max_facts) for i in dict.fromkeys(ids) if i in ents]
     return items, [i for i in dict.fromkeys(ids) if i not in ents]      # 無い物と読めない物は区別しない（区分の外の物の存在を漏らさない）
+
+
+# ---- 名寄せ（同じ物の別表記）。確かなものは夜に自動で寄せ、迷うものは候補として管理者が確定する ----
+
+class MergeDecideIn(BaseModel):
+    keep_id: int | None = None      # 残す方（既定は記事の多い方）
+
+
+@router.get("/merge-candidates")
+def merge_candidates(limit: int = Query(30, ge=1, le=200), user: User = Depends(require_admin), db: Session = Depends(get_news_db)):
+    return {**entity_merge.list_candidates(db, limit), "merges": entity_merge.list_merges(db, 15)}
+
+
+async def _merge_job(name: str, fn):
+    def do():
+        with news_db.session() as db:
+            out = fn(db)
+            db.commit()
+            return out
+
+    out = await asyncio.to_thread(writer.run, name, do)
+    if out is None:
+        raise HTTPException(status_code=404, detail="その候補・記録は見つからないか、すでに決めてあります")
+    return out
+
+
+@router.post("/merge-candidates/{candidate_id}/confirm")
+async def merge_confirm(candidate_id: int, body: MergeDecideIn | None = None, user: User = Depends(require_admin)):
+    """候補を確定して寄せる（記事・主張・関係・別名を付け替える。記録が残り、元に戻せる）。"""
+    return await _merge_job("news.things_merge", lambda db: entity_merge.decide(db, candidate_id, accept=True, keep_id=body.keep_id if body else None))
+
+
+@router.post("/merge-candidates/{candidate_id}/dismiss")
+async def merge_dismiss(candidate_id: int, user: User = Depends(require_admin)):
+    return await _merge_job("news.things_merge", lambda db: entity_merge.decide(db, candidate_id, accept=False))
+
+
+@router.post("/merges/{merge_id}/undo")
+async def merge_undo(merge_id: int, user: User = Depends(require_admin)):
+    """寄せを元に戻す（負けた物の行・別名・記事・主張・関係を戻す。戻した組は夜に再び寄せない）。"""
+    return await _merge_job("news.things_merge_undo", lambda db: entity_merge.undo(db, merge_id))
 
 
 @router.get("/{entity_id}/context")

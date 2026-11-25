@@ -34,3 +34,17 @@ export function useDecideMention(entityId: number) {
     },
   });
 }
+
+/** 名寄せ（同じ物の別表記）。確かなものは夜に自動で寄せ、迷うものは候補として管理者が確定する。寄せた記録は元に戻せる。 */
+export interface MergeSide { id: number; name: string; type: EntityType; article_count: number }
+export interface MergeCandidate { id: number; reason: string; score: number; keep: MergeSide; drop: MergeSide }
+export interface MergeRecord { id: number; winner: { id: number; name: string }; loser: { id: number; name: string }; mode: "auto" | "confirmed"; reason: string; merged_at: string; undone: boolean; can_undo: boolean }
+export const MERGE_REASON: Record<string, string> = { rule_type: "表記は同じだが種類が違う", rule_paren: "括弧を除くと同じ", cross_script: "日本語と英語の表記（同じ出来事の記事に別々に出る）", rule: "表記の規則（会社の語尾・版の書き方）", undone: "戻した組" };
+export const useMergeCandidates = () => useQuery({ queryKey: ["things", "merge"], queryFn: () => api<{ items: MergeCandidate[]; total: number; merges: MergeRecord[] }>("/things/merge-candidates?limit=30"), retry: false });
+export function useMergeAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, json }: { path: string; json?: unknown }) => api<unknown>(`/things${path}`, { method: "POST", json: json ?? {} }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["things"] }); void qc.invalidateQueries({ queryKey: ["entities"] }); },
+  });
+}
