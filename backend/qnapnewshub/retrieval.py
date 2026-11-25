@@ -14,13 +14,13 @@ from datetime import datetime
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from qnapnewshub import docstore, kg, kg_view, searchindex
+from qnapnewshub import docstore, kg, kg_view, searchindex, things
 from qnapnewshub.db import Claim, Document, Entity, EntityAlias, Event, EventArticle, Evidence, NewsDocument, NewsItem, Relationship, ResearchRecord
 from qnapnewshub.entities import normalize_key
 from qnapnewshub.rcache import Budget
 from qnapnewshub.store import visible
 
-SEED_KINDS = ("document", "entity", "event")
+SEED_KINDS = ("document", "entity", "event", "claim")
 TERMS_MAX = 12
 STOP_ASCII = frozenset("the a an of and or is are was were what how why who when where which to in on for with about vs between".split())
 STOP_JA = frozenset(["違い", "方法", "最近", "説明", "概要", "教え", "場合", "今回", "現在", "以前", "最新"])
@@ -157,6 +157,49 @@ def _doc_seeds(db: Session, q: str, terms: list[str], *, scopes: list[str], doc_
     return out[:limit]
 
 
+CLAIM_MIN_RATIO = 0.8      # 主張の種は、最上位の BM25 のこの割合以上だけ
+
+
+def _claim_seeds(db: Session, terms: list[str], *, scopes: list[str], since: datetime | None, until: datetime | None, limit: int, budget: Budget) -> list[dict]:
+    """主張（claims）を直接引く: 主張の本文・値と、主語の物の名前・別名の全文索引（trigram＋英語の BM25。記事の索引と同じ作り）を、問いの語の OR で。
+    各主張に、主語の物と根拠の文書（evidences → documents。区分の範囲のものだけ。最大 3）を付ける（主張から根拠の文書へ辿れる）。点数は最上位を 1 とした割合。"""
+    tri, word, _ = _split(terms)
+    if not (tri or word) or budget.expired():
+        return []
+    hits = searchindex.search_claims(db.connection(), tri, word, limit=max(limit * 4, 60))
+    if not hits:
+        return []
+    top = hits[0][1] or 1.0
+    rows = {c.id: c for c in db.scalars(select(Claim).where(Claim.id.in_([i for i, _ in hits]), Claim.sensitivity.in_(scopes)))}
+    ents = {e.id: e for e in db.scalars(select(Entity).where(Entity.id.in_({c.entity_id for c in rows.values() if c.entity_id}), Entity.sensitivity.in_(scopes)))} if rows else {}
+    docs: dict[int, list[dict]] = {}
+    if rows:
+        for claim_id, d in db.execute(select(Evidence.claim_id, Document).join(Document, Document.id == Evidence.document_id)
+                                      .where(Evidence.claim_id.in_(list(rows)), Document.sensitivity.in_(scopes)).order_by(Evidence.confidence.desc(), Evidence.id)):
+            lst = docs.setdefault(claim_id, [])
+            if len(lst) < 3 and all(x["id"] != d.id for x in lst):
+                lst.append({"id": d.id, "title": d.title, "source": d.source, "published_at": kg.iso(d.published_at), "label": things.doc_label(d.source, kg.iso(d.published_at), d.id)})
+    out: list[dict] = []
+    for cid, score in hits:
+        if score < top * CLAIM_MIN_RATIO:
+            break      # 最上位の点数の一定の割合に満たない主張は出さない（短い文なので、語 1 つだけ当たった主張が大量に並んで文書の種を押し出す）
+        c = rows.get(cid)
+        if c is None or (c.entity_id and c.entity_id not in ents):
+            continue
+        ds = docs.get(cid, [])
+        when = ds[0]["published_at"] if ds else kg.iso(c.created_at)
+        if (since and when and when < kg.iso(since)) or (until and when and when > kg.iso(until)):
+            continue
+        e = ents.get(c.entity_id)
+        blob = f"{c.text} {c.value} {e.name if e else ''}".casefold()
+        out.append({"kind": "claim", "id": cid, "text": c.text, "value": c.value, "claim_kind": c.kind, "entity": {"id": e.id, "name": e.name, "type": e.type} if e else None,
+                    "article_id": c.article_id, "documents": ds, "published_at": when, "sensitivity": c.sensitivity, "ai_extracted": bool(c.ai_extracted),
+                    "score": round(score / top, 4), "bm25": round(score, 3), "match": {"via": "fulltext", "terms": [t for t in terms if t.casefold() in blob][:6]}})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _entity_seeds(db: Session, q: str, terms: list[str], *, scopes: list[str], since: datetime | None, until: datetime | None, limit: int, budget: Budget) -> list[dict]:
     """物の名前・別名: 完全一致（正規化のキー）を最優先、問いの文に名前が含まれる、名前・別名に語が含まれる（部分）の順。同じ質なら記事の多い物。"""
     qn = unicodedata.normalize("NFKC", q).casefold()
@@ -240,7 +283,7 @@ def _event_seeds(db: Session, terms: list[str], entity_hits: list[dict], *, sinc
 
 def seeds(db: Session, q: str, *, kinds: list[str] | None = None, doc_kinds: list[str] | None = None, scopes: list[str], since: datetime | None = None,
           until: datetime | None = None, limit: int = 20, budget: Budget) -> dict:
-    """問いの文から種を探す。{"terms", "items": [種類つきの候補（点数の大きい順）], "counts", "truncated", "reason"}。limit は種類ごとの上限。"""
+    """問いの文から種を探す（文書・物・イベント・主張）。{"terms", "items": [種類つきの候補（点数の大きい順）], "counts", "truncated", "reason"}。limit は種類ごとの上限。"""
     want = [k for k in (kinds or SEED_KINDS) if k in SEED_KINDS]
     terms = query_terms(q)
     items: list[dict] = []
@@ -251,6 +294,8 @@ def seeds(db: Session, q: str, *, kinds: list[str] | None = None, doc_kinds: lis
         items += _doc_seeds(db, q, terms, scopes=scopes, doc_kinds=doc_kinds or [], since=since, until=until, limit=limit, budget=budget)
     if "entity" in want:
         items += ents
+    if "claim" in want:
+        items += _claim_seeds(db, terms, scopes=scopes, since=since, until=until, limit=limit, budget=budget)
     if "event" in want and "public" in scopes:
         items += _event_seeds(db, terms, ents, since=since, until=until, limit=limit, budget=budget)
     items.sort(key=lambda r: (-r["score"], r["kind"], r["id"] or 0))
@@ -261,6 +306,47 @@ def seeds(db: Session, q: str, *, kinds: list[str] | None = None, doc_kinds: lis
     counts = {k: sum(1 for i in items if i["kind"] == k) for k in SEED_KINDS}
     return {"query": q, "terms": terms, "items": items, "counts": counts, "truncated": budget.hit, "reason": "time" if budget.hit else "",
             "unsearched_short_terms": [t for t in terms if not t.isascii() and len(t) < 3 and (_split(terms)[0] or _split(terms)[1])]}
+
+
+# ---- 周り（neighbors）の点数 ----
+
+NEIGHBOR_DECAY = 0.95      # 周りの点数は、辿ってきた元（種）の点数のこの割合が上限（< 1 なので、周りは元の種より必ず低い）
+NEIGHBOR_QUERY_MISS = 0.2      # 問いの語に合わない相手の係数（合う相手は 1.0）
+NEIGHBOR_EVIDENCE_FULL = 3      # 根拠がこの数あれば根拠の係数は最大（根拠 0 件は 0.5）
+
+
+REL_CUES = {      # 辺の型 → 問いの文にあれば「その関係を尋ねている」語（一部・実装・対応…）。含まれる語で足りる（形態素解析なし）
+    "uses": ("使っ", "使う", "使用", "利用", " uses", " use "), "supports": ("対応", "サポート", "support"), "replaces": ("置き換", "代替", "replace"),
+    "competes": ("競合", "競う", "比べ", "比較", "違い", "vs", "compare"), "part_of": ("一部", "含む", "含まれ", "part of"), "implements": ("実装", "implement"),
+    "cites": ("引用", "出典", "cite", "cites"), "contradicts": ("矛盾", "反論", "食い違", "contradict")}
+
+
+def score_neighbors(out: dict, seed_ids: list[int], seed_scores: list[float], q: str) -> dict:
+    """kg_view.neighbors の結果の辺と物に score を足す（その場で書き換えて返す）。
+    辺の score = 元の点数（入り口の種の点数。2 段目以降は辿ってきた物の score）× NEIGHBOR_DECAY × 関係の確かさ（confidence。下限 0.2）× 根拠の係数
+    × 問いの係数。根拠の係数 = 0.5 + 0.5 × min(1, 根拠の数 / NEIGHBOR_EVIDENCE_FULL)。問いの係数 = 相手の名前が問いの語に合う、または辺の型を尋ねる語（REL_CUES。「一部」「実装」など）が問いにあれば 1.0・合わなければ NEIGHBOR_QUERY_MISS。
+    物の score は、その物へ来る辺の score の最大。どの係数も 1 以下で NEIGHBOR_DECAY < 1 なので、周りの点数は必ず元の種より低い（周りが種を押しのけて上位を占めない）。
+    ハブの抑制は kg_view.neighbors の hub_k（物 1 つにつき読む辺の数）が既に効いている。種の点数は seed_scores（seed_ids と同じ並び。足りなければ 0.5）。"""
+    base = {int(i): float(seed_scores[n]) if n < len(seed_scores) else 0.5 for n, i in enumerate(seed_ids)}
+    qn = unicodedata.normalize("NFKC", q or "").casefold()
+    terms = [t.casefold() for t in query_terms(q)]
+    names = {n["id"]: n["name"] for lv in out["levels"] for n in lv["nodes"]} | {n["id"]: n["name"] for n in out["seeds"]}
+    score = dict(base)
+    for lv in out["levels"]:
+        for e in lv["edges"]:
+            parent = e.get("via")
+            other = e["target"] if e["source"] == parent else e["source"]
+            nm = unicodedata.normalize("NFKC", names.get(other, "")).casefold()
+            hit = (bool(nm) and (nm in qn or any(t in nm for t in terms))) or any(c in qn for c in REL_CUES.get(e.get("type"), ()))
+            w = (0.6 + 0.4 * float(e.get("confidence") or 0)) * (0.7 + 0.3 * min(1.0, int(e.get("evidence_count") or 0) / NEIGHBOR_EVIDENCE_FULL)) * (1.0 if hit else NEIGHBOR_QUERY_MISS)
+            e["score"] = round(score.get(parent, 0.5) * NEIGHBOR_DECAY * w, 4)
+            if other not in base and e["score"] > score.get(other, 0.0):
+                score[other] = e["score"]
+        for n in lv["nodes"]:
+            n["score"] = score.get(n["id"], 0.0)
+    for n in out["seeds"]:
+        n["score"] = base.get(n["id"], 0.0)
+    return out
 
 
 # ---- 局所 Personalized PageRank（push 法） ----
@@ -360,13 +446,17 @@ def ppr(db: Session, seeds_: dict[int, float], *, scopes: list[str], alpha: floa
 EVIDENCE_IDS_MAX, EVIDENCE_PER_ITEM_MAX, EVIDENCE_TOTAL_MAX = 200, 20, 1500
 
 
-def _ev_dict(ev: Evidence, d: Document) -> dict:
+def _ev_dict(ev: Evidence, d: Document, compact: bool = False) -> dict:
+    """根拠 1 件。document.label は「出どころ 日付 d<id>」（LLM に渡す短い印）。compact なら url を省く（Google ニュースの転送 URL が文脈のトークンの大半を占めるため。url は id から取れる）。"""
+    doc = {"id": d.id, "kind": d.kind, "title": d.title, "url": d.url, "source": d.source, "published_at": kg.iso(d.published_at), "label": things.doc_label(d.source, kg.iso(d.published_at), d.id),
+           "sensitivity": d.sensitivity, "ai_use": d.ai_use, "version": d.version}
+    if compact:
+        doc.pop("url")
     return {"id": ev.id, "quote": ev.quote, "start": ev.start, "end": ev.end, "page": ev.page, "quote_hash": ev.quote_hash, "grounded": bool(ev.grounded),
-            "confidence": round(float(ev.confidence or 0), 3), "document": {"id": d.id, "kind": d.kind, "title": d.title, "url": d.url, "source": d.source,
-                                                                             "published_at": kg.iso(d.published_at), "sensitivity": d.sensitivity, "ai_use": d.ai_use, "version": d.version}}
+            "confidence": round(float(ev.confidence or 0), 3), "document": doc}
 
 
-def evidence(db: Session, *, entities: list[int], claims: list[int], relationships: list[int], scopes: list[str], per_item: int = 5) -> dict:
+def evidence(db: Session, *, entities: list[int], claims: list[int], relationships: list[int], scopes: list[str], per_item: int = 5, compact: bool = False) -> dict:
     """物・主張・関係の id の一覧から、根拠（引用・位置・文書の題・URL・日時・区分）をまとめて返す（id ごと 1 回の問い合わせにしない: 種類ごとに IN で）。
     - 主張・関係: その根拠（evidences）を確かさの高い順に per_item 件まで。
     - 物: その物の主張（区分の範囲の中）の根拠を、新しい主張から per_item 件まで。
@@ -386,7 +476,7 @@ def evidence(db: Session, *, entities: list[int], claims: list[int], relationshi
             key = getattr(ev, col.key)
             lst = res.setdefault(key, [])
             if len(lst) < per_item and budget_left > 0:
-                lst.append(_ev_dict(ev, d))
+                lst.append(_ev_dict(ev, d, compact))
                 budget_left -= 1
             elif len(lst) < per_item:
                 out["truncated"] = True

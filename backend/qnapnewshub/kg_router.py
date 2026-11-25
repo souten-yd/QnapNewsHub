@@ -99,6 +99,8 @@ class NeighborsIn(BaseModel):
     since: datetime | None = None
     until: datetime | None = None
     confidential: bool = False
+    seed_scores: list[float] = Field(default_factory=list, max_length=kg_view.NEIGHBOR_IDS_MAX)      # ids と同じ並びの種の点数（0〜1）。渡すと辺・物に score（種より必ず低い）が付く
+    q: str = Field("", max_length=500)      # 問いの文（score の「問いの語に合う相手」の判定に使う。seed_scores があるときだけ）
 
 
 class ExportIn(BaseModel):
@@ -250,6 +252,10 @@ def neighbors(body: NeighborsIn, user: User = Depends(read_user), db: Session = 
             out = kg_view.neighbors(db, body.ids, types=body.types, depth=body.depth, limit=body.limit, scopes=scopes, min_confidence=body.min_confidence, kinds=body.kinds,
                                     since=body.since, until=body.until, direction=body.direction, type_directions=td, order=body.order, only_contradicts=body.only_contradicts,
                                     hub_k=body.hub_k, deadline=budget.deadline)
+        if body.seed_scores:
+            from qnapnewshub import retrieval
+
+            retrieval.score_neighbors(out, body.ids, body.seed_scores, body.q)
         out["meta"] = {"elapsed_ms": budget.elapsed_ms(), "budget_ms": budget.ms}
         return rcache.fit(out, [(lv, "edges") for lv in out["levels"]])
 

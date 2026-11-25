@@ -265,7 +265,7 @@ def test_evidence_returns_quotes_documents_and_hides_out_of_scope(client):
     assert c["text"] == "Opensys is fast" and len(c["evidences"]) == 2
     e0 = c["evidences"][0]
     assert e0["document"] == {"id": pub["id"], "kind": "paper", "title": "Open Paper", "url": "https://arxiv.org/abs/2601.12345", "source": "", "published_at": "2026-01-02T00:00:00Z",
-                              "sensitivity": "public", "ai_use": "allowed", "version": ""} and e0["quote"] and e0["grounded"]
+                              "sensitivity": "public", "ai_use": "allowed", "version": "", "label": f"2026-01-02 d{pub['id']}"} and e0["quote"] and e0["grounded"]
     assert out["relationships"][str(rp["id"])]["evidences"][0]["quote"] == "uses Peltier2"
     assert out["entities"][str(cp["entity_id"])]["claims"][0]["evidences"]
     assert out["missing"] == {"claims": [cs["id"], 9999], "relationships": [rs["id"]], "entities": [cs["entity_id"]]}

@@ -2,11 +2,12 @@
 
 道（ranking は参照 `doc:` `ent:` `clm:` `rel:` `evt:` の並び）:
   ① fulltext … GET /news/items?q=<キーワード>（今の全文検索。問いに付けたキーワードで引く＝LLM が打つ検索語の代わり）
-  ② seeds    … POST /retrieve/seeds（問いの文そのまま。文書・物・イベントを 1 件ずつ交互に並べる）
-  ③ neighbors … ②の上位 3 つの物から POST /graph/neighbors（深さ 1）→ 辺（rel）・相手の物・辺の根拠の文書（POST /retrieve/evidence）。②と RRF で合わせる
+  ② seeds    … POST /retrieve/seeds（問いの文そのまま。文書・物・主張・イベントを 1 件ずつ交互に並べる）
+  ③ neighbors … ②の上位 3 つの物から POST /graph/neighbors（深さ 1。seed_scores・q を渡して辺の score をもらう）→ 辺（rel）・相手の物・辺の根拠の文書（POST /retrieve/evidence）。
+                ②の並びへ score で差し込む（fuse_scored。両方から来た参照は点数を足す）
   ④ ppr      … ②の上位 3 つの物から POST /graph/ppr → 物・上位の物の主張と根拠の文書（/retrieve/evidence）。②と RRF で合わせる
   ⑤ context  … ③④を合わせ、上位の物の POST /things/context（LLM に渡す文脈）。文脈から取れる主張・関係・文書の参照も足す
-合わせ方 RRF は 1/(10+順位)。時間は、その道に必要な呼び出しを順に流した合計（キャッシュは呼び出しごとに捨てる）。
+④⑤の合わせ方 RRF は 1/(10+順位)。時間は、その道に必要な呼び出しを順に流した合計（キャッシュは呼び出しごとに捨てる）。
 文脈の密度: 渡した文脈（①〜④は上位 10 件を文にしたもの、⑤は物の文脈＋上位 5 文書の題）に入っていた正解の参照の数 ÷ 見積りのトークン数 × 1000。
 """
 from __future__ import annotations
@@ -26,6 +27,7 @@ EXPAND_MAX = 30
 CONTEXT_ENTITIES = 6
 CONTEXT_TOP = 10
 RRF_K = 10
+RANK_DAMP = 0.85      # 種の点数の、同じ種類の中の順位ごとの割引（周りの点数との比較用）
 
 
 def gold_refs(q: dict) -> set[str]:
@@ -50,6 +52,26 @@ def interleave(*lists: list[str]) -> list[str]:
         out += [x[i] for x in lists if i < len(x)]
         i += 1
     return metrics.dedupe(out)
+
+
+def fuse_scored(base: list[str], base_scores: dict[str, float], extra: dict[str, float]) -> list[str]:
+    """種の並び（base。種類を交互に並べた順）を崩さずに、周り（extra: 参照 → 点数）を点数で差し込む。
+    種の有効な点数は、並びの先頭から見た最小値（並びが点数の降順になるよう丸める）。周りは種より必ず低い点数なので、元の種の下にだけ入り、
+    元の種より低い点数の種（並びの後ろ）は追い抜ける。同点は種が先。種に既にある参照は周りから足さない。"""
+    eff, cur = [], 1.0
+    for r in base:
+        cur = min(cur, base_scores.get(r, 0.0))
+        eff.append((r, cur))
+    seen = set(base)
+    rest = sorted(((r, sc) for r, sc in extra.items() if r not in seen), key=lambda t: -t[1])
+    out, j = [], 0
+    for r, sc in eff:
+        while j < len(rest) and rest[j][1] > sc:
+            out.append(rest[j][0])
+            j += 1
+        out.append(r)
+    out += [r for r, _ in rest[j:]]
+    return out
 
 
 class Lookup:
@@ -101,7 +123,9 @@ class Run:
     # ---- ② ----
     def seeds(self, q: dict) -> tuple[dict, float]:
         r, ms = self.call("POST", "/retrieve/seeds", json={"q": q["q"], "limit": SEED_LIMIT})
-        docs, ents, evs = [], [], []
+        docs, ents, evs, clms = [], [], [], []
+        scores: dict[str, float] = {}
+        kind_n: dict[str, int] = {}
         for it in r["items"]:
             if it["kind"] == "document" and it.get("id") is not None:
                 ref = f"doc:{it['id']}"
@@ -115,35 +139,52 @@ class Run:
                 ref = f"evt:{it['id']}"
                 evs.append(ref)
                 self.text[ref] = f"{it['title']} ({it.get('n_articles', 0)} 件)"
-        return {"list": interleave(docs, ents, evs), "ent_ids": [int(e.split(":")[1]) for e in ents], "ent_scores": [it["score"] for it in r["items"] if it["kind"] == "entity"]}, ms
+            elif it["kind"] == "claim":
+                ref = f"clm:{it['id']}"
+                clms.append(ref)
+                self.text[ref] = f"{(it.get('entity') or {}).get('name', '')}: {it['text']}"
+            else:
+                continue
+            kind_n[it["kind"]] = kind_n.get(it["kind"], 0) + 1
+            scores[ref] = it["score"] * RANK_DAMP ** (kind_n[it["kind"]] - 1)      # 種類ごとの点数は最上位が 1 に規格化されている（質が違っても 1 に近い）ので、種類内の順位で割り引いて周りと比べる
+        return {"list": interleave(docs, ents, clms, evs), "scores": scores, "ent_ids": [int(e.split(":")[1]) for e in ents],
+                "ent_scores": [it["score"] for it in r["items"] if it["kind"] == "entity"]}, ms
 
     def _evidence_docs(self, body: dict) -> tuple[dict, float]:
         return self.call("POST", "/retrieve/evidence", json=body)
 
     # ---- ③ ----
-    def neighbors(self, ent_ids: list[int]) -> tuple[list[str], float]:
+    def neighbors(self, ent_ids: list[int], ent_scores: list[float], question: str) -> tuple[dict[str, float], float]:
+        """周りの参照 → 点数（サーバーが辺・物に付ける score。根拠の文書は辺の点数の 0.9 倍）。点数の大きい順に EXPAND_MAX 件。"""
         ids = ent_ids[:EXPAND_FROM]
         if not ids:
-            return [], 0.0
-        r, ms = self.call("POST", "/graph/neighbors", json={"ids": ids, "depth": 1, "limit": 40, "order": "weight", "hub_k": 10})
+            return {}, 0.0
+        r, ms = self.call("POST", "/graph/neighbors", json={"ids": ids, "depth": 1, "limit": 40, "order": "weight", "hub_k": 10, "seed_scores": ent_scores[:EXPAND_FROM], "q": question})
         names = {n["id"]: n["name"] for lv in r["levels"] for n in lv["nodes"]} | {s["id"]: s["name"] for s in r["seeds"]}
-        edges = sorted((e for lv in r["levels"] for e in lv["edges"]), key=lambda e: -(e.get("confidence") or 0))[:EXPAND_MAX]
+        edges = sorted((e for lv in r["levels"] for e in lv["edges"]), key=lambda e: -(e.get("score") or 0))[:EXPAND_MAX]
         rel_ids = [e["id"] for e in edges if e["id"] in self.lk.rel_ids]
         ev, ms2 = self._evidence_docs({"relationships": rel_ids[:20], "per_item": 2}) if rel_ids else ({"relationships": {}}, 0.0)
-        out: list[str] = []
+        out: dict[str, float] = {}
+
+        def put(ref: str, sc: float) -> None:
+            if sc > out.get(ref, -1.0):
+                out[ref] = sc
+
         for e in edges:
             other = e["target"] if e["source"] in ids else e["source"]
+            sc = e.get("score") or 0.0
             if e["id"] in self.lk.rel_ids:
                 ref = f"rel:{e['id']}"
-                out.append(ref)
+                put(ref, sc)
                 self.text[ref] = f"{names.get(e['source'], e['source'])} -{e['type']}-> {names.get(e['target'], e['target'])}"
-            out.append(f"ent:{other}")
+            put(f"ent:{other}", sc)
             self.text.setdefault(f"ent:{other}", names.get(other, str(other)))
             for evd in (ev["relationships"].get(str(e["id"])) or {}).get("evidences", []):
                 ref = f"doc:{evd['document']['id']}"
-                out.append(ref)
+                put(ref, sc * 0.6)
                 self.text.setdefault(ref, evd["document"]["title"])
-        return metrics.dedupe(out)[:EXPAND_MAX], ms + ms2
+        top = sorted(out.items(), key=lambda t: -t[1])[:EXPAND_MAX]
+        return dict(top), ms + ms2
 
     # ---- ④ ----
     def ppr(self, ent_ids: list[int], scores: list[float]) -> tuple[list[str], float]:
@@ -231,8 +272,10 @@ def run_question(run: Run, q: dict) -> dict[str, dict]:
     done("fulltext", ft, ms_ft)
     sd, ms_sd = run.seeds(q)
     done("seeds", sd["list"], ms_sd)
-    nb, ms_nb = run.neighbors(sd["ent_ids"])
-    l3 = rrf(sd["list"], nb)
+    nb_scores, ms_nb = run.neighbors(sd["ent_ids"], sd["ent_scores"], q["q"])
+    nb = list(nb_scores)
+    both = {r: min(0.99, sd["scores"][r] + sc) for r, sc in nb_scores.items() if r in sd["scores"]}      # 種と周りの両方から来た参照は、2 つの点数を足して（上限 0.99）押し上げる
+    l3 = fuse_scored([r for r in sd["list"] if r not in both], sd["scores"], {**nb_scores, **both})
     done("neighbors", l3, ms_sd + ms_nb)
     pp, ms_pp = run.ppr(sd["ent_ids"], sd["ent_scores"])
     l4 = rrf(sd["list"], pp)
