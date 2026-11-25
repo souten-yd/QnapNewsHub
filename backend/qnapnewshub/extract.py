@@ -10,6 +10,7 @@
   物の名前が空・主語と目的語が同じ・型が違う関係は捨てる。一緒に出る（co_occurs）は LLM に作らせない（集計で作る）。
 - **関係の整理（ex3・2026-11-25）**: 型に made_by（製品・モデル → 作った組織・人）と develops（組織・人 → 作っている物）を足した。型ごとに主語・目的語の種類（定義域・値域。`REL_RULES`・`relation_ok`）を決め、
   合わない関係（「Claude uses Anthropic」「製品 part_of 製造元」など）は物の登録のとき捨てる（entities.apply_extractions）。型 other は作らない（内容の空な関係）。
+- **測定の条件（2026-11-26）**: 条件（model・quant・hw・engine・ctx・version）は文からの規則（bench.cond_of）で取る。プロンプトに cond の指示と例を足しても、本物の LLM（Nemotron 3.5 Super・ゲートウェイのローカル LLM）は 30 件で 1 度も書かなかったので、指示は入れない（トークンの無駄）。LLM が cond を書いたときだけ、原文に出る値を残す（bench.clean_cond）。
 - **一般名詞の除外（ex4・2026-11-25）**: 物は固有名（製品名・会社名・組織名・人名・モデル名・ソフト名・規格名・法令名）だけ。一般名詞・カテゴリ・役職・説明的な句・題の言い換えは入れない指示に変え、
   同じ誤りを機械の規則（thing_filter.generic_phrase）でも外す。
 - **根拠の段階（tier）**: 関係・主張の根拠は 3 段階。exact＝引用が原文にそのまま出る・paraphrase＝引用はあるが言い換え（原文との文字の重なりが大きい）または主張の値が原文にある・none＝根拠が無い。
@@ -38,7 +39,8 @@ ENTITY_SCHEMA: dict = {
 FACT_SCHEMA: dict = {
     "type": "object", "required": ["about", "kind", "text"],
     "properties": {"about": {"type": "string", "minLength": 1, "maxLength": 80}, "kind": {"type": "string", "enum": list(FACT_KINDS)},
-                   "text": {"type": "string", "minLength": 1, "maxLength": 200}, "value": {"type": "string", "maxLength": 40}, "quote": {"type": "string", "maxLength": QUOTE_MAX}},
+                   "text": {"type": "string", "minLength": 1, "maxLength": 200}, "value": {"type": "string", "maxLength": 40}, "quote": {"type": "string", "maxLength": QUOTE_MAX},
+                   "cond": {"type": "object"}},
 }
 RELATION_SCHEMA: dict = {
     "type": "object", "required": ["subject", "type", "object"],
@@ -223,7 +225,10 @@ def clean(raw: object, source_text: str) -> dict | None:
         if not numbers_grounded(item["text"], item["value"], source_text):
             continue
         tier = quote_tier(item["quote"], source_text, value=item["value"])
-        facts.append({**item, "quote": item["quote"] if tier == "exact" else "", "tier": tier})
+        from qnapnewshub import bench
+
+        cond = bench.clean_cond(row.get("cond"), source_text) if item["value"] else {}      # 条件は値のある fact だけ・原文に出る値だけ
+        facts.append({**item, "quote": item["quote"] if tier == "exact" else "", "tier": tier, **({"cond": cond} if cond else {})})
         if len(facts) >= MAX_FACTS:
             break
     return {"entities": entities, "facts": facts, "relations": clean_relations(raw.get("relations"), source_text)}

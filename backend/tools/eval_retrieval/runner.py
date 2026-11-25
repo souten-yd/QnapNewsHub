@@ -7,6 +7,7 @@
                 ②の並びへ score で差し込む（fuse_scored。両方から来た参照は点数を足す）
   ④ ppr      … ②の上位 3 つの物から POST /graph/ppr → 物・上位の物の主張と根拠の文書（/retrieve/evidence）。②と RRF で合わせる
   ③' meet    … ②の上位 3 つの物から POST /graph/expand（上位の種から別々に展開し、2 つ以上の種から届いた物・辺へ加点＝会合。深さは自動〔普通の問いは 1・物を結ぶ問いだけ最大 5〕か --meet-depth で固定）。③と同じに差し込む
+  ⑥ tools    … ⑤に、上位の物の GET /watch/changes（since=WATCH_DAYS 日）と GET /metrics/compare を足す（LLM が「最近の変化」「条件つきの数値」を道具で引く形）。主張・根拠の文書・関係・イベントの参照を足し、文脈にその text を足す
   ⑤ context  … ③④を合わせ、上位の物の POST /things/context（LLM に渡す文脈）。文脈から取れる主張・関係・文書の参照も足す
 ④⑤の合わせ方 RRF は 1/(10+順位)。時間は、その道に必要な呼び出しを順に流した合計（キャッシュは呼び出しごとに捨てる）。
 文脈の密度: 渡した文脈（①〜④は上位 10 件を文にしたもの、⑤は物の文脈＋上位 5 文書の題）に入っていた正解の参照の数 ÷ 見積りのトークン数 × 1000。
@@ -19,13 +20,15 @@ from pathlib import Path
 
 from . import metrics
 
-PATHS = ("fulltext", "seeds", "neighbors", "meet", "ppr", "context")
-PATH_LABEL = {"fulltext": "① 全文だけ", "seeds": "② 種", "neighbors": "③ 種＋周り 1 段", "meet": "③' 種＋会合の展開", "ppr": "④ 種＋局所 PPR", "context": "⑤ 物の文脈"}
+PATHS = ("fulltext", "seeds", "neighbors", "meet", "ppr", "context", "tools")
+PATH_LABEL = {"fulltext": "① 全文だけ", "seeds": "② 種", "neighbors": "③ 種＋周り 1 段", "meet": "③' 種＋会合の展開", "ppr": "④ 種＋局所 PPR", "context": "⑤ 物の文脈", "tools": "⑥ ⑤＋変化・比較の道具"}
 H = {"X-Requested-With": "NewsHub"}
 SEED_LIMIT = 10
 EXPAND_FROM = 3       # 種の物のうち、周りへ広げる数
 EXPAND_MAX = 30
 CONTEXT_ENTITIES = 6
+TOOL_ENTITIES = 2      # 道具を引く物の数。種（②）の上位の物だけ（LLM が lookup で選んだ物に道具を引く形）
+WATCH_DAYS = 1      # build_questions.WATCH_DAYS と同じ
 CONTEXT_TOP = 10
 RRF_K = 10
 RANK_DAMP = 0.85      # 種の点数の、同じ種類の中の順位ごとの割引（周りの点数との比較用）
@@ -292,6 +295,36 @@ class Run:
             raise RuntimeError(f"things/context -> {r.status_code}")
         return r.text, ms
 
+    # ---- ⑥ ----
+    def tools(self, ent_ids: list[int]) -> tuple[list[str], str, float]:
+        """上位 TOOL_ENTITIES 個の物について、変化の要約（直近 WATCH_DAYS 日）と条件つきの数値の比較を引く。参照 clm・doc・rel・evt・ent と、LLM に渡す text。"""
+        ids = ent_ids[:TOOL_ENTITIES]
+        if not ids:
+            return [], "", 0.0
+        spec = ",".join(map(str, ids))
+        ch, ms1 = self.call("GET", "/watch/changes", params={"thing": spec, "since": f"{WATCH_DAYS}d"})
+        cp, ms2 = self.call("GET", "/metrics/compare", params={"thing": spec})
+        refs: list[str] = []
+        for it in ch["items"]:
+            e = it["thing"]["id"]
+            refs.append(f"ent:{e}")
+            for c in it["claims"]:
+                refs.append(f"clm:{c['id']}")
+                if c.get("doc"):
+                    refs.append(f"doc:{c['doc']}")
+            refs += [f"rel:{r['id']}" for r in it["relations"]] + [f"evt:{x['id']}" for x in it["events"]]
+        for t in cp["things"]:
+            for g in t["groups"]:
+                for p in g["points"]:
+                    if p.get("claim_id"):
+                        refs.append(f"clm:{p['claim_id']}")
+                    if p.get("doc"):
+                        refs.append(f"doc:{p['doc']}")
+        from qnapnewshub import bench, watch
+
+        text = watch.text(ch) + "\n" + bench.compare_text(cp)
+        return metrics.dedupe(refs), text, ms1 + ms2
+
     def render(self, refs: list[str]) -> str:
         return "\n".join(self.text.get(r, r) for r in refs)
 
@@ -333,6 +366,9 @@ def run_question(run: Run, q: dict) -> dict[str, dict]:
     docs5 = [r for r in fused if r.startswith("doc:")][:5]
     ctx_text = ctext + "\n" + run.render(docs5)
     done("context", l5, ms_sd + ms_nb + ms_pp + ms_cx, ctx_refs=set(cref) | set(docs5), ctx_text=ctx_text)
+    tref, ttext, ms_tl = run.tools(sd["ent_ids"])
+    l6 = metrics.dedupe(tref[:5] + l5)      # 道具が返した先頭の参照（変化・数値が新しい順・条件の組の順）を先に、残りは⑤の並び
+    done("tools", l6, ms_sd + ms_nb + ms_pp + ms_cx + ms_tl, ctx_refs=set(cref) | set(docs5) | set(tref), ctx_text=ctx_text + "\n" + ttext)
     return out
 
 

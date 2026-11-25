@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--per-type", type=int, default=10)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--build-bridge", action="store_true", help="橋渡しの問い（経路 2〜6 段の 2 物。--questions に作る。評価の置き場へ。リポジトリに入れない）を作ってから流す")
+    ap.add_argument("--build-tools", action="store_true", help="変化（watch）・条件つきの数値の比較（bench）の問いを作る（--questions に。評価の置き場へ。リポジトリに入れない）")
     ap.add_argument("--per-length", type=int, default=20, help="橋渡しの問いの、経路の長さごとの数")
     ap.add_argument("--meet-depth", default="auto", help="③' の会合の展開の深さ（auto＝問いで決める・1〜5＝固定）")
     ap.add_argument("--raw", default="", help="問いごとの生の点数の JSON の出力先（任意）")
@@ -40,7 +41,11 @@ def main(argv: list[str] | None = None) -> int:
     qpath = Path(a.questions).expanduser()
     from . import build_questions, checks, report, runner
 
-    if a.build_bridge:
+    if a.build_tools:
+        d = build_questions.main_tools(db_path, qpath, a.per_type, a.seed)
+        print("変化・比較の問いを作りました:", d["counts"])
+        checks.warn_dangling(db_path, d["questions"], "作るとき")
+    elif a.build_bridge:
         d = build_questions.main_bridge(db_path, qpath, a.per_length, a.seed)
         print("橋渡しの問いを作りました:", d["counts"])
         checks.warn_dangling(db_path, d["questions"], "作るとき")

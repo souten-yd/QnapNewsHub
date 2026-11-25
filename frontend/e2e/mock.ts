@@ -5,6 +5,7 @@ import type { UpdateStatus, UpdateRelease } from "../src/api/update";
 import type { LinkStatus } from "../src/api/link";
 import type { AnalyticsFilters, Compare, HotTopics, Overview, Series, SourcesAnalysis, TrendStats } from "../src/api/analytics";
 import type { EventDetail, EventRow } from "../src/api/events";
+import type { WatchChanges, WatchRow } from "../src/api/watch";
 import type { Digest, EntityDetail, EntityRow, NewsHome, NewsItem, NewsPrefs, NewsRuntimeSettings } from "../src/api/news";
 
 const NOW = Date.now();
@@ -275,6 +276,8 @@ export const CONNECTORS = [
 ];
 
 export interface MockState {
+  /** ウォッチリスト（POST/DELETE で変わる）。見た＝seen で変化は空になる */
+  watch?: WatchRow[]; watchSeen?: boolean;
   authenticated: boolean; setupNeeded: boolean; setupTokenRequired?: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
   trModel: boolean; hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
   /** 画像の無い記事だけの一覧にしたいとき等、一覧を差し替える */
@@ -298,6 +301,16 @@ export function newState(over: Partial<MockState> = {}): MockState {
   return { authenticated: true, setupNeeded: false, username: "admin", keySet: false, prefs: structuredClone(PREFS), settings: structuredClone(SETTINGS),
     hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, trModel: false, update: structuredClone(UPDATE_BASE), gatewayKeySet: false, gatewayDown: false, link: structuredClone(LINK_BASE), connectors: structuredClone(CONNECTORS), decidedMentions: [], ...over };
 }
+
+const WATCH_CHANGES = (rows: WatchRow[], seen: boolean): WatchChanges => ({ generated_at: ago(0), watched: true, llm: false, changed: seen ? 0 : rows.length,
+  items: rows.map((w) => seen ? { thing: w.entity, since: ago(0), claims: [], metrics: [], relations: [], versions: [], events: [], change_points: [], quiet: true } : {
+    thing: w.entity, since: w.seen_at, quiet: false,
+    claims: [{ id: 1, kind: "benchmark", text: "R9700 で Q4_K_M のデコードが 75 tok/s に向上する。", at: "2026-11-25", value: "75", cond: { hw: "R9700", quant: "Q4_K_M" }, src: "例の出どころ 2026-11-25 d3", grounded: true }],
+    metrics: [{ subject: "repo:acme/llama.cpp", metric: "stars", value: 160, unit: "", at: "2026-11-25", cond: "daily", previous: 100, pct: 60 }],
+    relations: [{ id: 4, type: "supports", subject: "llama.cpp", object: "Qwen 3.5", conf: 0.8, status: "extracted", at: "2026-11-25" }],
+    versions: [{ doc: 9, kind: "release", title: "llama.cpp b9000 を公開", version: "b9000", at: "2026-11-25", src: "GitHub 2026-11-25 d9", url: "" }],
+    events: [{ id: 1, title: "Qwen 3.5 が公開", n_articles: 6, n_sources: 5, has_primary: true, last_at: "2026-11-25" }],
+    change_points: [{ kind: "mentions", direction: "up", line: "言及が急に増えた: 直近 3 日で 12 件（1 日 4 件。前の 4 週は 1 日 0.5 件）" }] }) });
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 // 1x1 の PNG（画像のある記事の見本）
@@ -371,6 +384,20 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("GET", "/auth/hub")) return json(route, { host: "127.0.0.1", port: 8787, cookie_secure: false, discovery_port: 8788 });
     if (is("PUT", "/auth/hub")) return json(route, { ...(body as object), restart_needed: true });
 
+    if (path.startsWith("/watch")) {
+      const rows = state.watch ?? (state.watch = []);
+      if (is("GET", "/watch")) return json(route, { items: rows });
+      if (is("POST", "/watch")) {
+        const id = (body as { entity_id: number }).entity_id;
+        const e = ENTITIES.find((x) => x.id === id) ?? ENTITIES[0];
+        if (!rows.some((w) => w.entity.id === e.id)) rows.push({ id: rows.length + 1, entity: { id: e.id, name: e.name, type: e.type }, created_at: ago(24), seen_at: ago(24) });
+        state.watchSeen = false;
+        return json(route, rows[rows.length - 1]);
+      }
+      if (is("DELETE", /^\/watch\/\d+$/)) { const id = Number(path.split("/")[2]); state.watch = rows.filter((w) => w.entity.id !== id); return json(route, { removed: true }); }
+      if (is("POST", "/watch/seen")) { state.watchSeen = true; return json(route, { marked: rows.length }); }
+      if (is("GET", "/watch/changes")) return json(route, WATCH_CHANGES(rows, Boolean(state.watchSeen)));
+    }
     if (is("GET", "/analytics/filters")) return json(route, ANA_FILTERS);
     if (is("GET", "/analytics/trend")) return json(route, state.analyticsEmpty ? { ...TREND, note: null, new_entities: [], surging_entities: [], channels: [] } : TREND);
     if (is("GET", "/events")) {

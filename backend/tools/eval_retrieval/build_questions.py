@@ -18,12 +18,12 @@ import json
 import random
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-TYPES = ("fact", "compare", "change", "multi", "relation", "crosslingual", "bridge")
+TYPES = ("fact", "compare", "change", "multi", "relation", "crosslingual", "bridge", "watch", "bench")
 BRIDGE_LENGTHS = (2, 3, 4, 5, 6)
-TYPE_LABEL = {"fact": "事実", "compare": "比較", "change": "変化", "multi": "複数の文書", "relation": "関係", "crosslingual": "日本語の問い・英語の記事", "bridge": "橋渡し（2〜6 段）"}
+TYPE_LABEL = {"fact": "事実", "compare": "比較", "change": "変化", "multi": "複数の文書", "relation": "関係", "crosslingual": "日本語の問い・英語の記事", "bridge": "橋渡し（2〜6 段）", "watch": "最近の変化（ウォッチ）", "bench": "条件つきの数値の比較"}
 GOLD_DOCS_MAX = 5
 GOLD_CLAIMS_MAX = 4
 _JA = re.compile(r"[぀-ヿ㐀-鿿]")
@@ -281,6 +281,76 @@ def make_bridge(s: Src, rng: random.Random, per_length: int) -> list[dict]:
             out.append({"type": "bridge", "length": L, "q": rng.choice(["{a} と {b} はどうつながっているか", "{a} と {b} の関係を、間の物をたどって知りたい"]).format(a=na, b=nb), "keywords": [na, nb],
                         "gold": _gold(docs=docs, ents=nodes, rels=rels), "anchor": {"a": a, "b": b, "path": nodes[::-1], "relationships": rels}})
     return out
+
+
+WATCH_DAYS = 1      # 「最近」の窓（日）。runner の道具の呼び出し（since=1d）と同じ。評価のハブの主張は 2 日分しか無いので 1 日にした（長い DB なら増やす）
+
+
+def make_watch(s: Src, rng: random.Random, n: int) -> list[dict]:
+    """最近の変化（v0.7 の続き）: 物 E の主張のうち、窓（直近 WATCH_DAYS 日）の中の日付（stated_at。無ければ created_at）のもの＋窓の中に初めて出た関係が正解。窓の前の主張が 1 つ以上ある物だけ（「前から変わった」と言える）。"""
+    cut = (datetime.now(timezone.utc) - timedelta(days=WATCH_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    rows = s.c.execute("SELECT id, article_id, entity_id, kind, text, COALESCE(stated_at, created_at) AS at FROM claims WHERE sensitivity='public' AND entity_id IS NOT NULL").fetchall()
+    by: dict[int, dict[str, list]] = {}
+    for r in rows:
+        if r["entity_id"] in s.unique_name:
+            c = dict(r)
+            if s.claim_docs(c):
+                by.setdefault(r["entity_id"], {"new": [], "old": []})["new" if str(r["at"]) > cut else "old"].append(c)
+    rels = {}
+    for r in s.c.execute("SELECT id, subject_id, object_id, type FROM relationships WHERE sensitivity='public' AND type != 'co_occurs' AND first_at > ?", (cut,)):
+        for e in (r["subject_id"], r["object_id"]):
+            rels.setdefault(e, []).append(r["id"])
+    cand = sorted(e for e, g in by.items() if g["new"] and g["old"] and e in s.unique_name)
+    rng.shuffle(cand)
+    out = []
+    for e in cand[:n]:
+        new = by[e]["new"][:GOLD_CLAIMS_MAX]
+        name = s.ents[e]["name"]
+        out.append({"type": "watch", "q": rng.choice(["{x} は直近で何が変わったか", "{x} について前回から新しく分かったことは何か"]).format(x=name), "keywords": [name],
+                    "gold": _gold(docs=[s.claim_docs(c)[0] for c in new][:GOLD_DOCS_MAX], ents=[e], claims=[c["id"] for c in new], rels=rels.get(e, [])[:2]), "anchor": {"entity": e, "days": WATCH_DAYS}})
+    return out
+
+
+def make_bench(s: Src, rng: random.Random, n: int) -> list[dict]:
+    """条件つきの数値の比較: 値のある benchmark の主張が 2 つ以上ある物 E の、その主張・根拠の文書が正解。「条件を揃えて比べたい」という問い。"""
+    by: dict[int, list[dict]] = {}
+    for c in s.claims:
+        if c["kind"] == "benchmark" and c["entity_id"] in s.unique_name and s.claim_docs(c):
+            v = s.c.execute("SELECT value FROM claims WHERE id=?", (c["id"],)).fetchone()[0]
+            if v and re.search(r"\d", v):
+                by.setdefault(c["entity_id"], []).append(c)
+    cand = sorted(e for e, cs in by.items() if len(cs) >= 2)
+    rng.shuffle(cand)
+    out = []
+    for e in cand[:n]:
+        cs = by[e][:GOLD_CLAIMS_MAX]
+        name = s.ents[e]["name"]
+        out.append({"type": "bench", "q": rng.choice(["{x} の性能の数値を、測った条件ごとに比べるとどうなるか", "{x} のベンチマークは、GPU・エンジンなどの条件を揃えるとどう違うか"]).format(x=name), "keywords": [name],
+                    "gold": _gold(docs=[d for c in cs for d in s.claim_docs(c)][:GOLD_DOCS_MAX * 2], ents=[e], claims=[c["id"] for c in cs]), "anchor": {"entity": e}})
+    return out
+
+
+TOOL_MAKERS = {"watch": make_watch, "bench": make_bench}
+
+
+def build_tools(db_path: Path, per_type: int = 10, seed: int = 1) -> dict:
+    """変化・比較の問い（TOOL_MAKERS）だけの問いの集め。通常の build には入れない（基準値の問いを変えない）。"""
+    s = Src(db_path)
+    out = []
+    for t, mk in TOOL_MAKERS.items():
+        for q in mk(s, random.Random(f"{seed}:{t}"), per_type):
+            if q["gold"]["docs"] or q["gold"]["entities"]:
+                q["id"] = f"t{len(out) + 1:03d}"
+                out.append(q)
+    return {"version": 1, "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "seed": seed, "per_type": per_type,
+            "counts": {t: sum(1 for q in out if q["type"] == t) for t in TOOL_MAKERS}, "questions": out}
+
+
+def main_tools(db_path: Path, out: Path, per_type: int = 10, seed: int = 1) -> dict:
+    data = build_tools(db_path, per_type, seed)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    return data
 
 
 def build_bridge(db_path: Path, per_length: int = 20, seed: int = 1) -> dict:

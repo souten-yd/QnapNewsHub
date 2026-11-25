@@ -12,6 +12,7 @@ import KnowledgeMapPage from "./pages/KnowledgeMap";
 import EntitiesPage, { EntityPage } from "./pages/Entities";
 import { MocIndexPage, MocPage } from "./pages/Moc";
 import EventsPage, { EventPage } from "./pages/Events";
+import WatchPage from "./pages/Watch";
 import NewsSourcesPage from "./pages/NewsSources";
 import SettingsPage from "./pages/Settings";
 import DiagnosticsPage from "./pages/Diagnostics";
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/events" element={<EventsPage />} />
         <Route path="/events/:id" element={<EventPage />} />
+        <Route path="/watch" element={<WatchPage />} />
         <Route path="/entities" element={<EntitiesPage />} />
         <Route path="/entities/:id" element={<EntityPage />} />
         <Route path="/map" element={<KnowledgeMapPage />} />

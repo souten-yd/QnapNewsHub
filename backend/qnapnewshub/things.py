@@ -221,6 +221,11 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
             nums.append(m)
     if nums:
         out["metrics"] = [{"label": m["label"][:100], "value": m["value"], **({"unit": m["unit"]} if m["unit"] else {})} for m in nums]      # 数値は条件（主張の文）つき
+    from qnapnewshub import changepoint
+
+    cps = [c for c in changepoint.for_entity(db, ent) if c["kind"] == "metric" or (c["recent"] >= 5 and (c["ratio"] is None or c["ratio"] >= 5 or c["direction"] == "down"))]      # 変化点（Metric の急な変化・言及の急な増減）。無ければ出さない。短さのため、言及は強い変化だけ（要約 /watch/changes には全部出る）
+    if cps:
+        out["change_points"] = [changepoint.line(c) for c in cps]
     qs = _loads(cd.questions) if cd else []
     if qs:
         out["open_questions"] = qs[:4]
@@ -233,7 +238,7 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
 def context_text(c: dict) -> str:
     """context を、LLM に読ませる短い Markdown にする。**カードの形（固定の順・空の節は出さない）**:
     ① 見出し（名前・id）と 1 行の定義 ② 種類・状態・確かさ・別名 ③ 型ごとの関係（相手の 1 行の定義つき） ④ 主張と根拠（原文に照合できたものが先。◎＝原文一致）
-    ⑤ 数値（条件つき。値を持つ主張は ④ から外してここだけ） ⑥ 未解決の問い ⑦ 反対の見方 ⑧ 出典の数と新しさ（出どころの印つき）。"""
+    ⑤ 数値（条件つき。値を持つ主張は ④ から外してここだけ）・変化点（あれば） ⑥ 未解決の問い ⑦ 反対の見方 ⑧ 出典の数と新しさ（出どころの印つき）。"""
     lines = [f"# {c['name']} (#{c['id']})"]
     if c.get("definition"):
         lines.append(c["definition"])
@@ -251,6 +256,9 @@ def context_text(c: dict) -> str:
     if c.get("metrics"):
         lines.append("## 数値")
         lines += [f"- {m['label']}: {m['value']}{m.get('unit', '')}" for m in c["metrics"]]
+    if c.get("change_points"):
+        lines.append("## 変化点")
+        lines += [f"- {q}" for q in c["change_points"]]
     if c.get("open_questions"):
         lines.append("## 未解決の問い")
         lines += [f"- {q}" for q in c["open_questions"]]
