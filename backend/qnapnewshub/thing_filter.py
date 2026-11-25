@@ -99,6 +99,22 @@ def _in_title(name: str, title: str) -> bool:
     return bool(k) and k in normalize_key(_title_head(title))
 
 
+# 出どころ・媒体の名前の揺れの接尾辞（「Ars Technica AI」「WIRED Japan」「○○ ニュース」）。名前の末尾の語として 1 つずつ外して、媒体の一覧と比べる。
+_NAME_SUFFIX_TOKENS = frozenset("ai japan jp news tech online official blog daily weekly today international global ニュース 公式 ブログ".split())
+_BATCH = re.compile(r"^(?:yc|y combinator)\s?[wsf]\s?\d{2}$", re.I)      # YC W24（Y Combinator の期の表記。物ではない）
+
+
+def name_variants(name: str) -> set[str]:
+    """名前から末尾の接尾辞語（AI・Japan・News など）を 1 つずつ外した鍵（外さない形は含まない）。「Ars Technica AI」→ arstechnica。"""
+    toks = unicodedata.normalize("NFKC", str(name or "")).split()
+    out: set[str] = set()
+    while len(toks) > 1 and toks[-1].casefold() in _NAME_SUFFIX_TOKENS:
+        toks = toks[:-1]
+        out.add(normalize_key(" ".join(toks)))
+    out.discard("")
+    return out
+
+
 _SOURCE_SUFFIX = re.compile(r"\b(developers?|blog|news|magazine|official|japan|japanese|jp|forum|forums|community|team|press|online|network)\b|公式|ブログ|ニュース|編集部", re.I)
 
 
@@ -110,6 +126,7 @@ def source_cores(source: str) -> set[str]:
         return out
     out.add(normalize_key(s))
     out.add(normalize_key(_SOURCE_SUFFIX.sub(" ", s)))
+    out |= name_variants(s)      # 「Ars Technica AI」→「Ars Technica」
     if "." in s and " " not in s:      # forum.level1techs.com → level1techs
         parts = [p for p in s.lower().split(".") if p not in {"www", "com", "org", "net", "jp", "co", "io", "forum", "discuss", "blog", "news"}]
         out.update(normalize_key(p) for p in parts)
@@ -182,6 +199,10 @@ def reject(name: str, kind: str = "other", *, source: str = "", title: str = "",
     """物にしない理由（"" は残す）。media・source・platform・generic。context=False は記事の文脈（出どころ・題）なしで言える分だけ（夜の掃除）。"""
     if is_media(name):
         return "media"
+    if _BATCH.match(unicodedata.normalize("NFKC", str(name or "")).strip()):
+        return "batch"      # YC W24（期の表記。必要なら主張にする）
+    if (name_variants(name) & MEDIA) and not (context and _in_title(name, title)):
+        return "media"      # 媒体名の接尾辞違い（Ars Technica AI・WIRED Japan）。題に出るなら記事の主題として残す
     if is_generic(name, kind):
         return "generic"
     phrase = generic_phrase(name, kind, title=title if context else "")

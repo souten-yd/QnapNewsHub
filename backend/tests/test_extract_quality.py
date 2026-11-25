@@ -56,6 +56,31 @@ def test_source_and_platform_depend_on_the_article():
     assert thing_filter.source_cores("forum.level1techs.com") >= {"level1techs"}
 
 
+@pytest.mark.parametrize("name,source", [("Ars Technica AI", "Ars Technica AI"), ("Ars Technica AI", "Hacker News"), ("WIRED Japan", "WIRED"), ("WIRED AI", "WIRED AI"),
+                                         ("Towards AI", "Towards AI"), ("TechCrunch AI", "TechCrunch AI"), ("The Verge Japan", "The Verge")])
+def test_source_name_variants_are_rejected_as_media(name, source):
+    """目的: 取得先の名前の揺れ（媒体名＋AI・Japan などの接尾辞）を、出どころとして物にしない。
+    根拠: 2026-11-26 の評価のハブで「Ars Technica AI」が型 org・記事 3 件の物として残っていた（`reject("Ars Technica AI","org",source="Ars Technica AI")` が空文字）。WIRED・Towards AI は media で止まっていた。"""
+    assert thing_filter.reject(name, "org", source=source, title="Some unrelated story") == "media"
+    assert thing_filter.reject(name, "org", context=False) == "media"
+
+
+def test_source_variant_kept_when_it_is_the_subject_and_real_orgs_are_untouched():
+    """目的: 名前の揺れの規則が広がりすぎない歯止め。題に出る（記事の主題として報じられる）なら残し、媒体でない組織（OpenAI・Mistral AI・Google News Initiative）は触れない。
+    根拠: 発表する側の組織は既存の規則どおり残す決まり（2026-11-26）。"""
+    assert thing_filter.reject("Ars Technica AI", "org", source="Hacker News", title="Ars Technica AI launches a newsletter") == ""
+    for n in ("OpenAI", "Mistral AI", "Anthropic Japan", "Google News Initiative"):
+        assert thing_filter.reject(n, "org", source="Hacker News", title="Other story") == ""
+
+
+@pytest.mark.parametrize("name", ["YC W24", "YC S25", "YC F26", "Y Combinator W24", "yc w24"])
+def test_yc_batch_labels_are_not_things(name):
+    """目的: Y Combinator の期の表記（YC W24 など）を物にしない。根拠: 2026-11-26 の評価のハブに「YC W24」「YC W25」が型 org の物として 1〜2 件ずつ残っていた。"""
+    assert thing_filter.reject(name, "org", context=False) == "batch"
+    assert thing_filter.reject("Y Combinator", "org", context=False) == ""
+    assert thing_filter.reject("YC Alumni", "org", context=False) == ""
+
+
 def test_registration_skips_excluded_names_and_their_facts_and_relations(client):
     """目的: 物の登録のとき、除外する名前は物にならず、その物についての主張・関係も作らない（別名で再び物が作られない）。"""
     facts = [{"about": "XDA", "kind": "claim", "text": "XDA が報じた", "value": ""}, {"about": "Foo Engine", "kind": "claim", "text": "新しい版が出た", "value": ""}]

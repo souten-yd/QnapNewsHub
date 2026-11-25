@@ -143,3 +143,23 @@ def test_gold_refs_given_directly_scores_perfect():
     assert g == {"doc:1", "doc:2", "ent:3", "clm:4", "rel:5", "evt:6"}
     s = metrics.score_one(sorted(g), g, None, 100)
     assert s["r10"] == s["mrr"] == s["ndcg10"] == 1.0 and s["r5"] == pytest.approx(5 / 6)      # 6 件の正解のうち上位 5 件
+
+
+def test_dangling_gold_is_warned(client, capsys):
+    """目的: 正解が、外された（retire）・寄せられた（merge）・非公開になった物・主張・関係・文書を指す問いを検査が見つけて警告する。作るとき（作りたての問いは 0 件）と測るときの両方で使う。
+    根拠: 2026-11-26、2026-11-25 の問い 60 問が、その後の一般語の除外・名寄せ・型 other の関係の削除で消えた物を正解にしていた。消えた参照は取れないので点数が実力より低く出る。"""
+    from tools.eval_retrieval import checks
+
+    _corpus()
+    qs = build_questions.build(_db_path(), per_type=5)["questions"]
+    assert checks.dangling_refs(_db_path(), qs) == {} and checks.warn_dangling(_db_path(), qs, "作るとき") == 0
+    assert capsys.readouterr().err == ""
+    victim = ent_id("Basekit")
+    with news_db.session() as db:
+        db.connection().exec_driver_sql("UPDATE entities SET sensitivity='confidential' WHERE id=?", (victim,))
+        db.commit()
+    bad = checks.dangling_refs(_db_path(), qs)
+    assert bad and all(f"ent:{victim}" in v for v in bad.values())
+    stale = [{"id": "q999", "gold": {"docs": [], "entities": [99999], "claims": [88888], "relationships": [], "events": []}}]
+    assert checks.dangling_refs(_db_path(), stale) == {"q999": ["ent:99999", "clm:88888"]}
+    assert checks.warn_dangling(_db_path(), stale, "測るとき") == 1 and "測るとき" in capsys.readouterr().err
