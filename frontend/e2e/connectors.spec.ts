@@ -19,7 +19,7 @@ for (const vp of SIZES) {
         await mockApi(page, state);
         await page.goto("/sources");
         await page.getByTestId("news-tab-connector").click();
-        await expect(page.getByTestId("connector-row")).toHaveCount(7);
+        await expect(page.getByTestId("connector-row")).toHaveCount(11);
         const disc = page.locator('[data-testid="connector-row"][data-id="github_discover"]');
         await expect(disc.getByTestId("connector-budget-stop")).toContainText("1 日の件数の予算");
         await expect(disc.getByTestId("connector-usage-items")).toContainText("300 / 300 件");
@@ -56,6 +56,31 @@ for (const vp of SIZES) {
         await expect(row.getByTestId("connector-key")).toContainText("入っています");
         expect(await page.locator("body").innerText()).not.toContain(SECRET);
         expect(await page.locator('input[type="password"]').first().inputValue()).toBe("");
+      });
+
+      test("新しい connector が一覧に出て、鍵の要るものは「鍵が要る」と出て、鍵を入れるまで入れられない", async ({ page }) => {
+        const state = newState();
+        await mockApi(page, state);
+        await page.goto("/sources");
+        await page.getByTestId("news-tab-connector").click();
+        await expect(page.locator('[data-testid="connector-row"][data-id="boj"]')).toBeVisible();
+        await expect(page.locator('[data-testid="connector-row"][data-id="boj"]').getByTestId("connector-key-badge")).toHaveCount(0);
+        const row = page.locator('[data-testid="connector-row"][data-id="coingecko"]');
+        await expect(row.getByTestId("connector-key-badge")).toHaveText("鍵が要る");
+        await expect(row.getByTestId("connector-key-needed")).toContainText("鍵が要ります");
+        await expect(row.getByTestId("connector-enabled")).toBeDisabled();
+        await expectNoHorizontalOverflow(page);
+        await shot(page, `connector-key-needed-${vp.name}-${scheme}`);
+        await row.getByTestId("connector-open").click();
+        await expect(row.getByTestId("connector-key")).toContainText("鍵（必須）");
+        await row.getByLabel("CoinGecko（価格） の鍵").fill(SECRET);
+        await row.getByTestId("connector-key").getByRole("button", { name: "保存" }).click();
+        await expect(row.getByTestId("connector-key-badge")).toHaveText("鍵あり");
+        await expect(row.getByTestId("connector-enabled")).toBeEnabled();
+        await row.getByTestId("connector-enabled").click();
+        await expect.poll(() => state.calls.find((c) => c.method === "PUT" && c.path === "/connectors/coingecko")?.body).toMatchObject({ enabled: true });
+        expect(await page.locator("body").innerText()).not.toContain(SECRET);
+        expect(state.unhandled).toEqual([]);
       });
 
       test("未確認の connector は確認の明示がないと入れられない", async ({ page }) => {

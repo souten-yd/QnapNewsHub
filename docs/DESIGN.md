@@ -531,3 +531,20 @@ ARCHITECTURE 6 章「銀河の地図」の根拠と、確かめたこと。
   標本で見つけた誤り（Samsung Display・Prime Video・Chromecast with Google TV HD・AWS Continuum for code vulnerabilities）は規則を直して外れなくした（org・software など具体の種類の物は説明的な語尾の規則から除く）。
 - **物差し（60 問）**: ③ R@10 0.714→0.678・② 0.626→0.617・nDCG@10（③）0.653→0.629。下がった問いは 4 問すべて、正解（関係・物）が外した一般語を指していた（desktop app・open-source app・prompt cache・4K sibling。関係の端の物）。一般語を端にした関係が答えの問いなので、下がるのは想定どおり（物差しの側が一般語を正解に含む）。
 - 確かめていない: ex4 の実際の質（本物の LLM は呼んでいない。`./hub.sh llm-try` で測る）・小文字だけの句の規則が実在の小文字の固有名（dbt・iPhone 系の小文字の製品名の複数語）を巻き込む割合（標本 30 件で 1〜2 件）。題の言い換えの規則は夜の掃除では当てない（題が要る）。
+
+## 24. v0.8 の収集の connector（日銀・e-Stat・国会会議録・e-Gov 法令・EDINET・DefiLlama・CoinGecko・GDELT・PyPI・npm・OSV）で、確かめたことと確かめていないこと（2026-11-25・feat/connectors-v08）
+設計は ARCHITECTURE 10 章の続き。実装は `conn_v08.py`・`connectors.py`（`Spec.key_required`・`_validate_v08`・`Ctx.post_json`）・`connector_terms.py`・`docstore.py`（`ref`・`SUBJECT_KINDS`）・`net.post`・画面 `ConnectorsPanel.tsx`（「鍵が要る」の印）。Wikidata・名寄せは別のブランチ（feat/auto-resolve）で、ここでは触れていない。
+
+**確かめたこと**
+- 試験: `./hub.sh test` 606 件合格（v0.8 の新しい 14 件は `tests/test_connectors_v08.py`。目的と根拠は docstring）。`./hub.sh build`・`./hub.sh e2e --workers=1`（ポート 18873）269 件合格（`connectors.spec.ts` に「新しい connector が出て、鍵の要るものは『鍵が要る』と出て、鍵を入れるまで入れられない」を足した。320・1280 × ライト・ダーク）。外部の API は `connectors._http`・`_http_post` の模擬。LLM・ゲートウェイは呼んでいない。
+- **実走**（一時の置き場・鍵なし・各 1 回。この範囲以外へは取りに行っていない）: 日銀（2 系列 IR01:MADR1Z@D・FM01:STRDCLUCON → Metric 48 点・4.5 秒・0.83MB）・国会会議録（語「人工知能」直近 30 日 → 発言 7 件・0.3 秒）・e-Gov 法令（令和七年法律第五十三号 → 版 2 件＋辺 1・0.2 秒）・DefiLlama（Ethereum の TVL・ステーブルコイン上位 10・RWA 上位 10 → Metric 21 点・6.4 秒・9.9MB）・PyPI（transformers → 版 3 件・1.3 秒・0.67MB）・OSV（PyPI:transformers → 脆弱性 20 件・1.0 秒・0.18MB）。**GDELT は 1 回目が 0 件（応答は空）・形を確かめるための続きの 2 回は 429「5 秒に 1 回」（応答に 12〜15 秒かかった）**で、記事の形は実物では確かめていない（模擬だけ）。
+- 実走で分かったこと: 日銀の日次の系列は全履歴が返る（1 系列 約 0.4MB）ので `daily_mb` は 5MB。国会の speech には「会議録情報」という会議の見出しの行が混ざる（発言にしない）。e-Gov の版の履歴の応答は `law_info`＋`revisions`。DefiLlama の `/protocols` は約 10MB。OSV は応答が大きくなりうるので 1 パッケージの件数で切る。
+- 鍵の要るもの（e-Stat・EDINET・CoinGecko）は鍵が無いと入れられない（API 422・gate が止める）。鍵の値は describe・結果・状態のファイルに出ない（試験）。
+
+**確かめていないこと**
+- **e-Stat・EDINET・CoinGecko は本物を 1 回も呼んでいない**（鍵が要るため。形は e-Stat の仕様書・EDINET と CoinGecko は文書の記載と記憶による。e-Stat の応答は仕様書の形、EDINET・CoinGecko は仕様書を読めていない）。利用者の鍵で 1 回ずつ確かめる。
+- npm の本物（利用条件が未確認のため実走の対象外）。省略形に公開日時が無いので published_at は空。
+- 利用条件: e-Gov・e-Stat・EDINET・PyPI・npm は規約の本文を読めなかった（未確認・既定は切）。国会会議録は NDL のサイトの規約の会議録の条項を読めていない（発言は発言者の著作物なので外へ出さない）。日銀は「利用時の連絡」「クレジット表示」を公開するサービス向けに求める（ニュースハブは個人用。公開するなら表示と連絡が要る）。
+- GDELT の本物の記事の形・レートの実際（6 秒で足りるか）。QNAP 実機での負荷・DefiLlama の 10MB の応答の扱い。
+- e-Gov の「提案」の段（proposed）は取り込み元が無い（形だけ）。デジタル証券（digital_security）も取り込み元が無い（名前空間だけ）。npm・PyPI の版が監視の物の語に合ったときの昇格は既存の規則のまま（版の文書は L1）。
+- 画面は connector の一覧（鍵の要る印・設定の項目）まで。文書（発言・法令・脆弱性）・Metric の画面は無い（API だけ）。

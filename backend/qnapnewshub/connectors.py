@@ -31,7 +31,7 @@ from qnapnewshub.connector_terms import TERMS
 
 logger = logging.getLogger("qnapnewshub.connectors")
 
-KINDS = {"feed": "フィード", "api": "API", "historical": "過去・一覧", "change": "変化の検出", "discovery": "発見", "market": "数値（市場）"}
+KINDS = {"feed": "フィード", "api": "API", "historical": "過去・一覧", "change": "変化の検出", "discovery": "発見", "market": "数値（市場）", "stats": "数値（統計）"}
 RUN_TIMEOUT = 150
 MAX_ITEMS_LIMIT = 100_000
 MAX_MB_LIMIT = 4096
@@ -55,6 +55,7 @@ class Spec:
     has_key: bool = False          # 鍵（任意）を受け付ける
     run: str = ""                  # conn_impl の関数名（adapted は空）
     min_gap: float = 1.0           # 同じ connector の通信の間隔（秒）
+    key_required: bool = False     # 鍵が無いと動かない（鍵があるときだけ入にできる。既定は切）
 
 
 SPECS: dict[str, Spec] = {s.id: s for s in [
@@ -83,6 +84,29 @@ SPECS: dict[str, Spec] = {s.id: s for s in [
          interval=1440, daily_items=1000, daily_mb=20, run="sitemap", min_gap=1.0, settings={"sites": [], "max_urls": 200}),
     Spec("change", "change", "ページの変化の検出", "指定したページの変化を ETag・hash で見つける（本文は保存しない）。robots.txt を守る。",
          interval=360, daily_items=200, daily_mb=20, run="change", min_gap=1.0, settings={"pages": []}),
+    # ---- v0.8 ----
+    Spec("boj", "stats", "日本銀行の時系列統計", "指定した系列（DB:系列コード）の数値を Metric の時系列に（単位・時点・系列名つき）。鍵は要りません。",
+         interval=1440, daily_items=600, daily_mb=5, run="boj", min_gap=3.0, settings={"series": ["IR01:MADR1Z@D", "FM01:STRDCLUCON"], "last_points": 24}),
+    Spec("estat", "stats", "e-Stat（政府統計の統計表）", "統計表 ID を指定した統計表の数値を Metric の時系列に。appId（利用登録で取得）が要る。",
+         interval=1440, daily_items=600, daily_mb=10, has_key=True, key_required=True, run="estat", min_gap=2.0, settings={"tables": [], "limit": 200}),
+    Spec("kokkai", "api", "国会会議録（発言）", "語で検索した国会の発言（話者・院・会議・日付つき）を record の文書（L1）に。鍵は要りません。",
+         interval=1440, daily_items=300, daily_mb=10, run="kokkai", min_gap=4.0, settings={"terms": ["人工知能"], "days": 30, "per_term": 20, "house": ""}),
+    Spec("egov_law", "api", "e-Gov 法令（版・改正の履歴）", "指定した法令の版・改正の履歴を law の文書に（公布日・施行日・段〔提案・成立・施行〕）。鍵は要りません。",
+         interval=1440, daily_items=200, daily_mb=5, run="egov_law", min_gap=2.0, settings={"laws": ["令和七年法律第五十三号"], "max_revisions": 30}),
+    Spec("edinet", "api", "EDINET（提出書類の知らせ）", "有価証券報告書などの提出の知らせを filing の文書に。鍵（Subscription-Key）が要る。",
+         interval=720, daily_items=300, daily_mb=10, has_key=True, key_required=True, run="edinet", min_gap=2.0, settings={"days": 1, "sec_codes": [], "limit": 100}),
+    Spec("defillama", "market", "DefiLlama（TVL・ステーブルコイン・RWA）", "チェーンの TVL・ステーブルコインの供給量・RWA（category が RWA のもの）の公開の数値を Metric に。無料の範囲だけ。鍵は要りません。",
+         interval=1440, daily_items=300, daily_mb=30, run="defillama", min_gap=3.0, settings={"chains": ["Ethereum"], "protocols": [], "stablecoins_top": 10, "rwa_top": 10}),
+    Spec("coingecko", "market", "CoinGecko（価格）", "指定した銘柄の価格を Metric に。無料の Demo の鍵があるときだけ動く。",
+         interval=1440, daily_items=100, daily_mb=2, has_key=True, key_required=True, run="coingecko", min_gap=3.0, settings={"coins": ["bitcoin", "ethereum"], "vs": ["usd", "jpy"]}),
+    Spec("gdelt", "discovery", "GDELT（語の検索）", "語で検索した報道を L0 の文書に（機械の抽出で「未確認」の印つき）。語の検索だけ。鍵は要りません。",
+         interval=1440, daily_items=200, daily_mb=5, run="gdelt", min_gap=6.0, settings={"queries": ["ROCm"], "timespan": "1d", "max_records": 50}),
+    Spec("pypi", "feed", "PyPI のリリース", "監視するパッケージの新しい版を release の文書に。",
+         interval=720, daily_items=100, daily_mb=10, run="pypi", min_gap=1.0, settings={"packages": ["transformers", "vllm"], "per_package": 3}),
+    Spec("npm", "feed", "npm のリリース", "監視するパッケージの版（dist-tags）を release の文書に。",
+         interval=720, daily_items=100, daily_mb=10, run="npm", min_gap=1.0, settings={"packages": ["vite"]}),
+    Spec("osv", "feed", "OSV（脆弱性）", "監視するパッケージ（エコシステム:名前）の脆弱性を advisory の文書に。",
+         interval=720, daily_items=200, daily_mb=10, run="osv", min_gap=1.0, settings={"packages": ["PyPI:transformers"], "per_package": 20}),
 ]}
 
 _REPO = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
@@ -92,6 +116,19 @@ _SEARCH = re.compile(r"^[^\x00-\x1f<>]{0,100}$")
 _PIPE = re.compile(r"^[a-z0-9\-]{1,50}$")
 _AUTHOR = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$")
 _REL = ("quantized", "finetune", "adapter", "merge")
+_BOJ_SERIES = re.compile(r"^[A-Z][A-Z0-9_]{0,19}:[A-Za-z0-9_@.\-]{1,60}$")
+_ESTAT_TABLE = re.compile(r"^\d{6,12}$")
+_LAW_REF = re.compile(r"^[^\x00-\x1f/?#%<>\\\"'`;]{3,80}$")
+_FREE_TERM = re.compile(r"^[^\x00-\x1f<>]{1,100}$")
+_SEC_CODE = re.compile(r"^\d{4,5}$")
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,99}$")
+_NPM = re.compile(r"^(?:@[a-z0-9][a-z0-9._\-]{0,99}/)?[a-z0-9][a-z0-9._\-]{0,99}$")
+_OSV_PKG = re.compile(r"^(PyPI|npm|Go|crates\.io|Maven|RubyGems|NuGet|Packagist):[A-Za-z0-9@][A-Za-z0-9@._:/\-]{0,150}$")
+_SLUG = re.compile(r"^[a-z0-9][a-z0-9._\-]{0,79}$")
+_CHAIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._\-]{0,40}$")
+_VS = re.compile(r"^[a-z]{2,10}$")
+_TIMESPAN = re.compile(r"^\d{1,3}(min|h|d|w|m)$")
+_HOUSES = ("", "衆議院", "参議院", "両院", "両院協議会")
 
 
 class ConnectorError(ValueError):
@@ -143,6 +180,52 @@ def _int(value: object, label: str, low: int, high: int) -> int:
     return n
 
 
+V08_IDS = ("boj", "estat", "kokkai", "egov_law", "edinet", "defillama", "coingecko", "gdelt", "pypi", "npm", "osv")
+
+
+def _validate_v08(cid: str, k: str, v: object):
+    """v0.8 の connector の設定 1 項目の検査（入力は URL・検索語・問いの本文に入るので形を絞る）。"""
+    if cid == "boj":
+        return _strs(v, "系列", _BOJ_SERIES, 30) if k == "series" else _int(v, "取り込む点の数", 1, 400)
+    if cid == "estat":
+        return _strs(v, "統計表 ID", _ESTAT_TABLE, 20) if k == "tables" else _int(v, "1 回の件数", 1, 2000)
+    if cid == "kokkai":
+        if k == "terms":
+            return _strs(v, "語", _FREE_TERM, 10)
+        if k == "house":
+            if v not in _HOUSES:
+                raise ConnectorError("院は 衆議院・参議院・両院・両院協議会 のどれかです（空なら全部）")
+            return v
+        return _int(v, "日数" if k == "days" else "1 語の件数", 1, 3650 if k == "days" else 100)
+    if cid == "egov_law":
+        return _strs(v, "法令（法令 ID か法令番号）", _LAW_REF, 20) if k == "laws" else _int(v, "取り込む版の数", 1, 200)
+    if cid == "edinet":
+        return _strs(v, "証券コード", _SEC_CODE, 50) if k == "sec_codes" else _int(v, "日数" if k == "days" else "件数", 1, 7 if k == "days" else 1000)
+    if cid == "defillama":
+        if k == "chains":
+            return _strs(v, "チェーン", _CHAIN, 20)
+        if k == "protocols":
+            return _strs(v, "プロトコル（slug）", _SLUG, 30)
+        return _int(v, "件数", 0, 100)
+    if cid == "coingecko":
+        return _strs(v, "銘柄の id" if k == "coins" else "通貨", _SLUG if k == "coins" else _VS, 30 if k == "coins" else 5)
+    if cid == "gdelt":
+        if k == "queries":
+            return _strs(v, "検索語", _FREE_TERM, 10)
+        if k == "timespan":
+            if not _TIMESPAN.match(str(v)):
+                raise ConnectorError("期間の形が違います（例: 1d・6h・2w）")
+            return str(v)
+        return _int(v, "1 問いの件数", 1, 250)
+    if cid == "pypi":
+        return _strs(v, "パッケージ", _NAME, 30) if k == "packages" else _int(v, "1 パッケージの版の数", 1, 20)
+    if cid == "npm":
+        return _strs(v, "パッケージ", _NPM, 30)
+    if cid == "osv":
+        return _strs(v, "パッケージ（エコシステム:名前）", _OSV_PKG, 30) if k == "packages" else _int(v, "1 パッケージの件数", 1, 100)
+    raise ConnectorError("知らない設定です")
+
+
 def normalize_settings(cid: str, raw: object) -> dict:
     """connector ごとの設定を検査して整える（足りない項目は既定。知らない項目は断る）。"""
     spec = SPECS[cid]
@@ -156,7 +239,9 @@ def normalize_settings(cid: str, raw: object) -> dict:
         raise ConnectorError(f"知らない設定です: {sorted(unknown)[0][:30]}")
     out = dict(base)
     for k, v in raw.items():
-        if cid == "github_discover":
+        if cid in V08_IDS:
+            out[k] = _validate_v08(cid, k, v)
+        elif cid == "github_discover":
             out[k] = (_strs(v, "トピック", _TOPIC, 12) if k == "topics" else _int(v, "直近の日数", 1, 90) if k == "window_days" else _int(v, "最低のスター数", 0, 1_000_000) if k == "min_stars"
                       else _int(v, "トピックごとの件数", 1, 50) if k == "per_topic" else bool(v))
         elif cid == "hf_models":
@@ -272,6 +357,9 @@ def terms_of(cid: str) -> dict:
     return TERMS[cid]
 
 
+KEY_NEEDED = "鍵が要ります（取得先の管理 → connector で鍵を入れてください）"
+
+
 def needs_ack(cid: str) -> bool:
     """利用条件が未確認で、既存の取得でもない（新しく増える取得）。入れるには利用者の明示が要る。"""
     return TERMS[cid]["status"] == "unconfirmed" and not SPECS[cid].adapted
@@ -282,6 +370,8 @@ def set_enabled(cid: str, enabled: bool, terms_ack: bool = False) -> dict:
         raise ConnectorError("知らない connector です")
     cfg = load()
     row = dict(cfg["connectors"][cid])
+    if enabled and SPECS[cid].key_required and not has_key(cid):
+        raise ConnectorError(KEY_NEEDED)
     if enabled and needs_ack(cid) and not (terms_ack or row.get("terms_ack")):
         raise ConnectorError("利用条件が未確認の connector です。確かめたうえで、未確認と分かって入れる場合は確認のチェックを入れてください")
     row["enabled"] = enabled
@@ -370,6 +460,8 @@ def gate(cid: str, *, manual: bool = False) -> tuple[bool, str]:
         return False, "connector が切になっています（設定 → connector）"
     if needs_ack(cid) and not c["terms_ack"]:
         return False, "利用条件が未確認のため取りません"
+    if SPECS[cid].key_required and not has_key(cid):
+        return False, KEY_NEEDED
     if rest.blocks_fetch():
         return False, "お休みモードのため取りません"
     why = _budget_reason(cid)
@@ -439,6 +531,10 @@ def auth_headers(cid: str) -> dict:
         return {}
     if cid == "semanticscholar":
         return {"x-api-key": key}
+    if cid == "coingecko":
+        return {"x-cg-demo-api-key": key}
+    if cid in ("estat", "edinet"):
+        return {}      # 鍵は query で渡す（key_param）
     return {"Authorization": f"Bearer {key}"}
 
 
@@ -448,7 +544,9 @@ def key_param(cid: str) -> dict:
         key = secretbox.get_secret(f"connector.{cid}.key") if SPECS[cid].has_key else None
     except secretbox.SecretError:
         key = None
-    return {"api_key": key} if key and cid == "openalex" else {}
+    if not key:
+        return {}
+    return {"api_key": key} if cid == "openalex" else {"appId": key} if cid == "estat" else {"Subscription-Key": key} if cid == "edinet" else {}
 
 
 def has_key(cid: str) -> bool:
@@ -517,6 +615,24 @@ class Ctx:
         self.nbytes += len(body)
         return status, head, body
 
+    async def post_json(self, url: str, payload: dict, *, max_bytes: int = net.MAX_BYTES):
+        """JSON の POST（OSV の問い）。予算・間隔・内部のアドレスの拒否は get と同じ。"""
+        if self.over_budget():
+            raise BudgetStop()
+        gap = SPECS[self.cid].min_gap - (time.monotonic() - self._last)
+        if gap > 0 and self._last:
+            await _sleep(gap)
+        self._last = time.monotonic()
+        self.requests += 1
+        status, head, body = await _http_post(url, payload=payload, headers=auth_headers(self.cid) or None, accept="application/json", max_bytes=max_bytes)
+        self.nbytes += len(body)
+        if status >= 400:
+            raise net.HttpError(status, net.parse_retry_after(head.get("retry-after")))
+        try:
+            return json.loads(body)
+        except ValueError as exc:
+            raise net.NetError("JSON として読めません") from exc
+
     async def json(self, url: str, **kwargs):
         status, head, body = await self.get(url, **kwargs)
         if status >= 400:
@@ -535,6 +651,11 @@ async def _sleep(seconds: float) -> None:
 async def _http(url: str, *, params: dict | None, headers: dict | None, accept: str, max_bytes: int) -> tuple[int, dict, bytes]:
     """1 回の GET（リダイレクトは各段を検査して追う）。試験はここを差し替える。"""
     return await net.get(url, params=params, headers=headers, accept=accept, max_bytes=max_bytes)
+
+
+async def _http_post(url: str, *, payload: dict, headers: dict | None, accept: str, max_bytes: int) -> tuple[int, dict, bytes]:
+    """1 回の POST（JSON）。試験はここを差し替える。"""
+    return await net.post(url, payload=payload, headers=headers, accept=accept, max_bytes=max_bytes)
 
 
 @dataclass
@@ -559,9 +680,9 @@ def _trim(result: Result, left_items: int) -> tuple[Result, bool]:
 
 
 def _impl(name: str):
-    from qnapnewshub import conn_impl
+    from qnapnewshub import conn_impl, conn_v08
 
-    return getattr(conn_impl, name)
+    return getattr(conn_v08 if name in conn_v08.RUNNERS else conn_impl, name)
 
 
 async def run_one(cid: str, *, manual: bool = False, **kwargs) -> dict:
@@ -629,7 +750,7 @@ def describe(cid: str) -> dict:
     t = TERMS[cid]
     return {"id": cid, "kind": spec.kind, "kind_label": KINDS[spec.kind], "label": spec.label, "desc": spec.desc, "adapted": spec.adapted, "scheduled": spec.scheduled,
             "enabled": c["enabled"], "interval_minutes": c["interval_minutes"], "daily_items": c["daily_items"], "daily_mb": c["daily_mb"], "settings": c["settings"],
-            "has_key_option": spec.has_key, "has_key": has_key(cid), "terms_ack": c["terms_ack"], "needs_ack": needs_ack(cid), "terms": t,
+            "has_key_option": spec.has_key, "has_key": has_key(cid), "key_required": spec.key_required, "terms_ack": c["terms_ack"], "needs_ack": needs_ack(cid), "terms": t,
             "usage": {"day": u["day"], "items": u["items"], "mb": round(u["bytes"] / 1024 / 1024, 2), "requests": u["requests"]},
             "budget_stop": st.get("budget_stop"), "last": st.get("last"), "last_ok_at": st.get("last_ok_at", "")}
 
