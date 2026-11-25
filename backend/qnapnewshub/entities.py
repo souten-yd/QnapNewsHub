@@ -37,6 +37,10 @@ def _get_or_create(db: Session, name: str, kind: str, when: datetime, cache: dic
         return None
     ent = cache.get(key) or db.scalar(select(Entity).where(Entity.key == key))
     if ent is None:
+        from qnapnewshub import entity_merge
+
+        ent = entity_merge.resolve_key(db, key)      # 名寄せで寄せた表記は、勝った物へ向ける
+    if ent is None:
         ent = Entity(key=key, name=name[:200], type=kind if kind in ENTITY_TYPES else "other", first_seen=when, last_seen=when)
         db.add(ent)
         db.flush()
@@ -84,17 +88,21 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
         doc = docs.get(article_id)
         sens, use = kg.inherit([(doc[1], doc[2])]) if doc else ("public", "allowed")
         linked: dict[str, Entity] = {}
+        by_name: dict[str, Entity] = {}      # 表記の鍵 → 物（名寄せで寄せた表記は、勝った物の key と違う）
         for row in data.get("entities", []):
             ent = _get_or_create(db, row["name"], row["type"], when, cache)
+            if ent is not None:
+                by_name[normalize_key(row["name"])] = ent
             if ent is not None and ent.key not in linked and len(linked) < MAX_ENTITIES_PER_ARTICLE:
                 linked[ent.key] = ent
         for fact in data.get("facts", []):
             key = normalize_key(fact["about"])
-            ent = linked.get(key)
+            ent = by_name.get(key) or linked.get(key)
             if ent is None and len(linked) < MAX_ENTITIES_PER_ARTICLE:
                 ent = _get_or_create(db, fact["about"], "other", when, cache)
                 if ent is not None:
                     linked[ent.key] = ent
+                    by_name[key] = ent
             claim = Claim(article_id=article_id, entity_id=ent.id if ent else None, kind=fact["kind"], text=fact["text"], value=fact.get("value", ""),
                           source_article_id=article_id, model=str(data.get("model", ""))[:200], prompt_version=str(data.get("version", ""))[:16],
                           created_at=data.get("at") or datetime.now(_UTC), ai_extracted=True, document_id=doc[0] if doc else None, sensitivity=sens, ai_use=use)
@@ -103,11 +111,12 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
         for rel in data.get("relations", []):
             ends = []
             for name in (rel["subject"], rel["object"]):
-                e = linked.get(normalize_key(name))
+                e = by_name.get(normalize_key(name)) or linked.get(normalize_key(name))
                 if e is None and len(linked) < MAX_ENTITIES_PER_ARTICLE:
                     e = _get_or_create(db, name, "other", when, cache)
                     if e is not None:
                         linked[e.key] = e
+                        by_name[normalize_key(name)] = e
                 ends.append(e)
             if all(ends):
                 rel_work.append((article_id, rel, ends[0], ends[1], str(data.get("model", "")), str(data.get("version", ""))))
@@ -223,10 +232,13 @@ def detail(db: Session, entity_id: int, *, limit: int = 100, scopes: list[str] |
 
 def summary(db: Session) -> dict:
     """診断用: 物・fact の数と、取り出し待ちの記事の数。"""
-    from qnapnewshub.db import Community, EntityCard, MentionCandidate
+    from qnapnewshub.db import Community, EntityCard, EntityMerge, MentionCandidate, MergeCandidate
 
     return {"entities": int(db.scalar(select(func.count(Entity.id))) or 0), "claims": int(db.scalar(select(func.count(Claim.id))) or 0),
             "extracted_articles": int(db.scalar(select(func.count(NewsItem.id)).where(NewsItem.extract_v > 0)) or 0),
             # Things の脳（2026-11-25）: 定義を持つカード・主題のまとまり・つなぐ候補（夜の計算が動いているかを見る）
             "cards": int(db.scalar(select(func.count(EntityCard.entity_id)).where(EntityCard.definition != "")) or 0), "communities": int(db.scalar(select(func.count(Community.id))) or 0),
-            "mention_candidates": int(db.scalar(select(func.count(MentionCandidate.id)).where(MentionCandidate.status == "candidate")) or 0)}
+            "mention_candidates": int(db.scalar(select(func.count(MentionCandidate.id)).where(MentionCandidate.status == "candidate")) or 0),
+            # 名寄せ（2026-11-25）: 寄せた数（元に戻した分を除く）・管理者の確認待ちの候補
+            "merged": int(db.scalar(select(func.count(EntityMerge.id)).where(EntityMerge.undone_at.is_(None))) or 0),
+            "merge_candidates": int(db.scalar(select(func.count(MergeCandidate.id)).where(MergeCandidate.status == "candidate")) or 0)}

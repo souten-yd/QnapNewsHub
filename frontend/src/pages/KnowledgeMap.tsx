@@ -32,6 +32,7 @@ function useDark(): boolean {
   return dark;
 }
 
+const BIG_LABELS = 24;
 const sinceIso = (days: number) => (days ? new Date(Date.now() - days * 86_400_000).toISOString() : null);
 const toRec = (n: OverviewNode | GraphNode, iso = false): NodeRec => ({ id: n.id, name: n.name, type: n.type, degree: "degree" in n ? (n.degree ?? 0) : 0, article_count: n.article_count, community: "community" in n ? n.community : 0, isolated: iso });
 const nodeEl = (n: NodeRec, position: Pos): ElementDefinition => ({ group: "nodes", position, classes: n.isolated ? "iso" : "", data: { id: String(n.id), label: n.name, color: NODE_COLOR[n.type] ?? NODE_COLOR.other, size: n.degree, kind: n.type, community: n.community } });
@@ -109,8 +110,11 @@ export default function KnowledgeMapPage() {
     const bg = dark ? "#18181b" : "#ffffff";
     return [
       { selector: "node", style: { "background-color": "data(color)", label: "data(label)", color: text, "font-size": 10, "text-valign": "bottom", "text-margin-y": 3, "text-wrap": "ellipsis", "text-max-width": "90px",
-                                    width: "mapData(size, 0, 80, 9, 42)", height: "mapData(size, 0, 80, 9, 42)", "border-width": 1, "border-color": bg, "min-zoomed-font-size": 11, "text-background-color": bg, "text-background-opacity": 0.65, "text-background-padding": "1px" } },
-      { selector: "node[size >= 25]", style: { "min-zoomed-font-size": 0, "font-size": 12, "font-weight": 600 } },
+                                    width: "mapData(size, 0, 80, 9, 42)", height: "mapData(size, 0, 80, 9, 42)", "border-width": 1, "border-color": bg, "min-zoomed-font-size": 13, "text-background-color": bg, "text-background-opacity": 0.65, "text-background-padding": "1px" } },
+      // 名前の出し方（全体の地図）: 大きな点（.big）はいつも、次数が中くらいの点は中くらいに寄ったとき、小さな点は大きく寄ったときだけ
+      { selector: "node[size >= 8]", style: { "min-zoomed-font-size": 9 } },
+      { selector: "node[size >= 20]", style: { "min-zoomed-font-size": 6, "font-weight": 600 } },
+      { selector: "node.big", style: { "min-zoomed-font-size": 0, "font-size": 13, "font-weight": 700 } },
       { selector: "node:selected", style: { "border-width": 3, "border-color": dark ? "#fbbf24" : "#111827" } },
       { selector: "node.hit", style: { "border-width": 3, "border-color": dark ? "#fde047" : "#f59e0b", "min-zoomed-font-size": 0, "font-size": 13, "font-weight": 700, "z-index": 20, "underlay-color": dark ? "#fde047" : "#f59e0b", "underlay-opacity": 0.35, "underlay-padding": 6 } },
       { selector: "node.dim", style: { opacity: 0.12, label: "" } },
@@ -133,6 +137,11 @@ export default function KnowledgeMapPage() {
     const els: ElementDefinition[] = ns.map((n) => nodeEl(n, where === "cose" ? { x: 0, y: 0 } : where.get(n.id) ?? { x: 0, y: 0 }));
     for (const e of es) if (nodes.current.has(e.source) && nodes.current.has(e.target) && !edges.current.has(e.id)) { edges.current.add(e.id); const d = edgeEl(e); d.classes = local ? "local" : ""; els.push(d); }
     cy.batch(() => { cy.elements().remove(); cy.add(els); });
+    if (!local && where !== "cose") {
+      // 全体の地図: 次数の大きい点だけ、縮小したままでも名前を出す。ほかは拡大するほど出す（読めない名前の山にしない）
+      const top = new Set([...ns].filter((n) => !n.isolated).sort((a, b) => b.degree - a.degree || a.id - b.id).slice(0, BIG_LABELS).map((n) => String(n.id)));
+      cy.nodes().filter((n) => top.has(n.id())).addClass("big");
+    }
     if (where === "cose") cy.layout({ name: "cose", animate: false, fit: true, padding: 30, nodeRepulsion: () => 9000, idealEdgeLength: () => 70, numIter: 600 } as never).run();
     apply();
     if (where !== "cose") cy.fit(undefined, 30);

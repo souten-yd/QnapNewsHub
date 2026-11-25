@@ -109,7 +109,7 @@ export default function DiagnosticsPage() {
           {l.chain.return_in_seconds !== null && <Row k="1 番目へ戻すまで" v={`${Math.ceil(l.chain.return_in_seconds / 60)} 分`} />}
           <Row k="ゲートウェイ" v={!l.gateway.enabled ? "使わない" : l.chain.gateway_down_in_seconds !== null ? `つながらないため、あと約 ${Math.floor(l.chain.gateway_down_in_seconds / 60) + 1} 分は外しています` : `使う（今日 ${l.gateway.calls} 回・1 回 ${l.gateway.batch} 件）`} id="llm-gateway" />
           <Row k="取り出したThings・fact・記事" v={`${l.knowledge.entities} Things・${l.knowledge.claims} fact・${l.knowledge.extracted_articles} 記事`} id="llm-knowledge" />
-          {l.knowledge.communities !== undefined && <Row k="Things の脳（定義つきカード・まとまり・つなぐ候補）" v={`${l.knowledge.cards ?? 0} カード・${l.knowledge.communities} まとまり・${l.knowledge.mention_candidates ?? 0} 候補`} id="llm-things" />}
+          {l.knowledge.communities !== undefined && <Row k="Things の脳（定義つきカード・まとまり・つなぐ候補）" v={`${l.knowledge.cards ?? 0} カード・${l.knowledge.communities} まとまり・${l.knowledge.mention_candidates ?? 0} 候補・名寄せ ${l.knowledge.merged ?? 0} 件（確認待ち ${l.knowledge.merge_candidates ?? 0}）`} id="llm-things" />}
           {l.events && <Row k="イベント・要約・今日の傾向" v={`${l.events.events} イベント・要約済み ${l.events.summarized}・待ち ${l.events.summary_waiting}・諦め ${l.events.summary_gave_up}・傾向の解説 ${l.events.trend_note_day ? `${l.events.trend_note_day}（${(l.events.trend_note_slot ?? 0) === 0 ? "朝" : "夕"}）` : "まだ"}`} id="llm-events" />}
         </dl>
         {l.chain.events.length > 0 && <ul className="num text-xs text-zinc-500" data-testid="llm-chain-events">{l.chain.events.map((e) => <li key={e.at + e.kind}>{clock(e.at)} {e.kind === "switch" ? "切り替え" : e.kind === "down" ? "ゲートウェイを外す" : "戻し"} → <span className="font-mono">{e.model}</span> {e.reason}</li>)}</ul>}

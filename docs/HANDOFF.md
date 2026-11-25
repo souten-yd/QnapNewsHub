@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-25（検索の評価の物差し〔feat/retrieval-eval〕の後）
+最終更新: 2026-11-25（つながりの精度〔feat/link-precision〕の後。その前は検索の評価の物差し〔feat/retrieval-eval〕）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -37,7 +37,8 @@
 | v0.6 検索の道具の API（feat/retrieval-api） | **ControlDeck の MPKR が使う道具**（`retrieval.py`・`retrieval_router.py`・`rcache.py`）: `POST /retrieve/seeds`（全文 OR・物・イベント・ニュース以外の文書）・`POST /graph/neighbors` の拡張（向き・時系列・矛盾だけ・ハブの抑制・次数）・`POST /graph/ppr`（局所 push 法）・`POST /retrieve/evidence`・`GET /research?topic=`・**区分の強制**（link のトークンは、つないだときの設定 `link.allow_confidential` の範囲だけ。既定 public）・版つきメモリキャッシュ・時間と大きさの上限・datetime の警告 0。ARCHITECTURE 8 章（v0.6）・DESIGN 15 |
 | v0.7 前半（feat/connectors） | **収集の connector の枠組み**（`connectors.py`・種類 feed／api／historical／change／discovery／market・取得の間隔・1 日の件数と通信量の予算・鍵〔任意〕・利用条件の記録〔`connector_terms.py`。未確認は既定で切〕・取得先の管理の「connector」の節）・**保存の段 L0〜L4 と昇格**（`docstore.py`。documents.tier・document_promotions・昇格の規則）・論文の同定（document_aliases）・document_links・Metric の時系列（metric_points）・L0 の検索（doc_fts）・connector: GitHub の発見とスターの急増・HF の新しいモデルと派生版・OpenAlex・Crossref・Semantic Scholar・HN 検索・Sitemap・変化の検出（既存の RSS・Release・arXiv・HN・HF は載せ替え）。試験 376 件。ARCHITECTURE 10 章の続き・DESIGN 14 章 |
 | Things の脳（feat/things-brain） | 画面の「物」を **Things** へ（API の道は互換）・**カードの帯**（定義・状態・確かさ〔根拠の数だけで決める〕・根拠の数と新しさ）・**関係を型ごとに**（上位・下位・仲間・使う・使われる・置き換え・矛盾）・夜のカードの LLM に**定義・状態・未解決の問い・反対の見方**（材料に無い数字・英字の名前を捨てる）・主な数値・**つなぐ候補**（リンクされていない言及。押すと確定）・**まとまり（Louvain）と MOC**（`/moc`）・**全体の地図**（最初に主要 1,500 点・検索は強調／絞る・ローカル深さ 1〜3・孤立した点の切り替え）・**LLM の脳の API**（`/things/{id}/context`・`POST /things/context`・`/things/lookup`）・Obsidian の書き出し（frontmatter・Connections・Open Questions・`_MOC/`・README）。`things.py`・`things_router.py`・`features/knowledge/mapLayout.ts`・`pages/Moc.tsx`。試験 11 件・性能 P95 73ms 以下（10 万件の模擬）。ARCHITECTURE 6 章の続き・DESIGN 16 |
-| 検索の評価の物差し（feat/retrieval-eval） | **統合の段 I0 の前倒し**（`backend/tools/eval_retrieval/`・`./hub.sh eval-retrieval --data <評価用 DB のコピー> --questions <json> --out <md> [--build]`）: 評価のハブの DB から**規則と雛形だけで**（LLM なし）問いを作る（事実・比較・変化・複数の文書・関係・日本語の問い→英語の記事の 6 種類。各問いに文書・物・主張・関係・イベントの正解）。5 つの道（①全文 ②種 ③種＋周り ④種＋局所 PPR ⑤物の文脈）を既存 API で流し、Recall@5/10/20・MRR・nDCG@10・**文脈の密度**（1,000 トークンあたりの正解の根拠）・時間 P50/P95 を種類ごとに出す。**問いと結果は実データ由来なのでリポジトリに入れない**（非公開の評価の置き場）。DESIGN 17 章 |
+| 検索の評価の物差し（feat/retrieval-eval） | **統合の段 I0 の前倒し**（`backend/tools/eval_retrieval/`・`./hub.sh eval-retrieval --data <評価用 DB のコピー> --questions <json> --out <md> [--build]`）: 評価のハブの DB から**規則と雛形だけで**（LLM なし）問いを作る（事実・比較・変化・複数の文書・関係・日本語の問い→英語の記事の 6 種類。各問いに文書・物・主張・関係・イベントの正解）。5 つの道（①全文 ②種 ③種＋周り ④種＋局所 PPR ⑤物の文脈）を既存 API で流し、Recall@5/10/20・MRR・nDCG@10・**文脈の密度**（1,000 トークンあたりの正解の根拠）・時間 P50/P95 を種類ごとに出す。**問いと結果は実データ由来なのでリポジトリに入れない**（非公開の評価の置き場）。DESIGN 18 章 |
+| つながりの精度（feat/link-precision） | **つなぐ候補の雑音を減らした**（一般語・長い名前の一部・大文字小文字・媒体名・種類／短い語。実データ 1,089 → 193 件・無作為 30 件の誤り 14 → 4）・**名寄せ**（規則で確かな組は夜に自動、迷う組は候補で管理者が確定。記事・主張・関係・別名・集計を付け替え、`entity_merges` の記録で完全に戻せる）・**まとまりの名前**（番号でなく「代表・特徴の語」）・**全体の地図の名前の出し方**（上位 24 点だけ・拡大するほど出す）。`entity_merge.py`・`things.py`・`pages/Entities.tsx`。試験 9 件。ARCHITECTURE 6 章の続き・DESIGN 18 |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
 - 試験: backend 376 件（v0.7 前半の時点）・E2E 223 件（v0.5 で 211 件・v0.7 前半で `connectors.spec.ts` 12 件を足した）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
@@ -58,8 +59,8 @@
 7. （済）v0.5 知識グラフ（feat/knowledge-graph・2026-11-25）。残り: **本物の LLM で 20 件を 1 回流し、relations を足した出力が上限に収まるか（finish_reason）・引用が原文に出る率・推測の割合を見る**／実データで co_occurs のしきい値と、物の別名寄せの要否を見る／カードの概要の質。続きは v0.6（検索の統合: 局所 PageRank・`/research`。neighbors は済み）。
 8. （済）v0.7 前半（feat/connectors・2026-11-25）。残り: **実データで昇格の規則（既定のチャンネルの語は広い）と、1 日の予算の既定を調整**／本物の Semantic Scholar・Crossref・Sitemap・変化の検出を 1 回ずつ確かめる／HF の `filter=base_model:…` の効き／L2 に上がった非ニュースの本文の取得／診断・画面に文書（論文・リポジトリ・モデル）の見方を足す。v0.8 は e-Stat・日銀・国会会議録・e-Gov・EDINET・DefiLlama・CoinGecko・GDELT・Wikidata・PyPI／npm・OSV／NVD（ControlDeck の PLAN-integrated-knowledge 8.5）。
 9. v0.6 の続き: **ControlDeck 側の MPKR（I4）が `/retrieve/seeds`・`/graph/neighbors`・`/graph/ppr`・`/retrieve/evidence`・`GET /research` を呼ぶ**（トークンは `Authorization: Bearer`・POST も通る・区分は `confidential: true` を付けたときだけ。機密を読ませるには、つなぐ前に設定 `link.allow_confidential` を true にする）。本物のデータでの評価（I0 の問い）・hub_k と ε の既定の調整。
-10. v0.4・v0.6 以降は PLAN.md の順。**検索を変えるとき（MPKR・翻訳・名寄せ・意味の検索）は、前後で `./hub.sh eval-retrieval` を同じ問いで流して点数を比べる**（問いの JSON は `--build` で作り直さず、基準値と同じものを使う。DESIGN 17 章）。
-11. （済）Things の脳（feat/things-brain・2026-11-25）。残り: **本物の LLM でカードの定義・状態・問い・反対の見方を夜に回し、検査の落ちる率と質を見る**／つなぐ候補の一般語の雑音（名前の長さ・語の絞り）／スマホでの全体の地図の操作／**ControlDeck の MPKR・MCP が `/things/{id}/context`・`/things/lookup` を呼ぶ**（トークンは `Authorization: Bearer`。区分は既存の範囲）。
+10. v0.4・v0.6 以降は PLAN.md の順。**検索を変えるとき（MPKR・翻訳・名寄せ・意味の検索）は、前後で `./hub.sh eval-retrieval` を同じ問いで流して点数を比べる**（問いの JSON は `--build` で作り直さず、基準値と同じものを使う。DESIGN 18 章）。
+11. （済）Things の脳（feat/things-brain・2026-11-25）。残り: **本物の LLM でカードの定義・状態・問い・反対の見方を夜に回し、検査の落ちる率と質を見る**／（済: つなぐ候補の雑音・名寄せ・まとまりの名前〔feat/link-precision〕。残り: 日英の名寄せの確かさ・本物の LLM で候補の質を見る）／スマホでの全体の地図の操作／**ControlDeck の MPKR・MCP が `/things/{id}/context`・`/things/lookup` を呼ぶ**（トークンは `Authorization: Bearer`。区分は既存の範囲）。
 
 
 ## 5. 開発の仕方
@@ -89,6 +90,7 @@
 - **派生データの区分（v0.5）**: 主張・関係・物・カードを新しく作る経路は、必ず `kg.inherit` で文書から区分を引き継ぐ。読む API は `scopes_for`（confidential は session だけ）を通す。LLM に送る材料は public かつ allowed だけ（`kg_job.targets`）。ここを緩めない。
 - **LLM の出力の上限**: `prep.TOKENS_PER_ITEM`（600）× 件数。relations を足すと 20 件は上限ぎりぎり。件数を増やす・出力の項目を足すときは、DESIGN 13 章の見積もりをやり直す（30 件は 2026-11-24 に切れた）。
 - **Things の脳（2026-11-25）**: 画面の名前は Things、データ・API は entity のまま（`/entities`・`/kg`・`/things` の 3 つの道が同じ中身）。カードの帯の確かさは根拠の数だけ（`things.confidence_of`）で、LLM の値を混ぜない。カードの LLM の検査（`kg_job._grounded_line`）を緩めない（材料に無い英字の名前・数字を捨てる）。夜の集計（`kg_job.aggregate`）がまとまり（`things.compute_communities`）と候補（`compute_mentions`）も作る＝検索の索引が無いと候補は 0。まとまりは public の関係だけで計算（機密の物は入れない）。まとまりの id は夜ごとに変わる（覚えない）。全体の地図の応答は 1MB 未満に保つ（`OVERVIEW_EDGES_MAX`。超えるとキャッシュされない）。`/things/context` は `read_user` なので POST でもトークンが通る（副作用を足さない）。
+- **つながりの精度（2026-11-25）**: 名寄せは `entity_merge.py`。**Entity を直接消さない・付け替えない**（`entity_merge.merge`／`undo` だけ。関係・主張・結び付き・集計が一緒に動く）。新しい表（entity に結ぶ表）を足すときは `merge`／`undo` に付け替えを足す（足さないと寄せたとき外部キーの CASCADE で消える）。自動の寄せは規則の鍵（`rule_key`）が同じで種類が合うものだけ＝ゆるめない（括弧を除く・日英は候補止まり）。`Entity` の作り方は `entities._get_or_create` だけ（寄せた表記を勝った物へ向ける `resolve_key` が入っている）。つなぐ候補の絞りは `things.compute_mentions` の docstring の順（一般語・長い名前・大文字小文字…）。試験の実データ比較は評価のハブの DB を**読むだけでコピー**して一時の置き場で行う（コピーは消す）。
 - **co_occurs の行の id は夜ごとに変わる**（置き換え）。id を覚えておく使い方をしない（物の id と型で引く）。
 - **作業の場所**: 子エージェントが `QnapNewsHub` の checkout で作業している間に docs を直すときは、`git worktree add ../QnapNewsHub-xxx origin/main` で別の場所を作り、終わったら `git worktree remove` する。
 

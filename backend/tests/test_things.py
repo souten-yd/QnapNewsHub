@@ -108,7 +108,7 @@ def test_unlinked_mentions_candidates_confirm_dismiss(client):
         art(i + 1, [("Mentionee", "tech")])
     miss = art(5, [("Other", "tech")], title="Mentionee gets a new release today")
     sub = art(6, [("Other", "tech")], title="Mentioneeville is unrelated")
-    dis = art(7, [("Other", "tech")], title="Another note about mentionee internals")
+    dis = art(7, [("Other", "tech")], title="Another note about Mentionee internals")
     with news_db.session() as db:
         out = things.compute_mentions(db)
         db.commit()
@@ -197,7 +197,7 @@ def test_overview_limit_representatives_isolated_and_scope(client):
     full = client.get("/api/v1/things/map/overview?limit=10&confidential=true").json()
     assert "Secret" in [n["name"] for n in full["nodes"]]
     cm = client.get(f"/api/v1/things/map/community/{o['communities'][0]['id']}").json()
-    assert cm["name"] == "Core" and len(cm["nodes"]) == 7 and client.get("/api/v1/things/map/community/9999").status_code == 404
+    assert cm["name"].startswith("Core") and len(cm["nodes"]) == 7 and client.get("/api/v1/things/map/community/9999").status_code == 404
 
 
 def test_overview_truncated_when_more_nodes_than_limit(client):

@@ -23,7 +23,7 @@ export function MocIndexPage() {
               <li key={c.id}><Link to={`/moc/channel/${c.id}`} data-testid="moc-channel" className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700"><span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: c.color }} />{c.name}</Link></li>
             ))}</ul>
           </Card>
-          <Card id="moc-communities" title="まとまりごと" hint="関係で強くつながる Things の集まりです。名前は中心の Things です。">
+          <Card id="moc-communities" title="まとまりごと" hint="関係で強くつながる Things の集まりです。名前は中心の Things と、そのまとまりらしい語です。">
             {q.data.communities.length === 0 ? <p className="text-xs text-zinc-500" data-testid="moc-no-communities">まだまとまりがありません（夜に計算します）。</p> : (
               <ul className="flex flex-wrap gap-1.5" data-testid="moc-communities">{q.data.communities.map((c) => (
                 <li key={c.id}><Link to={`/moc/community/${c.id}`} data-testid="moc-community" className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700">{c.name}<span className="num text-zinc-500">{c.size}</span></Link></li>
@@ -47,7 +47,7 @@ export function MocPage() {
       <Link to="/moc" className="text-xs text-accent-700 underline dark:text-accent-300">← 主題の入口</Link>
       <header>
         <h1 className="break-words text-xl font-semibold tracking-tight" data-testid="moc-title">{m.title}</h1>
-        <p className="num mt-1 text-xs text-zinc-500">{m.kind === "community" ? `Things ${m.size} 件のまとまり` : `最近 30 日の記事 ${m.size} 件`}</p>
+        <p className="num mt-1 text-xs text-zinc-500">{m.kind === "community" ? `${m.size} 件の Things のまとまり` : `最近 30 日の記事 ${m.size} 件`}</p>
         {m.kind === "community" && <p className="mt-2"><Link to={`/map?community=${m.id}`} data-testid="moc-open-map" className="inline-flex min-h-9 items-center rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700">知識の地図で見る</Link></p>}
       </header>
       <Card id="moc-things" title="主要な Things" hint="記事の多い順です。1 行の定義は AI が夜に作ります。">

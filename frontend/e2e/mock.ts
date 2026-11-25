@@ -277,6 +277,8 @@ export interface MockState {
   bigMap?: boolean;
   /** 確定・却下したつなぐ候補の記事 id */
   decidedMentions: number[];
+  /** 名寄せの候補の決めた操作（confirm:id・dismiss:id・undo:id） */
+  mergeActions?: string[];
 }
 
 export function newState(over: Partial<MockState> = {}): MockState {
@@ -442,6 +444,13 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
         note: { body: state.kgNote ?? "", updated_at: state.kgNote ? ago(0) : "" } });
     }
     if (is("POST", /^\/things\/\d+\/mentions\/\d+\/(confirm|dismiss)$/)) { state.decidedMentions.push(Number(path.split("/")[4])); return json(route, { status: path.endsWith("confirm") ? "confirmed" : "dismissed" }); }
+    if (is("GET", "/things/merge-candidates")) {
+      const done = state.mergeActions ?? [];
+      return json(route, { total: done.some((a) => a.startsWith("confirm") || a.startsWith("dismiss")) ? 0 : 1,
+        items: done.some((a) => a.startsWith("confirm") || a.startsWith("dismiss")) ? [] : [{ id: 7, reason: "rule_type", score: 0.8, keep: { id: 3, name: "VRChat", type: "software", article_count: 6 }, drop: { id: 9, name: "VRChat Inc.", type: "org", article_count: 1 } }],
+        merges: [{ id: 1, winner: { id: 1, name: "Sony" }, loser: { id: 5, name: "Sony Corporation" }, mode: "auto", reason: "rule", merged_at: ago(5), undone: done.includes("undo:1"), can_undo: !done.includes("undo:1") }] });
+    }
+    if (is("POST", /^\/things\/(merge-candidates\/\d+\/(confirm|dismiss)|merges\/\d+\/undo)$/)) { const p = path.split("/"); (state.mergeActions ??= []).push(`${p[2] === "merges" ? "undo" : p[4]}:${p[2] === "merges" ? p[3] : p[3]}`); return json(route, { status: "ok" }); }
     if (is("GET", "/things/map/overview")) return json(route, overviewMock(Boolean(state.bigMap)));
     if (is("GET", /^\/things\/map\/community\/\d+$/)) { const o = overviewMock(Boolean(state.bigMap)); const id = Number(path.split("/")[4]); const ns = o.nodes.filter((n) => n.community === id).slice(0, 300); const ids = new Set(ns.map((n) => n.id));
       return json(route, { id, name: o.communities[0].name, size: ns.length, nodes: ns, edges: o.edges.filter((e) => ids.has(e.source) && ids.has(e.target)) }); }
