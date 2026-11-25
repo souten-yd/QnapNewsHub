@@ -18,6 +18,8 @@
 #   ./hub.sh set-openrouter-key  OpenRouter の鍵を暗号化して保存
 #   ./hub.sh llm-try --provider gateway|openrouter --base <URL> --model <名前> --items <件数>
 #                           取り出しを 1 回だけ流して、検査の結果・物と facts を表示する（評価用。記事は NEWSHUB_DATA の DB の新しい順。鍵は環境変数 NEWSHUB_LLM_TRY_KEY。何も書かない）
+#   ./hub.sh eval-retrieval --data <評価用 DB の置き場（コピー）> --questions <json> --out <md> [--build]
+#                           検索の評価の物差し（問いの集め・5 つの道・Recall/MRR/nDCG/文脈の密度/時間）。外へ通信しない・LLM は呼ばない。結果は公開しない（docs/DESIGN.md）
 #   ./hub.sh <cli のコマンド>  python -m qnapnewshub.cli へそのまま渡す
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -135,6 +137,11 @@ case "$cmd" in
     if [ "$DRY" = 1 ]; then echo "（dry-run）gh ${ARGS[*]}"; exit 0; fi
     command -v gh >/dev/null || { echo "gh が要ります" >&2; exit 1; }
     exec gh "${ARGS[@]}"
+    ;;
+  eval-retrieval)
+    need_venv
+    cd "$ROOT/backend"
+    exec "$PY" -W ignore -m tools.eval_retrieval "$@"
     ;;
   run)
     need_venv
