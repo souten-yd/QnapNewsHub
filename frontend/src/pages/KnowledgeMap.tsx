@@ -97,7 +97,7 @@ export default function KnowledgeMapPage() {
   const graphRef = useRef<Graph | null>(null);
   const nodes = useRef(new Map<number, NodeRec>());      // いま描いている点
   const edges = useRef(new Set<number>());
-  const nodeSize = (imp: number) => radiusOf(imp, sizing.current.cap) * sizing.current.unit;
+  const nodeSize = (imp: number) => radiusOf(imp, sizing.current.cap) * sizing.current.m;
   const pos = useRef(new Map<number, Pos>());
   const centers = useRef(new Map<number, Pos & { r: number }>());
   const home = useRef<{ nodes: NodeRec[]; edges: EdgeRec[]; pos: Map<number, Pos>; world: boolean } | null>(null);      // 全体の絵（ローカルから戻るとき）
@@ -105,7 +105,7 @@ export default function KnowledgeMapPage() {
   const edgeFlags = useRef(new Map<string, EdgeFlag>());
   const hlEdges = useRef(new Set<string>());
   const selId = useRef<string | null>(null);
-  const sizing = useRef({ world: false, unit: 1, cap: 1, edgeK: 1 });      // 点の大きさの基準（半径は世界の単位で 2〜9。画面の幅で倍率 unit をかける。cap＝重要度の上位 5% の値）
+  const sizing = useRef({ world: false, m: 0.6, cap: 1, edgeK: 1 });      // 点の大きさの基準（半径は世界の単位で 2〜9。画面のピクセル基準。倍率 m は全体を出したとき近い点と重ならないよう自動で決める（autoFit）。cap＝重要度の上位 5% の値）
   const [cfg, setCfg] = useState<MapCfg>(() => sanitizeCfg(loadJson<Partial<MapCfg> | null>(LS_CFG, null)));
   const cfgRef = useRef(cfg);
   cfgRef.current = cfg;
@@ -118,6 +118,7 @@ export default function KnowledgeMapPage() {
   const baseMeta = useRef({ pos: new Map<string, Pos>() });      // 夜の配置（「配置を戻す」用）
   const glowKeys = useRef<string[]>([]);
   const glowCanvas = useRef<HTMLCanvasElement | null>(null);
+  const fitPending = useRef(false);
   const perf = useRef({ frame: 0, glow: 0, frameMax: 0, glowMax: 0, n: 0, edges: 0 });
   const relayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const theme = useRef(themeOf(dark));
@@ -275,6 +276,44 @@ export default function KnowledgeMapPage() {
     perf.current.glowMax = Math.max(perf.current.glowMax, dt);
   };
 
+  /** いま画面に見えている点のうち、ほかの点と丸が重なっている点の割合（0〜1）。丸の画面上の半径は sigma の scaleSize（拡大でゆっくり大きくなる分を含む）。 */
+  const overlapFraction = (sizeMul = 1, atM: number | null = null) => {
+    const g = graphRef.current, sg = sigmaRef.current, host = box.current;
+    if (!g || !sg || !host) return 0;
+    const w = host.clientWidth, h = host.clientHeight, c = cfgRef.current;
+    const pts: { x: number; y: number; r: number }[] = [];
+    g.forEachNode((k, a) => {
+      if (nodeFlags.current.get(k)?.off) return;
+      const p = sg.graphToViewport({ x: a.x as number, y: a.y as number });
+      if (p.x < 0 || p.y < 0 || p.x > w || p.y > h) return;
+      const size = atM === null ? (a.size as number) : radiusOf(a.imp as number, sizing.current.cap) * atM;
+      pts.push({ x: p.x, y: p.y, r: sg.scaleSize(size * c.nodeScale * sizeMul) });
+    });
+    const cell = 40, grid = new Map<string, number[]>();
+    pts.forEach((p, i) => { const key = `${Math.floor(p.x / cell)},${Math.floor(p.y / cell)}`; (grid.get(key) ?? grid.set(key, []).get(key)!).push(i); });
+    const hit = new Set<number>();
+    pts.forEach((p, i) => {
+      const cx = Math.floor(p.x / cell), cy = Math.floor(p.y / cell);
+      for (let dx = -1; dx <= 1; dx += 1) for (let dy = -1; dy <= 1; dy += 1) for (const j of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
+        if (j <= i) continue;
+        const q = pts[j];
+        if (Math.hypot(p.x - q.x, p.y - q.y) < p.r + q.r) { hit.add(i); hit.add(j); }
+      }
+    });
+    return pts.length ? hit.size / pts.length : 0;
+  };
+  /** 全体を出したとき、重なる点が 1% 未満になる最大の倍率 m を二分探索で決める（上限 1.1・下限 0.35。下限でも重なるなら下限）。 */
+  const autoFit = () => {
+    const g = graphRef.current;
+    if (!g || g.order === 0) return;
+    let lo = 0.35, hi = 1.1;
+    if (overlapFraction(1, hi) < 0.01) lo = hi;
+    else for (let i = 0; i < 9; i += 1) { const mid = (lo + hi) / 2; if (overlapFraction(1, mid) < 0.01) lo = mid; else hi = mid; }
+    sizing.current = { ...sizing.current, m: lo };
+    g.forEachNode((k, a) => g.setNodeAttribute(k, "size", nodeSize(a.imp as number)));
+    sigmaRef.current?.refresh();
+  };
+
   /** 力（中心・反発・リンクの距離）を変えたら、いまの位置から画面で短く再配置する（夜の配置は変えない。「配置を戻す」で夜の配置へ）。 */
   const relayout = useCallback(async () => {
     const g = graphRef.current, sg = sigmaRef.current;
@@ -301,7 +340,7 @@ export default function KnowledgeMapPage() {
     nodes.current = new Map(ns.map((n) => [n.id, n]));
     edges.current = new Set();
     const maxDeg = Math.max(0, ...ns.map((n) => n.degree));
-    sizing.current = { world, unit: 1, cap: sizeCap(ns.filter((n) => !n.isolated).map((n) => n.importance ?? fallbackImportance(n.degree, maxDeg))), edgeK: 1 };
+    sizing.current = { world, m: 0.6, cap: sizeCap(ns.filter((n) => !n.isolated).map((n) => n.importance ?? fallbackImportance(n.degree, maxDeg))), edgeK: 1 };
     g.clear();
     focusCache.current = { key: "#", nodes: new Set(), edges: new Set(), lab: new Set() };
     selId.current = null;
@@ -330,14 +369,10 @@ export default function KnowledgeMapPage() {
       fa2.assign(g, { iterations: n > 300 ? 120 : 250, settings: { ...fa2.inferSettings(g), linLogMode: true, outboundAttractionDistribution: true, gravity: 1, scalingRatio: 6, slowDown: 2, barnesHutOptimize: n > 200 }, getEdgeWeight: "weight" });
       pos.current = new Map(g.mapNodes((k, a) => [Number(k), { x: a.x as number, y: a.y as number }] as [number, Pos]));
     }
-    // 点の大きさ: 半径は世界の単位（保存した配置は丸が重ならないよう夜に離した距離）。幅が狭い画面（スマホ）では、全体が入ったとき小さくなりすぎないよう倍率をかける。
-    // ローカル・保存の無い配置は、座標の広がりを夜の配置の広がり（約 1,200）に合わせて同じ見た目にする
-    const xs = g.mapNodes((_k, a) => a.x as number), ys = g.mapNodes((_k, a) => a.y as number);
-    const extent = Math.max(1, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-    const w = box.current?.clientWidth ?? 800;
-    const viewK = w < 500 ? 2 : w < 900 ? 1.4 : 1.0;
-    const unit = (world ? 1 : extent / 1200) * viewK;
-    sizing.current = { ...sizing.current, world, unit, edgeK: unit * 0.5 };
+    // 点の大きさ: 画面のピクセル基準（sigma の itemSizesReference "screen"）。拡大しても丸の画面の大きさはほぼ同じで、間隔だけが広がる（Obsidian と同じ）。
+    // 倍率 m は、全体を出したときの画面上の近い点との距離から自動で決める（afterRender で autoFit）。線の太さも px
+    sizing.current = { ...sizing.current, world, m: 0.6, edgeK: 1 };
+    fitPending.current = true;
     g.forEachNode((k, a) => g.setNodeAttribute(k, "size", nodeSize(a.imp as number)));
     baseMeta.current = { pos: new Map(g.mapNodes((k, a) => [k, { x: a.x as number, y: a.y as number }] as [string, Pos])) };
     markBig(local);
@@ -365,7 +400,7 @@ export default function KnowledgeMapPage() {
       graphRef.current = g;
       sg = new sm.default(g, box.current, {
         renderEdgeLabels: false, labelRenderedSizeThreshold: 9 - 7 * cfgRef.current.labels, labelDensity: 0.4 + 0.6 * cfgRef.current.labels, labelGridCellSize: 120, labelSize: 11, labelFont: "system-ui, sans-serif", labelColor: { color: theme.current.label },
-        zIndex: true, minCameraRatio: 0.02, maxCameraRatio: 3, itemSizesReference: "positions", zoomToSizeRatioFunction: (r) => r, defaultEdgeType: "line", enableEdgeEvents: false,
+        zIndex: true, minCameraRatio: 0.02, maxCameraRatio: 3, itemSizesReference: "screen", zoomToSizeRatioFunction: Math.sqrt, defaultEdgeType: "line", enableEdgeEvents: false,
         nodeReducer: (key, a) => {
           const f = nodeFlags.current.get(key);
           const out = { ...a };
@@ -412,7 +447,7 @@ export default function KnowledgeMapPage() {
       };
       el.__tap = (id: number) => pick(String(id));
       (el as { __stat?: () => Record<string, number> }).__stat = () => {      // 試験用: 旗の数（一致・薄く・隠す）と、いつも名前を出す点の数
-        const c = { hit: 0, dim: 0, off: 0, big: 0, sizeMax: 0, sizeMin: 1e9, edgeColors: 0, isoShown: 0, glowNodes: glowKeys.current.length };
+        const c = { hit: 0, dim: 0, off: 0, big: 0, sizeMax: 0, sizeMin: 1e9, edgeColors: 0, isoShown: 0, overlap: overlapFraction(), m: sizing.current.m, glowNodes: glowKeys.current.length };
         const er = sigmaRef.current?.getSetting("edgeReducer");
         if (er && !selId.current && !hover.current) { const cs = new Set<string>(); g.forEachEdge((k, a) => { const o = er(k, a); if (!o.hidden) cs.add(String(o.color)); }); if (perf.current.edges > 0) cs.add("canvas"); c.edgeColors = cs.size; }      // sigma が描く線の色の数＋背景の canvas（1 色）
         g.forEachNode((k, a) => { if (a.iso && !nodeFlags.current.get(k)?.off) c.isoShown += 1; });
@@ -428,6 +463,7 @@ export default function KnowledgeMapPage() {
       let tFrame = 0;
       sg.on("beforeRender", () => { tFrame = performance.now(); });
       sg.on("afterRender", () => {
+        if (fitPending.current) { fitPending.current = false; autoFit(); return; }
         drawGlow();
         const dt = performance.now() - tFrame;
         perf.current.frame = dt;
