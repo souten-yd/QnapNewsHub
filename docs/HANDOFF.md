@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-26（取得元の名前の漏れ・物差しの作り直し〔fix/source-leak-yardstick〕の後。その前は 2026-11-25 の Things の取り出しの精度〔feat/extract-quality〕の後。その前は LAN での発見の応答〔feat/lan-discovery〕・軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
+最終更新: 2026-11-26（名寄せの自動化〔feat/auto-resolve〕の後。その前は 取得元の名前の漏れ・物差しの作り直し〔fix/source-leak-yardstick〕の後。その前は 2026-11-25 の Things の取り出しの精度〔feat/extract-quality〕の後。その前は LAN での発見の応答〔feat/lan-discovery〕・軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -44,6 +44,7 @@
 | つながりの精度（feat/link-precision） | **つなぐ候補の雑音を減らした**（一般語・長い名前の一部・大文字小文字・媒体名・種類／短い語。実データ 1,089 → 193 件・無作為 30 件の誤り 14 → 4）・**名寄せ**（規則で確かな組は夜に自動、迷う組は候補で管理者が確定。記事・主張・関係・別名・集計を付け替え、`entity_merges` の記録で完全に戻せる）・**まとまりの名前**（番号でなく「代表・特徴の語」）・**全体の地図の名前の出し方**（上位 24 点だけ・拡大するほど出す）。`entity_merge.py`・`things.py`・`pages/Entities.tsx`。試験 9 件。ARCHITECTURE 6 章の続き・DESIGN 18 |
 | 検索の改善（feat/retrieval-density） | 物差しの基準値の弱い所 3 点: ①文脈の密度（text の context は URL でなく「出どころ 日付 d<id>」・evidence に `label`・`compact`）②**主張を種に**（`claim_fts_*` の全文索引・`/retrieve/seeds` が `kind: claim`）③**周りの点数**（`/graph/neighbors` に `seed_scores`・`q` → 辺・物の `score`。必ず元の種より低い）。③ R@10 0.634→0.762・主張 R@20 0→0.85・⑤ 文脈 1068→752 トークン。下がった所（② 複数の文書など）と理由は評価の置き場。ARCHITECTURE 8 章の続き・DESIGN 17.1 |
 | 接続の深さ・会合・カードの形（feat/depth-cards） | **既定の深さは 1・つなぐ問いだけ最大 5**（`retrieval.expand_meet`・`depth_plan`・`POST /graph/expand`・会合の加点 +0.3・最初の会合の段 +1 で止める）・地図のローカルの深さ 1〜5・カードの固定の形（context text／画面）・カードの夜の仕事の診断（通信の失敗は数えず再試行）。橋渡し R@10 0.323→0.446・普通の問いは下がった問い 0。物差しに橋渡しの問い（`--build-bridge`）と道 ③'。比較は nDCG が下がる。ARCHITECTURE 6・8 章の続き・DESIGN 21 |
+| 名寄せの自動化（feat/auto-resolve） | **利用者の操作なしで寄せる**（`auto_resolve.py`・`wikidata.py`）: 段 1 規則（従来）→ **段 2 Wikidata**（名前を日英で `wbsearchentities`・説明が種類に合う 1 件だけ QID・同じ QID を自動で寄せる・QID と説明を `entity_wikidata` に保存・1 晩 500 回・2 秒おき・429 は待って続ける・結果は `wikidata_cache`）→ **段 3 LLM**（決まらない組を 20 組ずつ・用途 `resolve`・same で確かさ 0.85 以上だけ・different は二度と聞かない）。機密・allowed 以外は外へ送らない。記録は `entity_merges`（段 `mode`・根拠 `basis`）・戻せる。画面は「最近自動で寄せたもの」と「戻す」だけ。診断に段ごとの数。ARCHITECTURE 6 章の続き・DESIGN 25。**1 晩ぶんの実走・有料モデルでの質は未確認** |
 | 軽い翻訳（feat/translate） | **QuickMT 英→日（CTranslate2 int8）**（`translate.py`・`translate_flow.py`・`translate_router.py`・表 `news_translation`・`news_tr_cache`）: エンジンの枠・モデルを利用者の操作で取得（設定の「翻訳」・版と sha256 固定）・用語の保護（印 `ZQnZ`）と対訳表・訳の検査（落ちた文は原文のまま〔未訳〕）・文ごとのキャッシュ・全文検索の索引に訳を足す（「概要（日本語）」の列）・LLM が使えないときは題と本文だけ・重要な記事の本文は空き時間に 1 日の上限まで・開いたとき訳す API・`translate_hq` の仕事（実行は ControlDeck 側）・画面の「機械翻訳」の印と原文・診断の節。ARCHITECTURE 8.5・DESIGN 19。**物差しでは点数は変わらない**（飽和。評価の置き場の md）。依存は ctranslate2 4.6.2・sentencepiece 0.2.0（manylinux2014 の最後の版。上げない） |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 | 銀河の地図（feat/galaxy-map） | 重力の地図の見た目を Obsidian・Nebula 風に作り直した（丸 2〜9・放射状の葉・色はまとまり・光・設定の枠・型の保存）。ARCHITECTURE 6 章の続き・DESIGN 20 |

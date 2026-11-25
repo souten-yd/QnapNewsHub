@@ -5,7 +5,7 @@
 - `wbgetentities`（QID → 正式名・説明・別名。`ids` は `|` で最大 50 まとめて 1 回・`props=labels|descriptions|aliases`・`languages=ja|en`。claims は重いので取らない）。
 - 利用の決まり（MediaWiki の API:Etiquette・Wikimedia の User-Agent policy・Wikidata:Data access で確かめた〔2026-11-26〕）: 読み取りに固い上限は無いが、**並列にせず 1 件ずつ**・
   まとめられるものは `|` でまとめる・非対話の仕事には `maxlag` を付ける・`429` と `Retry-After` が来たら**その回は止める**・説明のある User-Agent を送る。
-  ここでは 1.5 秒に 1 回（PACE。1.1 秒では十数回で 429 が出た）・429 の待ちが短ければ待って続ける・1 回の取りまとめの上限・1 晩の上限（auto_resolve）・結果の覚え（wikidata_cache。見つからなかった結果も覚える）で守る。
+  ここでは 2 秒に 1 回（PACE。1.1 秒では十数回・1.5 秒でも 30 回ほどで 429 が出た）・429 の待ちが短ければ待って続ける・1 回の取りまとめの上限・1 晩の上限（auto_resolve）・結果の覚え（wikidata_cache。見つからなかった結果も覚える）で守る。
   User-Agent は一般的な名前だけ（利用者の名前・連絡先は入れない。公開のリポジトリのため）。
 - 通信は net.get（egress の検査・大きさ・時間の上限）。試験は `_fetch` を差し替えて模擬する。
 
