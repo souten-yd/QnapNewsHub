@@ -56,14 +56,15 @@ class _Buf:
         self.bodies: dict[int, dict] = {}              # 記事の id -> 本文の取り出しの結果（bodies.apply が書く。state 1 は圧縮した本文・2 は取れない理由）
         self.connectors: list[dict] = []               # connector の結果（文書・辺・Metric。docstore.apply が書く）
         self.translations: dict[int, dict] = {}        # 記事の id -> 機械翻訳（題・概要・本文。translate.apply が書く）
+        self.usage: dict[tuple[str, str, int], int] = {}      # (日・種類・点の id) -> 回数（検索で当たった・カードを開いた。mapgrav.apply_usage が書く）
         self.trcache: dict[str, str] = {}              # 文の hash -> 訳（印のまま。translate.apply が書く）
         self.bytes = 0
 
     def empty(self) -> bool:
-        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes or self.bodies or self.connectors or self.translations or self.trcache)
+        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes or self.bodies or self.connectors or self.translations or self.trcache or self.usage)
 
     def count(self) -> int:
-        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes or self.bodies) + len(self.connectors) + len(self.translations) + len(self.trcache)
+        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes or self.bodies) + len(self.connectors) + len(self.translations) + len(self.trcache) + len(self.usage)
 
 
 def merge_patch(old: dict | None, new: dict) -> dict:
@@ -271,6 +272,14 @@ class Coordinator:
         with self.lock:
             self.buf.fetchlog.extend(rows)
         self._touch(200 * len(rows))
+
+    def stage_usage(self, day: str, kind: str, ids: list[int]) -> None:
+        """点の使われ方（検索で当たった・カードを開いた）をメモリで数える。まとめ書きで日ごとの集計の表へ足す。"""
+        with self.lock:
+            for i in ids:
+                k = (day, kind, int(i))
+                self.buf.usage[k] = self.buf.usage.get(k, 0) + 1
+        self._touch(40 * len(ids))
 
     def stage_state(self, key: str, fn: Callable[[], None]) -> None:
         with self.lock:
@@ -499,6 +508,10 @@ class Coordinator:
                         from qnapnewshub import translate
 
                         translate.apply(db, snap.translations, snap.trcache)
+                    if snap.usage:
+                        from qnapnewshub import mapgrav
+
+                        mapgrav.apply_usage(db, snap.usage)
                     if snap.fetchlog:
                         fetchlog.record(db, snap.fetchlog, commit=False)
                     from qnapnewshub import docstore
@@ -598,6 +611,8 @@ class Coordinator:
             into.translations[k] = merged
         for k, v in older.trcache.items():
             into.trcache.setdefault(k, v)
+        for k, v in older.usage.items():
+            into.usage[k] = into.usage.get(k, 0) + v
         for k, v in older.token_used.items():
             into.token_used.setdefault(k, v)
         into.bytes += older.bytes

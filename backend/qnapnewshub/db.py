@@ -429,6 +429,28 @@ class EntityCommunity(Base):
     community_id: Mapped[int] = mapped_column(Integer, index=True)
 
 
+class EntityUsage(Base):
+    """点（Things）の使われ方の日ごとの集計（地図の大きさ＝重要度の材料）。kind: search＝検索で当たった回数・card＝カードを開いた回数。メモリで数え、まとめ書きで足す。"""
+
+    __tablename__ = "entity_usage_daily"
+
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True, index=True)
+    kind: Mapped[str] = mapped_column(String(8), primary_key=True)
+    n: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class MapLayout(Base):
+    """全体の地図の保存した座標（夜に ForceAtlas2 で計算。mapgrav.py）と重要度（0〜1）。public の物だけ。版は news_meta の map_layout_ver。"""
+
+    __tablename__ = "map_layout"
+
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True)
+    x: Mapped[float] = mapped_column(Float, default=0.0)
+    y: Mapped[float] = mapped_column(Float, default=0.0)
+    importance: Mapped[float] = mapped_column(Float, default=0.0)
+
+
 class MentionCandidate(Base):
     """リンクされていない言及: 物の名前・別名が記事の題・抜粋に出ているのに article_entities に無い記事（夜に計算）。status: candidate・confirmed（押して確定）・dismissed（違う）。"""
 

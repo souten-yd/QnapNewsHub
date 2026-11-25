@@ -4,11 +4,12 @@ import { api } from "./client";
 import type { EntityType } from "./news";
 import type { GraphEdge, KnowledgeCardData, RelStatus, RelType } from "./kg";
 
-export interface OverviewNode { id: number; name: string; type: EntityType; article_count: number; degree: number; recent: number; community: number }
+/** x・y・importance は夜に計算して保存した配置（ForceAtlas2）と重要度（0〜1）。保存が無い点には付かない（画面が近くから置く）。 */
+export interface OverviewNode { id: number; name: string; type: EntityType; article_count: number; degree: number; recent: number; community: number; x?: number; y?: number; importance?: number }
 export interface OverviewEdge { id: number; source: number; target: number; type: RelType; directed: boolean; confidence: number; status: RelStatus; evidence_count: number; last_at: string }
 export interface CommunityBrief { id: number; name: string; size: number; rep_id: number; shown: number; top: { id: number; name: string }[] }
 export interface Overview {
-  nodes: OverviewNode[]; edges: OverviewEdge[]; isolated: OverviewNode[]; communities: CommunityBrief[]; truncated: boolean; limit: number;
+  nodes: OverviewNode[]; edges: OverviewEdge[]; isolated: OverviewNode[]; communities: CommunityBrief[]; truncated: boolean; limit: number; layout?: { version: number; at: string; placed: number } | null;
   totals: { with_relations: number; edges: number; shown_nodes: number; shown_edges: number };
 }
 export interface CommunityMembers { id: number; name: string; size: number; nodes: OverviewNode[]; edges: OverviewEdge[] }

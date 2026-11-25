@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from qnapnewshub import channels as channels_mod
 from qnapnewshub import db as news_db
-from qnapnewshub import entities, entity_merge, kg_view, rcache, things, writer
+from qnapnewshub import entities, entity_merge, kg_view, mapgrav, rcache, things, writer
 from qnapnewshub.auth import AuthUser as User
 from qnapnewshub.auth import current_user as get_current_user
 from qnapnewshub.auth import read_user, require_admin
@@ -31,7 +31,10 @@ CONTEXT_IDS_MAX = 20
 def list_things(q: str = Query("", max_length=100), type: str = Query("", max_length=16), days: int = Query(0, ge=0, le=3650),
                 sort: str = Query("count", pattern="^(count|recent)$"), limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0, le=100000),
                 confidential: bool = False, user: User = Depends(get_current_user), db: Session = Depends(get_news_db)):
-    return entities.list_entities(db, q=q, kind=type, days=days, sort=sort, limit=limit, offset=offset, scopes=scopes_for(user, confidential))
+    found = entities.list_entities(db, q=q, kind=type, days=days, sort=sort, limit=limit, offset=offset, scopes=scopes_for(user, confidential))
+    if q.strip() and offset == 0:
+        mapgrav.note_search([int(i["id"]) for i in found.get("items", [])])
+    return found
 
 
 @router.get("/lookup")
@@ -40,6 +43,7 @@ def lookup(q: str = Query(min_length=1, max_length=100), limit: int = Query(5, g
     """名前から Things の id を引く（LLM が context を呼ぶ前の入口）。1 行の定義つき。"""
     scopes = scopes_for(user, confidential, sensitivity)
     rows = entities.list_entities(db, q=q, limit=limit, scopes=scopes)["items"]
+    mapgrav.note_search([int(r["id"]) for r in rows])
     defs = things.definitions(db, [r["id"] for r in rows])
     return {"items": [{"id": r["id"], "name": r["name"], "type": r["type"], "article_count": r["article_count"], "definition": defs.get(r["id"], "")} for r in rows]}
 
@@ -180,6 +184,7 @@ def get_card(entity_id: int, confidential: bool = False, user: User = Depends(ge
     found = kg_view.card(db, entity_id, scopes_for(user, confidential))
     if found is None:
         raise HTTPException(status_code=404, detail="その Things は見つかりません")
+    mapgrav.note_card(entity_id)
     return found
 
 
@@ -188,6 +193,7 @@ def get_thing(entity_id: int, confidential: bool = False, user: User = Depends(g
     found = entities.detail(db, entity_id, scopes=scopes_for(user, confidential))
     if found is None:
         raise HTTPException(status_code=404, detail="その Things は見つかりません")
+    mapgrav.note_card(entity_id)
     return found
 
 

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from qnapnewshub import entities
 from qnapnewshub.kg_router import scopes_for
 from qnapnewshub.auth import AuthUser as User
+from qnapnewshub import mapgrav
 from qnapnewshub.auth import current_user as get_current_user
 from qnapnewshub.db import get_news_db
 
@@ -18,7 +19,10 @@ def list_entities(q: str = Query("", max_length=100), type: str = Query("", max_
                   sort: str = Query("count", pattern="^(count|recent)$"), limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0, le=100000),
                   confidential: bool = False, user: User = Depends(get_current_user), db: Session = Depends(get_news_db)):
     """物の一覧。q（名前・別名の部分一致）・type（種類）・days（その日数のうちに記事が出た物）・sort（count＝記事の数・recent＝最近出た順）。"""
-    return entities.list_entities(db, q=q, kind=type, days=days, sort=sort, limit=limit, offset=offset, scopes=scopes_for(user, confidential))
+    found = entities.list_entities(db, q=q, kind=type, days=days, sort=sort, limit=limit, offset=offset, scopes=scopes_for(user, confidential))
+    if q.strip() and offset == 0:      # 検索で当たった回数（地図の点の大きさの材料。メモリで数えてまとめ書き）
+        mapgrav.note_search([int(i["id"]) for i in found.get("items", [])])
+    return found
 
 
 @router.get("/{entity_id}")
@@ -27,4 +31,5 @@ def get_entity(entity_id: int, confidential: bool = False, user: User = Depends(
     found = entities.detail(db, entity_id, scopes=scopes_for(user, confidential))
     if found is None:
         raise HTTPException(status_code=404, detail="その物は見つかりません")
+    mapgrav.note_card(entity_id)
     return found

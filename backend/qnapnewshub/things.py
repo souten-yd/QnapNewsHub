@@ -26,8 +26,8 @@ from sqlalchemy import delete, func, insert, or_, select, text
 from sqlalchemy.orm import Session
 
 from qnapnewshub import kg, searchindex
-from qnapnewshub.db import (ArticleEntity, Claim, Community, Document, Entity, EntityAlias, EntityCard, EntityCommunity, Event, EventArticle, Evidence, MentionCandidate, MetricPoint,
-                            NewsDocument, NewsItem, Relationship)
+from qnapnewshub.db import (ArticleEntity, Claim, Community, Document, Entity, EntityAlias, EntityCard, EntityCommunity, Event, EventArticle, Evidence, MapLayout, MentionCandidate, MetricPoint,
+                            NewsDocument, NewsItem, NewsMeta, Relationship)
 from qnapnewshub.extract import normalize_key
 
 _UTC = timezone.utc
@@ -632,7 +632,8 @@ def overview(db: Session, scopes: list[str], *, limit: int = OVERVIEW_LIMIT_DEFA
     for c in comms:
         c["top"] = [{"id": i, "name": names[i]} for i in c["top"] if i in names and (i in shown or True)]
         c["shown"] = members_shown.get(c["id"], 0)
-    return {"nodes": nodes, "edges": edges, "isolated": iso, "communities": comms,
+    layout = attach_layout(db, nodes)
+    return {"nodes": nodes, "edges": edges, "isolated": iso, "communities": comms, "layout": layout,
             "totals": {"with_relations": total_with, "edges": total_edges, "shown_nodes": len(nodes), "shown_edges": len(edges)},
             "truncated": total_with > len(nodes) or truncated_edges, "limit": limit}
 
@@ -647,6 +648,22 @@ def _edge(r) -> dict:
 
 def _node(e: Entity, d: tuple[int, int], community: int) -> dict:
     return {"id": e.id, "name": e.name, "type": e.type, "article_count": int(e.article_count or 0), "degree": d[0], "recent": d[1], "community": community}
+
+
+def attach_layout(db: Session, nodes: list[dict]) -> dict | None:
+    """保存した座標（夜に ForceAtlas2 で計算）と重要度を、点に x・y・importance として付ける。保存が無い点には付けない（画面が近くから置く）。版（map_layout_ver）と計算した時刻を返す。"""
+    ids = [n["id"] for n in nodes]
+    got: dict[int, tuple[float, float, float]] = {}
+    for i in range(0, len(ids), 800):
+        for e, x, y, imp in db.execute(select(MapLayout.entity_id, MapLayout.x, MapLayout.y, MapLayout.importance).where(MapLayout.entity_id.in_(ids[i:i + 800]))):
+            got[int(e)] = (float(x), float(y), float(imp))
+    for n in nodes:
+        if n["id"] in got:
+            n["x"], n["y"], n["importance"] = got[n["id"]]
+    ver, at = db.get(NewsMeta, "map_layout_ver"), db.get(NewsMeta, "map_layout_at")
+    if ver is None or not ver.value:
+        return None
+    return {"version": int(ver.value) if ver.value.isdigit() else 0, "at": at.value if at else "", "placed": len(got)}
 
 
 def _loads_ids(raw: str) -> list[int]:
@@ -681,7 +698,9 @@ def community_members(db: Session, community_id: int, scopes: list[str], *, limi
         rows = db.connection().exec_driver_sql(f"SELECT {_REL} FROM relationships r WHERE r.sensitivity IN ({sm}) AND r.subject_id IN ({marks}) AND r.object_id IN ({marks}) "
                                                f"ORDER BY r.confidence DESC, r.id LIMIT 3000", (*scopes, *top, *top)).fetchall()
         edges = [_edge(r) for r in rows]
-    return {"id": c.id, "name": c.name, "size": c.size, "nodes": [_node(ents[i], (deg[i][0], 0), c.id) for i in top], "edges": edges}
+    nodes = [_node(ents[i], (deg[i][0], 0), c.id) for i in top]
+    attach_layout(db, nodes)
+    return {"id": c.id, "name": c.name, "size": c.size, "nodes": nodes, "edges": edges}
 
 
 # ---- 主題の入口（MOC） ----

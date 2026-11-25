@@ -44,6 +44,8 @@ DEFAULTS: dict = {
     # ControlDeck とのつなぎ（link.py）。allow_confidential は **つなぐとき** に読む: true でつなぐと、そのトークンは機密（confidential）の区分も読める
     # （要求のたびに confidential=true を付けたときだけ）。既定は false＝公開（public）だけ。つないだあとに変えても、つないだ相手は変わらない（つなぎ直す）
     "link": {"allow_confidential": False},
+    # 知識の地図の「重力」（mapgrav.py）。点の大きさ＝重要度の混ぜ方（検索で当たった回数・カードを開いた回数・直近の記事での出現・関係の中心性）と、数える日数
+    "map": {"window_days": 30, "weights": {"search": 0.25, "card": 0.15, "recent": 0.35, "centrality": 0.25}},
     # モデルは OpenRouter のモデル名（無料は :free で終わる）。下ごしらえは 20 件ずつ・1 日 daily_limit 回・1 分 minute_limit 回まで（llm.py）
     "llm": {"digest_model": DEFAULT_MODEL, "gist_enabled": False, "gist_model": DEFAULT_MODEL, "digest_focus": "", "prep_enabled": True,
             "prep_model": DEFAULT_MODEL, "prep_max_per_run": 100, "daily_limit": DEFAULT_DAILY_LIMIT, "minute_limit": DEFAULT_MINUTE_LIMIT,
@@ -244,6 +246,16 @@ def _translate(tr: dict) -> dict:
             "glossary": _glossary(tr.get("glossary")), "keep": _terms(tr.get("keep"), "そのまま残す語"), "max_en_ratio": ratio}
 
 
+def _float01(v: object, label: str) -> float:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{label}は数です") from None
+    if not 0.0 <= x <= 1.0:
+        raise ConfigError(f"{label}は 0〜1 です")
+    return x
+
+
 def normalize(raw: object) -> dict:
     if not isinstance(raw, dict):
         raise ConfigError("設定の形が違います")
@@ -285,6 +297,10 @@ def normalize(raw: object) -> dict:
     out["body"] = {"enabled": _bool(body, "enabled", True), "per_day": _int(body.get("per_day", 200), "本文の取り出しの 1 日の件数", 0, 5000),
                    "per_minute": _int(body.get("per_minute", 6), "本文の取り出しの 1 分の件数", 1, 60)}
     out["translate"] = _translate(_table(raw, "translate"))
+    mp = _table(raw, "map")
+    mw = _table(mp, "weights")
+    out["map"] = {"window_days": _int(mp.get("window_days", 30), "地図の重要度を数える日数", 1, 365),
+                  "weights": {k: _float01(mw.get(k, d), f"地図の重み（{k}）") for k, d in DEFAULTS["map"]["weights"].items()}}
     lk = _table(raw, "link")
     out["link"] = {"allow_confidential": _bool(lk, "allow_confidential", False)}
     llm = _table(raw, "llm")
