@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 
 export interface AuthStatus { setup_needed: boolean; setup_token_required?: boolean; authenticated: boolean; username: string | null }
-export interface HubSettings { host: string; port: number; cookie_secure: boolean }
+export interface HubSettings { host: string; port: number; cookie_secure: boolean; discovery_port: number }
 
 export const AUTH_KEY = ["auth", "status"] as const;
 

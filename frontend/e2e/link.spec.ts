@@ -39,10 +39,27 @@ for (const vp of SIZES) {
         await expect(card.getByTestId("link-peers")).toContainText("最後に来た時刻");
       });
 
+      test("LAN の URL の候補が写せる形で出る（127.0.0.1 待ち受けなら出ない）", async ({ page }) => {
+        const state = newState();
+        await mockApi(page, state);
+        await page.goto("/settings");
+        const card = page.locator("section", { has: page.locator("#link-controldeck") });
+        await card.scrollIntoViewIfNeeded();
+        await expect(card.getByTestId("link-lan-url")).toHaveText(["http://192.0.2.10:8787", "http://198.51.100.7:8787"]);
+        await expect(card.getByTestId("link-lan-note")).toContainText("自動で答えます");
+        await expectNoHorizontalOverflow(page);
+        await shot(page, `link-lan-${vp.name}-${scheme}`);
+        state.link.lan = { lan: false, discovery_port: 8788, answering: false, urls: [] };
+        await page.reload();
+        await card.scrollIntoViewIfNeeded();
+        await expect(card.getByTestId("link-lan-none")).toBeVisible();
+        await expect(card.getByTestId("link-lan-url")).toHaveCount(0);
+      });
+
       test("つないだ相手の一覧・受け取った鍵（値は出ない）・仕事の数・取り消しの確認", async ({ page }) => {
         const state = newState({ link: { fingerprint: "1a2b-3c4d-5e6f-7a8b-9c0d", peers: structuredClone(LINK_PEERS), pairing: null, allowed_secrets: ["openrouter"],
           secrets: [{ name: "openrouter", received_at: new Date().toISOString(), peer_id: 2, peer: "見本の ControlDeck", present: true }],
-          jobs: { queued: 4, leased: 2, expired: 1, dead: 0, done_24h: 37, queued_by_kind: { image: 4 } } } });
+          jobs: { queued: 4, leased: 2, expired: 1, dead: 0, done_24h: 37, queued_by_kind: { image: 4 } }, lan: { lan: false, discovery_port: 8788, answering: false, urls: [] } } });
         await mockApi(page, state);
         await page.goto("/settings");
         const card = page.locator("section", { has: page.locator("#link-controldeck") });
@@ -72,7 +89,7 @@ for (const vp of SIZES) {
         const state = newState({ items: [{ ...ITEMS[0], image_url: "https://img.example.test/1.png", image_ai: true }, ...ITEMS.slice(1)],
           link: { fingerprint: "1a2b-3c4d-5e6f-7a8b-9c0d", peers: structuredClone(LINK_PEERS), pairing: null, allowed_secrets: ["openrouter"],
             secrets: [{ name: "openrouter", received_at: new Date().toISOString(), peer_id: 2, peer: "見本", present: true }],
-            jobs: { queued: 0, leased: 2, expired: 1, dead: 0, done_24h: 5, queued_by_kind: {} } } });
+            jobs: { queued: 0, leased: 2, expired: 1, dead: 0, done_24h: 5, queued_by_kind: {} }, lan: { lan: false, discovery_port: 8788, answering: false, urls: [] } } });
         await mockApi(page, state);
         await page.goto("/diagnostics");
         const diag = page.getByTestId("diag-link");

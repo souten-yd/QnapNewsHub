@@ -256,6 +256,9 @@ function HubCard() {
         <label className="block text-xs text-zinc-500">ポート（1024〜65535）
           <input type="number" aria-label="ポート" min={1024} max={65535} value={draft.port} onChange={(e) => setDraft({ ...draft, port: Number(e.target.value) })} className={`${field} mt-1 w-full`} /></label>
       </div>
+      <label className="block text-xs text-zinc-500">発見の応答の UDP ポート（0 で切。1024〜65535）
+        <input type="number" aria-label="発見のポート" min={0} max={65535} value={draft.discovery_port} onChange={(e) => setDraft({ ...draft, discovery_port: Number(e.target.value) })} className={`${field} mt-1 w-40`} /></label>
+      <p className="text-[11px] text-zinc-500">LAN に出しているときだけ、ControlDeck の「探す」に URL を教えます（秘密は出しません）。127.0.0.1 のときは動きません。</p>
       <Toggle label="https のときだけ cookie を送る（secure）" hint="TLS の後ろで使うときに入れます" value={draft.cookie_secure} onChange={(v) => setDraft({ ...draft, cookie_secure: v })} />
       <button type="button" onClick={commit} disabled={!dirty || save.isPending} className={primary}>保存</button>
     </Card>

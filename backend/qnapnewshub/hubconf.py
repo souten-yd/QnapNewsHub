@@ -1,6 +1,6 @@
 """ニュースハブ本体の設定（data_dir/hub.json。待ち受けの host・port、cookie の secure）。変えたら再起動で効く。
 
-既定は 127.0.0.1（この PC だけ）。LAN に出すときだけ利用者が 0.0.0.0 にする（外へ出すなら QNAP の逆プロキシと TLS を使う。設計 2.3）。
+既定は 127.0.0.1（この PC だけ）。LAN に出すときだけ利用者が 0.0.0.0 にする。discovery_port は LAN の発見の応答（UDP。0 で切。discovery.py）（外へ出すなら QNAP の逆プロキシと TLS を使う。設計 2.3）。
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from qnapnewshub.sources import ConfigError
 
 HOSTS = ("127.0.0.1", "0.0.0.0")
 _lock = threading.Lock()
-DEFAULTS = {"host": DEFAULT_HOST, "port": DEFAULT_PORT, "cookie_secure": False}
+DEFAULTS = {"host": DEFAULT_HOST, "port": DEFAULT_PORT, "cookie_secure": False, "discovery_port": 8788}
 
 
 def _path():
@@ -36,6 +36,13 @@ def normalize(raw: object) -> dict:
     if not 1024 <= port <= 65535:
         raise ConfigError("ポートは 1024〜65535 です")
     out["port"] = port
+    try:
+        udp = int(raw.get("discovery_port", out["discovery_port"]))
+    except (TypeError, ValueError):
+        raise ConfigError("発見のポートは整数です") from None
+    if udp != 0 and not 1024 <= udp <= 65535:
+        raise ConfigError("発見のポートは 0（切）か 1024〜65535 です")
+    out["discovery_port"] = udp
     out["cookie_secure"] = bool(raw.get("cookie_secure", out["cookie_secure"]))
     return out
 

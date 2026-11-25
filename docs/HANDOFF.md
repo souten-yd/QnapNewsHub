@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-25（軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
+最終更新: 2026-11-25（LAN での発見の応答〔feat/lan-discovery〕・軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -39,10 +39,10 @@
 | Things の脳（feat/things-brain） | 画面の「物」を **Things** へ（API の道は互換）・**カードの帯**（定義・状態・確かさ〔根拠の数だけで決める〕・根拠の数と新しさ）・**関係を型ごとに**（上位・下位・仲間・使う・使われる・置き換え・矛盾）・夜のカードの LLM に**定義・状態・未解決の問い・反対の見方**（材料に無い数字・英字の名前を捨てる）・主な数値・**つなぐ候補**（リンクされていない言及。押すと確定）・**まとまり（Louvain）と MOC**（`/moc`）・**全体の地図**（最初に主要 1,500 点・検索は強調／絞る・ローカル深さ 1〜3・孤立した点の切り替え）・**LLM の脳の API**（`/things/{id}/context`・`POST /things/context`・`/things/lookup`）・Obsidian の書き出し（frontmatter・Connections・Open Questions・`_MOC/`・README）。`things.py`・`things_router.py`・`features/knowledge/mapLayout.ts`・`pages/Moc.tsx`。試験 11 件・性能 P95 73ms 以下（10 万件の模擬）。ARCHITECTURE 6 章の続き・DESIGN 16 |
 | 検索の評価の物差し（feat/retrieval-eval） | **統合の段 I0 の前倒し**（`backend/tools/eval_retrieval/`・`./hub.sh eval-retrieval --data <評価用 DB のコピー> --questions <json> --out <md> [--build]`）: 評価のハブの DB から**規則と雛形だけで**（LLM なし）問いを作る（事実・比較・変化・複数の文書・関係・日本語の問い→英語の記事の 6 種類。各問いに文書・物・主張・関係・イベントの正解）。5 つの道（①全文 ②種 ③種＋周り ④種＋局所 PPR ⑤物の文脈）を既存 API で流し、Recall@5/10/20・MRR・nDCG@10・**文脈の密度**（1,000 トークンあたりの正解の根拠）・時間 P50/P95 を種類ごとに出す。**問いと結果は実データ由来なのでリポジトリに入れない**（非公開の評価の置き場）。DESIGN 18 章 |
 | つながりの精度（feat/link-precision） | **つなぐ候補の雑音を減らした**（一般語・長い名前の一部・大文字小文字・媒体名・種類／短い語。実データ 1,089 → 193 件・無作為 30 件の誤り 14 → 4）・**名寄せ**（規則で確かな組は夜に自動、迷う組は候補で管理者が確定。記事・主張・関係・別名・集計を付け替え、`entity_merges` の記録で完全に戻せる）・**まとまりの名前**（番号でなく「代表・特徴の語」）・**全体の地図の名前の出し方**（上位 24 点だけ・拡大するほど出す）。`entity_merge.py`・`things.py`・`pages/Entities.tsx`。試験 9 件。ARCHITECTURE 6 章の続き・DESIGN 18 |
-| 検索の評価の物差し（feat/retrieval-eval） | **統合の段 I0 の前倒し**（`backend/tools/eval_retrieval/`・`./hub.sh eval-retrieval --data <評価用 DB のコピー> --questions <json> --out <md> [--build]`）: 評価のハブの DB から**規則と雛形だけで**（LLM なし）問いを作る（事実・比較・変化・複数の文書・関係・日本語の問い→英語の記事の 6 種類。各問いに文書・物・主張・関係・イベントの正解）。5 つの道（①全文 ②種 ③種＋周り ④種＋局所 PPR ⑤物の文脈）を既存 API で流し、Recall@5/10/20・MRR・nDCG@10・**文脈の密度**（1,000 トークンあたりの正解の根拠）・時間 P50/P95 を種類ごとに出す。**問いと結果は実データ由来なのでリポジトリに入れない**（非公開の評価の置き場）。DESIGN 17 章 |
 | 検索の改善（feat/retrieval-density） | 物差しの基準値の弱い所 3 点: ①文脈の密度（text の context は URL でなく「出どころ 日付 d<id>」・evidence に `label`・`compact`）②**主張を種に**（`claim_fts_*` の全文索引・`/retrieve/seeds` が `kind: claim`）③**周りの点数**（`/graph/neighbors` に `seed_scores`・`q` → 辺・物の `score`。必ず元の種より低い）。③ R@10 0.634→0.762・主張 R@20 0→0.85・⑤ 文脈 1068→752 トークン。下がった所（② 複数の文書など）と理由は評価の置き場。ARCHITECTURE 8 章の続き・DESIGN 17.1 |
 | 軽い翻訳（feat/translate） | **QuickMT 英→日（CTranslate2 int8）**（`translate.py`・`translate_flow.py`・`translate_router.py`・表 `news_translation`・`news_tr_cache`）: エンジンの枠・モデルを利用者の操作で取得（設定の「翻訳」・版と sha256 固定）・用語の保護（印 `ZQnZ`）と対訳表・訳の検査（落ちた文は原文のまま〔未訳〕）・文ごとのキャッシュ・全文検索の索引に訳を足す（「概要（日本語）」の列）・LLM が使えないときは題と本文だけ・重要な記事の本文は空き時間に 1 日の上限まで・開いたとき訳す API・`translate_hq` の仕事（実行は ControlDeck 側）・画面の「機械翻訳」の印と原文・診断の節。ARCHITECTURE 8.5・DESIGN 19。**物差しでは点数は変わらない**（飽和。評価の置き場の md）。依存は ctranslate2 4.6.2・sentencepiece 0.2.0（manylinux2014 の最後の版。上げない） |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
+| 発見の応答（feat/lan-discovery） | LAN に出しているときだけ UDP 8788 で ControlDeck の「探す」に答える（名前・版・URL の候補・公開鍵の指紋。秘密なし・1 秒あたりの上限つき）。設定の「待ち受け」で切／ポート変更・「つなぐ」の画面に LAN の URL を表示。DESIGN 3.5。落とし穴: QTS のファイアウォールが UDP を止めると見つからない（URL を手で入れれば従来どおり） |
 
 - 試験: backend 376 件（v0.7 前半の時点）・E2E 223 件（v0.5 で 211 件・v0.7 前半で `connectors.spec.ts` 12 件を足した）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
 - 実測（開発の PC）: 待機中の書き込み 0 バイト／10 分、お休み中も 0、常駐 114〜190MB、待機 CPU 0.1〜0.4%。

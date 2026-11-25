@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from qnapnewshub import artifacts, changes, jobs, link
+from qnapnewshub import artifacts, changes, discovery, jobs, link
 from qnapnewshub.auth import AuthUser, link_user, require_admin
 from qnapnewshub.auth import current_user as get_current_user
 from qnapnewshub.db import get_news_db
@@ -38,7 +38,7 @@ def _raise(exc: Exception):
 async def link_status(user: AuthUser = Depends(require_admin), db: Session = Depends(get_news_db)):
     """つなぐ画面: 公開鍵の指紋・番号の状態・つないだ相手・受け取った鍵の名前・仕事の数（値は出さない）。"""
     ident = await asyncio.to_thread(link.hub_identity)
-    return {"fingerprint": ident["fingerprint"], **await asyncio.to_thread(link.summary), "jobs": jobs.summary(db), "allowed_secrets": sorted(link.ALLOWED_SECRETS)}
+    return {"fingerprint": ident["fingerprint"], **await asyncio.to_thread(link.summary), "jobs": jobs.summary(db), "allowed_secrets": sorted(link.ALLOWED_SECRETS), "lan": await asyncio.to_thread(discovery.status)}
 
 
 @router.post("/link/pairing")
