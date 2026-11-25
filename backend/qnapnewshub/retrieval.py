@@ -86,8 +86,8 @@ def _doc_seeds(db: Session, q: str, terms: list[str], *, scopes: list[str], doc_
     out: list[dict] = []
     tri, word, short = _split(terms)
     want_news = (not doc_kinds or "news" in doc_kinds) and "public" in scopes
-    if want_news and (tri or word):
-        hits = searchindex.search_any(db.connection(), tri, word, limit=max(limit * 4, 100))
+    hits = searchindex.search_any(db.connection(), tri, word, limit=max(limit * 4, 100), short=short) if want_news and (tri or word or short) else []
+    if want_news and (tri or word or short):
         if hits:
             top = hits[0][1] or 1.0
             ids = [i for i, _ in hits]
@@ -112,7 +112,7 @@ def _doc_seeds(db: Session, q: str, terms: list[str], *, scopes: list[str], doc_
                             "position": _position(n, terms)})
                 if len(out) >= limit:
                     break
-    elif want_news and short and not budget.expired():      # 短い語だけ: 新しい題から LIKE（時間の上限つき）
+    if want_news and short and not (tri or word) and not hits and not budget.expired():      # 短い語だけで、索引（短い語の広げ）でも見つからない: 新しい題から LIKE（時間の上限つき）
         conds = [visible(0), NewsItem.kind != "event", *[NewsItem.title.contains(t, autoescape=True) for t in short]]
         if since:
             conds.append(NewsItem.published_at >= kg._naive(since))
@@ -163,7 +163,7 @@ CLAIM_MIN_RATIO = 0.8      # 主張の種は、最上位の BM25 のこの割合
 def _claim_seeds(db: Session, terms: list[str], *, scopes: list[str], since: datetime | None, until: datetime | None, limit: int, budget: Budget) -> list[dict]:
     """主張（claims）を直接引く: 主張の本文・値と、主語の物の名前・別名の全文索引（trigram＋英語の BM25。記事の索引と同じ作り）を、問いの語の OR で。
     各主張に、主語の物と根拠の文書（evidences → documents。区分の範囲のものだけ。最大 3）を付ける（主張から根拠の文書へ辿れる）。点数は最上位を 1 とした割合。"""
-    tri, word, _ = _split(terms)
+    tri, word, _ = _split(terms)      # 短い語（3 文字未満）は主張の検索へは広げない（広げると、短い語だけの問いで主張の種が上位を占めて文書を押し出した。a5 の測定）
     if not (tri or word) or budget.expired():
         return []
     hits = searchindex.search_claims(db.connection(), tri, word, limit=max(limit * 4, 60))
@@ -198,6 +198,64 @@ def _claim_seeds(db: Session, terms: list[str], *, scopes: list[str], since: dat
         if len(out) >= limit:
             break
     return out
+
+
+CLAIM_DOC_FACTOR = 0.8      # 命題（主張）が当たった記事を文書の種に足すときの点数 = 主張の点数 × この値
+CLAIM_ENT_FACTOR = 0.6      # 同じく、主張の主語の物を物の種に足すときの点数 = 主張の点数 × この値
+CLAIM_BONUS = 0.1           # 全文などで既に種になっている文書・物へは、主張の点数 × この値を加点する（重複は足さない。上限 1）
+CLAIM_SUPPORT_TOP = 3       # 文書・物へ伝える主張の数（主張の点数の高い順）
+CLAIM_SUPPORT = True
+
+
+def _claim_support(db: Session, items: list[dict], *, scopes: list[str], want: list[str], limit: int, since: datetime | None, until: datetime | None) -> list[dict]:
+    """命題（主張）の当たりを、文書・物の種へ伝える（Dense X Retrieval・HippoRAG 2 の考え。命題の単位で当たった記事・物を種に足す）。
+    上位 CLAIM_SUPPORT_TOP 件の主張それぞれについて、根拠の文書（最も確かな 1 件）を文書の種に、主語の物を物の種に足す。既に同じ種があれば点数に加点するだけで、増やさない（重複の抑制）。
+    足した種の match.via は "claim"。区分（scopes）の外の文書・物は、主張の側で既に外れている（_claim_seeds）。items は書き換えて、足した種のリストを返す。"""
+    clms = [i for i in items if i["kind"] == "claim"][:CLAIM_SUPPORT_TOP]
+    if not clms:
+        return []
+    added: list[dict] = []
+    have = {(i["kind"], i["id"]): i for i in items if i["kind"] in ("document", "entity") and i.get("id") is not None}
+
+    def push(kind: str, key: int, score: float, make) -> None:
+        cur = have.get((kind, key))
+        if cur is not None:
+            cur["score"] = round(min(1.0, cur["score"] + CLAIM_BONUS * score / CLAIM_DOC_FACTOR), 4)
+            return
+        item = make()
+        if item is not None:
+            item["score"] = round(score, 4)
+            have[(kind, key)] = item
+            added.append(item)
+
+    if "entity" in want:
+        ent_ids = [c["entity"]["id"] for c in clms if c.get("entity")]
+        rows = {e.id: e for e in db.scalars(select(Entity).where(Entity.id.in_(ent_ids), Entity.sensitivity.in_(scopes)))} if ent_ids else {}
+        for c in clms:
+            e = rows.get((c.get("entity") or {}).get("id"))
+            if e is None or (since and e.last_seen and kg._naive(e.last_seen) < kg._naive(since)) or (until and e.first_seen and kg._naive(e.first_seen) > kg._naive(until)):
+                continue
+            push("entity", e.id, c["score"] * CLAIM_ENT_FACTOR, lambda e=e, c=c: {
+                "kind": "entity", "id": e.id, "name": e.name, "type": e.type, "article_count": int(e.article_count or 0), "first_seen": kg.iso(e.first_seen), "last_seen": kg.iso(e.last_seen),
+                "sensitivity": e.sensitivity, "match": {"via": "claim", "terms": c["match"]["terms"]}, "position": {}})
+    if "document" in want:
+        doc_ids = [c["documents"][0]["id"] for c in clms if c.get("documents")]
+        docs = {d.id: d for d in db.scalars(select(Document).where(Document.id.in_(doc_ids), Document.sensitivity.in_(scopes)))} if doc_ids else {}
+        art = dict(db.execute(select(NewsDocument.document_id, NewsDocument.news_item_id).where(NewsDocument.document_id.in_(list(docs)))).all()) if docs else {}
+        news = {n.id: n for n in db.scalars(select(NewsItem).where(NewsItem.id.in_(list(art.values())), visible(0), NewsItem.kind != "event"))} if art else {}
+        for c in clms:
+            d = docs.get(c["documents"][0]["id"]) if c.get("documents") else None
+            if d is None or (art.get(d.id) and art[d.id] not in news):
+                continue
+            when = kg.iso(d.published_at)
+            if (since and when and when < kg.iso(since)) or (until and when and when > kg.iso(until)):
+                continue
+            n = news.get(art.get(d.id, 0))
+            push("document", d.id, c["score"] * CLAIM_DOC_FACTOR, lambda d=d, n=n, c=c: {
+                "kind": "document", "id": d.id, "article_id": n.id if n else None, "doc_kind": d.kind, "title": d.title, "url": d.url, "source": d.source, "published_at": when,
+                "sensitivity": d.sensitivity, "bm25": 0.0, "match": {"via": "claim", "terms": c["match"]["terms"]},
+                "position": {"field": "claim", "start": None, "end": None, "term": "", "snippet": c["text"][:200]}})
+    return added
 
 
 def _entity_seeds(db: Session, q: str, terms: list[str], *, scopes: list[str], since: datetime | None, until: datetime | None, limit: int, budget: Budget) -> list[dict]:
@@ -295,7 +353,16 @@ def seeds(db: Session, q: str, *, kinds: list[str] | None = None, doc_kinds: lis
     if "entity" in want:
         items += ents
     if "claim" in want:
-        items += _claim_seeds(db, terms, scopes=scopes, since=since, until=until, limit=limit, budget=budget)
+        clm_items = _claim_seeds(db, terms, scopes=scopes, since=since, until=until, limit=limit, budget=budget)
+        if CLAIM_SUPPORT and clm_items:
+            added = _claim_support(db, items + clm_items, scopes=scopes, want=want, limit=limit, since=since, until=until)
+            items += added
+            for kind in {a["kind"] for a in added}:      # 種類ごとの上限（limit）を超えた分は、点数の低い順に落とす
+                same = sorted((i for i in items if i["kind"] == kind), key=lambda r: -r["score"])
+                items = [i for i in items if i["kind"] != kind] + same[:limit]
+            if "entity" in want:
+                ents = [i for i in items if i["kind"] == "entity"]
+        items += clm_items
     if "event" in want and "public" in scopes:
         items += _event_seeds(db, terms, ents, since=since, until=until, limit=limit, budget=budget)
     items.sort(key=lambda r: (-r["score"], r["kind"], r["id"] or 0))

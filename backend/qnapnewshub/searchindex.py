@@ -159,6 +159,7 @@ def ensure(conn) -> bool:
         return False
     _create_triggers(conn)
     ensure_claims(conn)
+    ensure_vocab(conn)
     if fresh or legacy:
         top = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM news_items")).scalar() or 0
         if top:      # 既存の行は、まとめ書きの単位の仕事で入れる（開くとき重い処理をしない）
@@ -168,6 +169,47 @@ def ensure(conn) -> bool:
             _set_meta(conn, "search_cursor", "-1")
         _set_meta(conn, "search_v", VERSION)
     return True
+
+
+TRI_V, CLAIM_TRI_V = "news_fts_tri_v", "claim_fts_tri_v"
+SHORT_PREFIX_MAX = 120      # 3 文字未満の語 1 つあたり、広げる trigram の語（その語で始まる 3 文字）の数の上限（文書数の多い順）
+SHORT_DF_RATIO = 0.04       # 広げた語の文書数の合計が全記事のこの割合を超える語（「発表」のようにどこにでも出る語）は使わない
+SHORT_MAX = 3               # 1 つの問いで広げる短い語の数
+SHORT_BOOST = 0.5           # 広げた短い語の当たりの加点の重み（ほかの語に一致した文書への加点）
+SHORT_TITLE = 1.0           # 題・物の名前の列で当たった短い語への、追加の重み
+SHORT_EXPAND = True         # 試験・評価で切り替えるため（False なら短い語を広げない＝今までの動き）
+
+
+def ensure_vocab(conn) -> None:
+    """trigram の索引の語の表（fts5vocab。記憶域を持たない。冪等）。3 文字未満の語（「認証」）を、その語で始まる trigram の語（「認証を」「認証基」…）へ広げるために引く。
+    既存の DB でも、開くときに表を 1 つ作るだけで済む（索引の作り直しは要らない）。作れなければ何もしない（短い語は今までどおり LIKE）。"""
+    try:
+        for v, t in ((TRI_V, TRI), (CLAIM_TRI_V, CLAIM_TRI)):
+            if conn.execute(text("SELECT 1 FROM sqlite_master WHERE name = :n"), {"n": t}).first() is not None:
+                conn.execute(text(f"CREATE VIRTUAL TABLE IF NOT EXISTS {v} USING fts5vocab({t}, 'row')"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("索引の語の表（fts5vocab）を作れません。3 文字未満の語は LIKE で探します: %s", exc)
+
+
+def expand_short(conn, short: list[str], vocab: str = TRI_V, total: int | None = None) -> list[str]:
+    """3 文字未満の語（日本語の 2 文字）を、索引にある「その語で始まる trigram の語」へ広げる（trigram の索引は 3 文字未満の語に一致しないため）。
+    語が文の途中・先頭に出る場合は全部拾える。**文字列の最後が語で終わる場合（列の末尾）は拾えない**（後ろに文字が無く、3 文字の語にならないため）。
+    どこにでも出る語（文書数の合計が全体の SHORT_DF_RATIO 超）は広げない（雑音になり、OR の数も増える）。表が無ければ空。"""
+    out: list[str] = []
+    try:
+        for w in short[:SHORT_MAX]:
+            if not w or w.isascii():
+                continue
+            rows = conn.execute(text(f"SELECT term, doc FROM {vocab} WHERE term >= :a AND term < :b ORDER BY doc DESC LIMIT :k"),
+                                {"a": w, "b": w + "\U0010ffff", "k": SHORT_PREFIX_MAX}).all()
+            if not rows:
+                continue
+            if total and sum(int(d) for _, d in rows) > SHORT_DF_RATIO * total:
+                continue
+            out += [str(t) for t, _ in rows if len(str(t)) == 3]
+    except Exception:  # noqa: BLE001      # fts5vocab の無い DB
+        return []
+    return out
 
 
 def request_rebuild(conn) -> int:
@@ -278,32 +320,57 @@ def search(conn, q: str, limit: int = CANDIDATES) -> dict | None:
     return {"hits": hits, "short": groups["short"]}
 
 
-def search_any(conn, tri: list[str], word: list[str], limit: int = 200) -> list[tuple[int, float]]:
+def search_any(conn, tri: list[str], word: list[str], limit: int = 200, short: list[str] | None = None) -> list[tuple[int, float]]:
     """問いの文から取った語の、どれかを含む（OR）記事の候補 [(記事の id, 点数)]（点数の大きい順）。点数は BM25 の符号を反転したもの（大きいほど合う）。
     search（全部を含む＝AND）と同じ 2 つの索引・同じ重みを使い、語を OR でつなぐだけ（ControlDeck の MPKR が種を探すための道具。v0.6）。
-    trigram の側（3 文字以上の語）と英語の側（ASCII の語）は別々に引いて、記事の id で点数を足す。索引が無いときは空。"""
-    if not has_index(conn) or not (tri or word):
+    trigram の側（3 文字以上の語）と英語の側（ASCII の語）は別々に引いて、記事の id で点数を足す。索引が無いときは空。
+    short（3 文字未満の日本語の語）は expand_short で trigram の語へ広げ、trigram の側へ足す（SHORT_EXPAND が False なら使わない）。"""
+    if not has_index(conn):
         return []
-    scores: dict[int, float] = {}
-    for name, terms in ((TRI, tri), (WORD, word)):
+    extra: list[str] = []
+    if short and SHORT_EXPAND:
+        total = conn.execute(text("SELECT count(*) FROM news_items")).scalar() or 0
+        extra = expand_short(conn, short, TRI_V, total)
+    return _any(conn, TRI, WORD, tri, word, extra, limit)
+
+
+def _any(conn, tri_t: str, word_t: str, tri: list[str], word: list[str], extra: list[str], limit: int) -> list[tuple[int, float]]:
+    """search_any・search_claims の中身。extra（広げた短い語の trigram の語）は、ほかの語があるとき**順位づけだけ**に使う（それで当たった文書でも、ほかの語に一致した文書にだけ加点。
+    問いの言い回しの語〔「関係」「報道」〕で無関係な文書が候補に入るのを防ぐ）。ほかの語が無いとき（短い語だけ）は、その語で探す。"""
+    w = CLAIM_WEIGHTS if tri_t == CLAIM_TRI else WEIGHTS
+    if not (tri or word or extra):
+        return []
+
+    def run(name: str, terms: list[str], cols: str = "") -> dict[int, float]:
         if not terms:
-            continue
-        match = " OR ".join(_phrase(t) for t in terms)
-        sql = f"SELECT rowid, bm25({name}, {WEIGHTS}) AS r FROM {name} WHERE {name} MATCH :m ORDER BY r LIMIT :k"
-        for rid, r in conn.execute(text(sql), {"m": match, "k": limit}):
-            scores[int(rid)] = scores.get(int(rid), 0.0) - float(r)
+            return {}
+        sql = f"SELECT rowid, bm25({name}, {w}) AS r FROM {name} WHERE {name} MATCH :m ORDER BY r LIMIT :k"
+        m = " OR ".join(_phrase(t) for t in terms)
+        return {int(rid): -float(r) for rid, r in conn.execute(text(sql), {"m": f"{cols} : ({m})" if cols else m, "k": limit})}
+
+    scores: dict[int, float] = {}
+    for name, terms in ((tri_t, tri), (word_t, word)):
+        for rid, v in run(name, terms).items():
+            scores[rid] = scores.get(rid, 0.0) + v
+    if extra:
+        boost = run(tri_t, extra)
+        if tri_t == TRI and SHORT_TITLE and not (tri or word):      # 短い語だけの問い: 題・物の名前の列に出る語は、本文の言及より強く（題が主題を表す）。ほかの語があるときは足さない（雛形の語の雑音。a5d の測定）
+            for rid, v in run(tri_t, extra, "{title ents}").items():
+                boost[rid] = boost.get(rid, 0.0) + SHORT_TITLE * v
+        if tri or word:
+            for rid in scores:
+                scores[rid] += SHORT_BOOST * boost.get(rid, 0.0)
+        else:
+            scores = boost
     return sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
 
 
-def search_claims(conn, tri: list[str], word: list[str], limit: int = 100) -> list[tuple[int, float]]:
-    """問いの文から取った語のどれかを含む（OR）主張の候補 [(主張の id, 点数)]（点数の大きい順。点数は BM25 の符号を反転したもの）。search_any の主張版。索引が無いときは空。"""
-    if not has_claim_index(conn) or not (tri or word):
+def search_claims(conn, tri: list[str], word: list[str], limit: int = 100, short: list[str] | None = None) -> list[tuple[int, float]]:
+    """問いの文から取った語のどれかを含む（OR）主張の候補 [(主張の id, 点数)]（点数の大きい順。点数は BM25 の符号を反転したもの）。search_any の主張版（short の扱いも同じ）。索引が無いときは空。"""
+    if not has_claim_index(conn):
         return []
-    scores: dict[int, float] = {}
-    for name, terms in ((CLAIM_TRI, tri), (CLAIM_WORD, word)):
-        if not terms:
-            continue
-        sql = f"SELECT rowid, bm25({name}, {CLAIM_WEIGHTS}) AS r FROM {name} WHERE {name} MATCH :m ORDER BY r LIMIT :k"
-        for rid, r in conn.execute(text(sql), {"m": " OR ".join(_phrase(t) for t in terms), "k": limit}):
-            scores[int(rid)] = scores.get(int(rid), 0.0) - float(r)
-    return sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+    extra: list[str] = []
+    if short and SHORT_EXPAND:
+        total = conn.execute(text("SELECT count(*) FROM claims")).scalar() or 0
+        extra = expand_short(conn, short, CLAIM_TRI_V, total)
+    return _any(conn, CLAIM_TRI, CLAIM_WORD, tri, word, extra, limit)
