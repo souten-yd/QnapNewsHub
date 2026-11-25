@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, or_, select
 
 from qnapnewshub import db as news_db
-from qnapnewshub import entity_merge, event_llm, extract, kg, llm, llm_models, llm_task, mapgrav, rest, settings, thing_filter, things, writer
+from qnapnewshub import auto_resolve, entity_merge, event_llm, extract, kg, llm, llm_models, llm_task, mapgrav, rest, settings, thing_filter, things, writer
 from qnapnewshub import logbuf
 from qnapnewshub.db import Claim, Entity, EntityCard, NewsItem, NewsMeta, Relationship, ArticleEntity
 
@@ -325,4 +325,9 @@ async def run() -> dict:
     except Exception as exc:  # noqa: BLE001 - カードの失敗で、後ろの仕事（今日の傾向）を止めない
         logger.exception("知識カードの仕事に失敗しました")
         info["cards"] = {"done": 0, "calls": 0, "error": logbuf.redact(f"{type(exc).__name__}"), "failed": 0, "todo": 0}
+    try:
+        info["resolve"] = await auto_resolve.run()      # 名寄せの自動化（段 2 Wikidata・段 3 LLM。1 晩の上限の中で、回ごとに小さく進める）
+    except Exception as exc:  # noqa: BLE001 - 名寄せの失敗で、後ろの仕事を止めない
+        logger.exception("名寄せの自動化に失敗しました")
+        info["resolve"] = {"skipped": "", "error": logbuf.redact(f"{type(exc).__name__}")}
     return info

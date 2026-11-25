@@ -183,20 +183,22 @@ for (const vp of SIZES) {
         expect(state.unhandled).toEqual([]);
       });
 
-      test("名寄せ: 迷う候補を確定・却下でき、自動で寄せた記録は元に戻せる（管理者）", async ({ page }) => {
+      test("名寄せ: 自動で寄せた記録（段と根拠）が出て、戻せる。確定・却下の操作は無い（管理者）", async ({ page }) => {
         const state = newState();
         await mockApi(page, state);
         await page.goto("/entities");
-        await expect(page.getByTestId("merge-row")).toHaveCount(1);
-        await expect(page.getByTestId("merge-row")).toContainText("VRChat ← VRChat Inc.");
-        await expect(page.getByTestId("merge-history")).toContainText("Sony Corporation → Sony（自動）");
+        await expect(page.getByTestId("merge-row")).toHaveCount(3);
+        await expect(page.getByTestId("merge-history")).toContainText("Sony Corporation → Sony");
+        await expect(page.getByTestId("merge-history")).toContainText("Wikidata Q21708200（アメリカの人工知能研究機関）");
+        await expect(page.getByTestId("merge-history")).toContainText("AI の判断 確かさ 0.93");
+        await expect(page.getByTestId("merge-pending")).toContainText("1 件");
+        await expect(page.getByTestId("merge-confirm")).toHaveCount(0);
+        await expect(page.getByTestId("merge-dismiss")).toHaveCount(0);
         await expectNoHorizontalOverflow(page);
         await shot(page, `merge-panel-${vp.name}-${scheme}`);
-        await page.getByTestId("merge-undo").click();
-        await expect(page.getByTestId("merge-history")).toHaveCount(0);
-        await page.getByTestId("merge-confirm").click();
-        await expect(page.getByTestId("merge-row")).toHaveCount(0);
-        expect(state.mergeActions).toEqual(["undo:1", "confirm:7"]);
+        await page.getByTestId("merge-undo").first().click();
+        await expect(page.getByTestId("merge-row")).toHaveCount(2);
+        expect(state.mergeActions).toEqual(["undo:1"]);
         expect(state.unhandled).toEqual([]);
       });
 

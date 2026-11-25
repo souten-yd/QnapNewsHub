@@ -50,7 +50,7 @@ DEFAULTS: dict = {
     "llm": {"digest_model": DEFAULT_MODEL, "gist_enabled": False, "gist_model": DEFAULT_MODEL, "digest_focus": "", "prep_enabled": True,
             "prep_model": DEFAULT_MODEL, "prep_max_per_run": 100, "daily_limit": DEFAULT_DAILY_LIMIT, "minute_limit": DEFAULT_MINUTE_LIMIT,
             # 要素の取り出し（下ごしらえと同じ 1 回の呼び出しで）・次のモデル（1 番目は prep_model。空でよい）・用途ごとの割り当て・夜の後回しの仕事
-            "extract_enabled": True, "fallback_models": [], "quota": dict(DEFAULT_QUOTA), "night_from": DEFAULT_NIGHT_FROM, "backfill_enabled": True,
+            "resolve_enabled": True, "extract_enabled": True, "fallback_models": [], "quota": dict(DEFAULT_QUOTA), "night_from": DEFAULT_NIGHT_FROM, "backfill_enabled": True,
             "gateway": dict(DEFAULT_GATEWAY)},
 }
 _CLOCK = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -123,6 +123,8 @@ def _quota(value: object, daily: int) -> dict:
     given = dict(value)
     if "event" not in given:      # event を足す前の設定: 合計が上限に収まる範囲だけ足す（足りなければ 0。割り当てが 0 の用途も予備から借りて動く）
         given["event"] = max(0, min(DEFAULT_QUOTA["event"], daily - sum(_int(v, "割り当て", 0, 5000) for k, v in given.items() if k in DEFAULT_QUOTA)))
+    if "resolve" not in given:      # resolve（名寄せの判定）を足す前の設定: 同じく、合計が上限に収まる範囲だけ足す
+        given["resolve"] = max(0, min(DEFAULT_QUOTA["resolve"], daily - sum(_int(v, "割り当て", 0, 5000) for k, v in given.items() if k in DEFAULT_QUOTA)))
     out = {k: _int(given.get(k, DEFAULT_QUOTA[k]), f"{QUOTA_LABELS[k]}の割り当て", 0, 5000) for k in DEFAULT_QUOTA}
     if sum(out.values()) > daily:
         raise ConfigError(f"用途ごとの割り当ての合計（{sum(out.values())} 回）が 1 日の上限（{daily} 回）を超えています")
@@ -306,7 +308,7 @@ def normalize(raw: object) -> dict:
     llm = _table(raw, "llm")
     out["llm"] = {"digest_model": _model(llm.get("digest_model", DEFAULT_MODEL), "まとめ"), "gist_enabled": _bool(llm, "gist_enabled", False),
                   "gist_model": _model(llm.get("gist_model", DEFAULT_MODEL), "一言要約"), "digest_focus": _focus(llm.get("digest_focus", "")),
-                  "prep_enabled": _bool(llm, "prep_enabled", True), "prep_model": _model(llm.get("prep_model", DEFAULT_MODEL), "下ごしらえ"),
+                  "prep_enabled": _bool(llm, "prep_enabled", True), "resolve_enabled": _bool(llm, "resolve_enabled", True), "prep_model": _model(llm.get("prep_model", DEFAULT_MODEL), "下ごしらえ"),
                   "prep_max_per_run": _int(llm.get("prep_max_per_run", 100), "下ごしらえの 1 回の件数", 1, 200),
                   "daily_limit": _int(llm.get("daily_limit", DEFAULT_DAILY_LIMIT), "1 日の回数の上限", 1, 5000),
                   "minute_limit": _int(llm.get("minute_limit", DEFAULT_MINUTE_LIMIT), "1 分の回数の上限", 1, 100),

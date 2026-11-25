@@ -471,7 +471,7 @@ class MentionCandidate(Base):
 
 class EntityMerge(Base):
     """物の名寄せの記録（entity_merge.py）。loser を winner へ寄せた 1 回ぶん。snapshot は元に戻すための JSON（loser の行・別名・記事・主張・関係・根拠・集計の移動）。
-    mode: auto（規則だけで確かなもの）・confirmed（管理者が確定）。undone_at があれば元に戻した後。loser_key は、あとで同じ表記が取り出されたとき winner へ寄せるための鍵。"""
+    mode: auto（規則だけで確かなもの）・wikidata（同じ QID）・llm（LLM の判断）・confirmed（管理者が確定。古い記録）。undone_at があれば元に戻した後。loser_key は、あとで同じ表記が取り出されたとき winner へ寄せるための鍵。"""
 
     __tablename__ = "entity_merges"
 
@@ -483,6 +483,7 @@ class EntityMerge(Base):
     mode: Mapped[str] = mapped_column(String(10), default="auto")
     reason: Mapped[str] = mapped_column(String(40), default="")
     snapshot: Mapped[str] = mapped_column(Text, default="{}")
+    basis: Mapped[str] = mapped_column(Text, default="", server_default="")      # 寄せた根拠（JSON。段ごと: Wikidata の QID・LLM の確かさと理由）。画面の一覧用の短い形
     merged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -501,6 +502,48 @@ class MergeCandidate(Base):
     score: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(10), default="candidate")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EntityWikidata(Base):
+    """物ごとの Wikidata の照合の結果（auto_resolve.py・wikidata.py。夜の仕事）。status: linked（QID を付けた）・none（該当なし）・ambiguous（候補が複数で決まらない）。
+    qid・正式名（日本語・英語）・別名（JSON の配列）・短い説明は、同じ QID の物の自動の寄せと、カードの定義の材料に使う。none・ambiguous は一定の日数のあと照合し直す。"""
+
+    __tablename__ = "entity_wikidata"
+
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(10), default="none", index=True)
+    qid: Mapped[str] = mapped_column(String(16), default="", index=True)
+    label_ja: Mapped[str] = mapped_column(String(200), default="")
+    label_en: Mapped[str] = mapped_column(String(200), default="")
+    aliases: Mapped[str] = mapped_column(Text, default="[]")
+    description: Mapped[str] = mapped_column(String(300), default="")
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WikidataCache(Base):
+    """Wikidata の問い合わせの結果の覚え（同じ問いを 1 秒 1 回の枠で繰り返さない）。key は "s:<言語>:<正規化した名前>"（検索）か "e:<QID>"（実体）。value は JSON。見つからなかった結果も覚える。"""
+
+    __tablename__ = "wikidata_cache"
+
+    key: Mapped[str] = mapped_column(String(300), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResolveJudgement(Base):
+    """名寄せの LLM の判断の記録（auto_resolve.py）。lo_id < hi_id で 1 組 1 行。verdict: same・different・unsure。same でも確かさが低ければ寄せず、この行だけ残す（同じ組を毎晩聞かない）。"""
+
+    __tablename__ = "resolve_judgements"
+    __table_args__ = (UniqueConstraint("lo_id", "hi_id", name="uq_resolve_judgement"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lo_id: Mapped[int] = mapped_column(Integer, index=True)
+    hi_id: Mapped[int] = mapped_column(Integer, index=True)
+    verdict: Mapped[str] = mapped_column(String(10), default="unsure")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class EntityRetirement(Base):
@@ -772,7 +815,7 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("documents", "meta", "TEXT NOT NULL DEFAULT ''"), ("documents", "connector", "VARCHAR(40) NOT NULL DEFAULT ''"),
                                         ("research_records", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"),
                                         ("entity_cards", "definition", "TEXT NOT NULL DEFAULT ''"), ("entity_cards", "state", "VARCHAR(12) NOT NULL DEFAULT ''"),
-                                        ("entity_cards", "questions", "TEXT NOT NULL DEFAULT '[]'"), ("entity_cards", "opposing", "TEXT NOT NULL DEFAULT '[]'"),
+                                        ("entity_merges", "basis", "TEXT NOT NULL DEFAULT ''"), ("entity_cards", "questions", "TEXT NOT NULL DEFAULT '[]'"), ("entity_cards", "opposing", "TEXT NOT NULL DEFAULT '[]'"),
                                         ("claims", "stated_at", "DATETIME"), ("evidences", "tier", "VARCHAR(10) NOT NULL DEFAULT ''")]
 # 後から足した索引（既にあるファイルにも足す）
 _LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id"), ("documents", "tier"), ("research_records", "theme")]

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ENTITY_TYPE_LABEL, relativeTime, useEntities, useEntity, type EntityRow, type EntityType } from "../api/news";
-import { MERGE_REASON, useMergeAction, useMergeCandidates } from "../api/things";
+import { mergeStage, useMergeAction, useMergeCandidates } from "../api/things";
 import KnowledgeCard from "../features/knowledge/KnowledgeCard";
 import { Card, field } from "../features/news/settingsUi";
 
@@ -30,31 +30,26 @@ function Row({ e, days }: { e: EntityRow; days: number }) {
   );
 }
 
-/** 名寄せの候補（管理者だけ。管理者でなければ 403 で何も出さない）。確かなものは夜に自動で寄せてあり、ここには迷うものと、寄せた記録（元に戻せる）が出る。 */
+/** 最近自動で寄せたもの（管理者だけ。管理者でなければ 403 で何も出さない）。同じ物の別表記は夜に自動で寄せる（規則 → Wikidata → AI の判断）。利用者の操作は「戻す」だけ（確定の操作は無い）。 */
 function MergePanel() {
   const q = useMergeCandidates();
   const act = useMergeAction();
-  if (!q.data || (q.data.items.length === 0 && q.data.merges.length === 0)) return null;
-  const recent = q.data.merges.filter((m) => !m.undone).slice(0, 5);
+  if (!q.data || (q.data.total === 0 && q.data.merges.length === 0)) return null;
+  const recent = q.data.merges.filter((m) => !m.undone).slice(0, 8);
   return (
-    <Card id="merge-candidates" title={`名寄せの候補（${q.data.total} 件）`} hint="同じ物かもしれない別の表記です。確定すると、記事・主張・関係・別名を 1 つにまとめます（記録が残り、あとで元に戻せます）。確かな表記の違い（Inc.・版の .0 など）は夜に自動で寄せています。">
-      <ul className="space-y-1.5" data-testid="merge-list">
-        {q.data.items.map((c) => (
-          <li key={c.id} data-testid="merge-row" className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 px-3 py-2 text-xs dark:border-zinc-800">
-            <span className="min-w-0 flex-1"><span className="font-semibold">{c.keep.name}</span> ← {c.drop.name}<span className="ml-2 text-zinc-500">{MERGE_REASON[c.reason] ?? c.reason}・記事 {c.keep.article_count}／{c.drop.article_count}</span></span>
-            <button type="button" data-testid="merge-confirm" disabled={act.isPending} onClick={() => act.mutate({ path: `/merge-candidates/${c.id}/confirm` })} className="min-h-9 rounded-lg border border-accent-600 px-3 font-semibold">寄せる</button>
-            <button type="button" data-testid="merge-dismiss" disabled={act.isPending} onClick={() => act.mutate({ path: `/merge-candidates/${c.id}/dismiss` })} className="min-h-9 rounded-lg border border-zinc-300 px-3 dark:border-zinc-700">別の物</button>
-          </li>
-        ))}
-      </ul>
-      {recent.length > 0 && (
-        <ul className="mt-2 space-y-1 text-xs text-zinc-500" data-testid="merge-history">
+    <Card id="merge-candidates" title="最近自動で寄せたもの" hint="同じ物の別の表記（Inc.・版の書き方・日本語と英語の表記）は、夜に自動で 1 つにまとめます。まず規則、次に Wikidata（同じ項目なら同じ物）、最後に AI が確かさつきで判断します。間違っていたら「戻す」で元に分けます（戻した組は二度と寄せません）。">
+      {recent.length === 0 ? <p className="text-xs text-zinc-500" data-testid="merge-empty">まだ自動で寄せたものはありません。</p> : (
+        <ul className="space-y-1.5 text-xs" data-testid="merge-history">
           {recent.map((m) => (
-            <li key={m.id} className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate">{m.loser.name} → {m.winner.name}（{m.mode === "auto" ? "自動" : "確定"}）</span>
-              {m.can_undo && <button type="button" data-testid="merge-undo" disabled={act.isPending} onClick={() => act.mutate({ path: `/merges/${m.id}/undo` })} className="min-h-9 rounded-lg border border-zinc-300 px-3 dark:border-zinc-700">元に戻す</button>}</li>
+            <li key={m.id} data-testid="merge-row" className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+              <span className="min-w-0 flex-1"><span className="font-semibold">{m.loser.name}</span> → <span className="font-semibold">{m.winner.name}</span>
+                <span className="ml-2 text-zinc-500">{mergeStage(m)}</span></span>
+              {m.can_undo && <button type="button" data-testid="merge-undo" disabled={act.isPending} onClick={() => act.mutate({ path: `/merges/${m.id}/undo` })} className="min-h-9 rounded-lg border border-zinc-300 px-3 dark:border-zinc-700">戻す</button>}
+            </li>
           ))}
         </ul>
       )}
+      {q.data.total > 0 && <p className="mt-2 text-xs text-zinc-500" data-testid="merge-pending">判断待ちの組が {q.data.total} 件あります。夜に Wikidata と AI が自動で調べます。</p>}
     </Card>
   );
 }

@@ -28,7 +28,7 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from qnapnewshub import kg
-from qnapnewshub.db import (ArticleEntity, Claim, Entity, EntityAlias, EntityCard, EntityCommunity, EntityMerge, EntityNote, EventArticle, Evidence,
+from qnapnewshub.db import (ArticleEntity, Claim, Entity, EntityAlias, EntityCard, EntityWikidata, EntityCommunity, EntityMerge, EntityNote, EventArticle, Evidence,
                             MentionCandidate, MergeCandidate, NewsItem, Relationship)
 
 _UTC = timezone.utc
@@ -178,8 +178,8 @@ def _deltas(db: Session, loser_id: int, winner_id: int, articles: set[int], winn
     return out
 
 
-def merge(db: Session, winner_id: int, loser_id: int, *, mode: str = "auto", reason: str = "") -> int | None:
-    """loser を winner へ寄せる。記録の id を返す（寄せ済み・機密・同じ物は None）。"""
+def merge(db: Session, winner_id: int, loser_id: int, *, mode: str = "auto", reason: str = "", basis: dict | None = None) -> int | None:
+    """loser を winner へ寄せる。記録の id を返す（寄せ済み・機密・同じ物は None）。mode は段（auto＝規則・wikidata・llm・confirmed）、basis は根拠（画面の一覧に出す。自動の段で残す）。"""
     if winner_id == loser_id:
         return None
     w, lo = db.get(Entity, winner_id), db.get(Entity, loser_id)
@@ -229,6 +229,13 @@ def merge(db: Session, winner_id: int, loser_id: int, *, mode: str = "auto", rea
     if wcard is not None:
         snap["winner_card_sig"] = wcard.sig
         wcard.sig = ""      # 材料が変わったので、夜に概要を作り直す
+    # Wikidata の照合: 負けた物の行を残し（戻すため）、勝った物に無ければ引き継ぐ
+    lwd = db.get(EntityWikidata, loser_id)
+    if lwd is not None:
+        snap["wikidata"] = _dump(lwd)
+        if db.get(EntityWikidata, winner_id) is None and lwd.status == "linked":
+            db.add(EntityWikidata(**{**_load(EntityWikidata, snap["wikidata"]), "entity_id": winner_id}))
+            snap["wikidata_copied"] = True
     # まとまり・つなぐ候補
     snap["community"] = db.scalar(select(EntityCommunity.community_id).where(EntityCommunity.entity_id == loser_id))
     snap["mentions"] = [_dump(m) for m in db.scalars(select(MentionCandidate).where(MentionCandidate.entity_id == loser_id))]
@@ -244,7 +251,7 @@ def merge(db: Session, winner_id: int, loser_id: int, *, mode: str = "auto", rea
     db.execute(delete(Entity).where(Entity.id == loser_id))
     db.expire_all()
     rec = EntityMerge(winner_id=winner_id, loser_id=loser_id, loser_key=lo_key(snap), loser_name=snap["loser"]["name"], mode=mode, reason=reason[:40],
-                      snapshot=json.dumps(snap, ensure_ascii=False), merged_at=_now())
+                      snapshot=json.dumps(snap, ensure_ascii=False), basis=json.dumps(basis, ensure_ascii=False) if basis else "", merged_at=_now())
     db.add(rec)
     lo_id, hi_id = sorted((winner_id, loser_id))
     cand = db.scalar(select(MergeCandidate).where(MergeCandidate.lo_id == lo_id, MergeCandidate.hi_id == hi_id))
@@ -321,6 +328,10 @@ def undo(db: Session, merge_id: int) -> dict | None:
                 wn.body = snap["note"]["winner_body"]
     if "card" in snap:
         db.add(EntityCard(**_load(EntityCard, snap["card"])))
+    if snap.get("wikidata_copied"):
+        db.execute(delete(EntityWikidata).where(EntityWikidata.entity_id == wid))
+    if "wikidata" in snap:
+        db.add(EntityWikidata(**_load(EntityWikidata, snap["wikidata"])))
     wc = db.get(EntityCard, wid)
     if wc is not None and "winner_card_sig" in snap:
         wc.sig = snap["winner_card_sig"]
@@ -561,11 +572,19 @@ def list_candidates(db: Session, limit: int = 50) -> dict:
     return {"items": items, "total": total}
 
 
+def _basis(raw: str) -> dict:
+    try:
+        out = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return out if isinstance(out, dict) else {}
+
+
 def list_merges(db: Session, limit: int = 30) -> list[dict]:
     out = []
     for r in db.scalars(select(EntityMerge).order_by(EntityMerge.id.desc()).limit(max(1, min(limit, 200)))):
         w = db.get(Entity, r.winner_id)
-        out.append({"id": r.id, "winner": {"id": r.winner_id, "name": w.name if w else ""}, "loser": {"id": r.loser_id, "name": r.loser_name}, "mode": r.mode, "reason": r.reason,
+        out.append({"id": r.id, "winner": {"id": r.winner_id, "name": w.name if w else ""}, "loser": {"id": r.loser_id, "name": r.loser_name}, "mode": r.mode, "reason": r.reason, "basis": _basis(r.basis),
                     "merged_at": kg.iso(r.merged_at), "undone": r.undone_at is not None, "can_undo": r.undone_at is None and w is not None})
     return out
 

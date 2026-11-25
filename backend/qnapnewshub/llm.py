@@ -38,15 +38,15 @@ DEFAULT_MODEL = "nvidia/nemotron-3.5-super-vl:free"
 TIMEOUT_SECONDS = 120
 DEFAULT_DAILY_LIMIT = 800
 DEFAULT_MINUTE_LIMIT = 15
-DEFAULT_QUOTA = {"prep": 300, "gist": 150, "digest": 20, "card": 150, "trend": 10, "event": 100, "spare": 70}
-QUOTA_LABELS = {"prep": "下ごしらえと取り出し", "gist": "要約", "digest": "まとめ", "card": "知識カード", "trend": "傾向の解説", "event": "イベントの要約", "spare": "予備"}
+DEFAULT_QUOTA = {"prep": 300, "gist": 150, "digest": 20, "card": 130, "trend": 10, "event": 100, "resolve": 40, "spare": 50}
+QUOTA_LABELS = {"prep": "下ごしらえと取り出し", "gist": "要約", "digest": "まとめ", "card": "知識カード", "trend": "傾向の解説", "event": "イベントの要約", "resolve": "名寄せの判定", "spare": "予備"}
 DEFAULT_NIGHT_FROM = 21
 GATEWAY_KEY_NAME = "gateway_key"
 GATEWAY_PREFIX = "gateway:"
 DEFAULT_GATEWAY = {"enabled": False, "base_url": "", "model": "auto", "first": True, "batch": 10, "timeout_seconds": 300, "minute_limit": 6, "cooldown_minutes": 10}
 MAX_MINUTE_WAIT = 65.0
-PURPOSES = ("prep", "digest", "gist", "card", "trend", "event", "backfill")
-QUOTA_PURPOSES = ("prep", "gist", "digest", "card", "trend", "event")
+PURPOSES = ("prep", "digest", "gist", "card", "trend", "event", "resolve", "backfill")
+QUOTA_PURPOSES = ("prep", "gist", "digest", "card", "trend", "event", "resolve")
 
 
 class LlmNotAllowed(RuntimeError):
