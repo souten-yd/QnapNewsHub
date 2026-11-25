@@ -38,15 +38,18 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["NEWSHUB_DATA"] = str(data)
     os.environ["NEWSHUB_AUTO"] = "0"      # 取得・まとめ書きの見張りは動かさない（外へ通信しない）
     qpath = Path(a.questions).expanduser()
-    from . import build_questions, report, runner
+    from . import build_questions, checks, report, runner
 
     if a.build_bridge:
         d = build_questions.main_bridge(db_path, qpath, a.per_length, a.seed)
         print("橋渡しの問いを作りました:", d["counts"])
+        checks.warn_dangling(db_path, d["questions"], "作るとき")
     elif a.build:
         d = build_questions.main(db_path, qpath, a.per_type, a.seed)
         print("問いを作りました:", d["counts"])
+        checks.warn_dangling(db_path, d["questions"], "作るとき")
     questions = json.loads(qpath.read_text(encoding="utf-8"))["questions"]
+    checks.warn_dangling(db_path, questions, "測るとき")
 
     import sqlite3
     from fastapi.testclient import TestClient
