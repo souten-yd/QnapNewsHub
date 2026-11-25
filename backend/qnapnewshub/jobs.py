@@ -1,6 +1,7 @@
 """仕事の列（jobs）: ControlDeck が借りて返す分析の仕事。ARCHITECTURE 5 章。
 
-- 種類: embed（埋め込み）・event_merge（意味でのイベントのまとめ直し）・summarize_hq（重要なイベントの高品質の要約）・extract_retry（取り出しが検査に落ちた記事のやり直し）・image（画像の無い重要な記事の画像）。
+- 種類: embed（埋め込み）・event_merge（意味でのイベントのまとめ直し）・summarize_hq（重要なイベントの高品質の要約）・extract_retry（取り出しが検査に落ちた記事のやり直し）・image（画像の無い重要な記事の画像）・
+  translate_hq（重要な英語の記事の高品質の翻訳。ControlDeck が借りて返す。QNAP では軽い QuickMT で訳し、高品質は ControlDeck 側。translate_flow.py）。
 - **重複を防ぐ ID**（dedup_key = 種類:対象:入力の版）。同じ入力の版の仕事は 1 つだけ。入力の版を上げれば（プロンプトの版が変わったなど）新しい仕事になる。
 - **借り（lease）**: claim で lease_until（既定 5 分・30〜3600 秒）まで借りる。期限が切れた仕事は、次の claim（と診断の読み）で列に戻る（試行が max_tries に達していれば dead）。
   借りたとき tries を +1。ControlDeck が途中で止まっても、列に戻って再開後に続く。
@@ -31,8 +32,8 @@ from qnapnewshub.db import Artifact, Embedding, Event, EventArticle, Job, NewsIt
 
 logger = logging.getLogger("qnapnewshub.jobs")
 
-KINDS = ("embed", "event_merge", "summarize_hq", "extract_retry", "image")
-INPUT_V = {"embed": "e1", "event_merge": "m1", "summarize_hq": "hq1", "extract_retry": extract.PROMPT_VERSION, "image": "img1"}
+KINDS = ("embed", "event_merge", "summarize_hq", "extract_retry", "image", "translate_hq")
+INPUT_V = {"embed": "e1", "event_merge": "m1", "summarize_hq": "hq1", "extract_retry": extract.PROMPT_VERSION, "image": "img1", "translate_hq": "thq1"}
 LEASE_DEFAULT, LEASE_MIN, LEASE_MAX = 300, 30, 3600
 CLAIM_MAX = 50
 MAX_TRIES = 3
@@ -99,7 +100,17 @@ def create_image(db: Session, limit: int = CREATE_PER_CLAIM) -> int:
     return sum(enqueue(db, "image", i, v) for i in ids)
 
 
-_CREATORS = {"extract_retry": create_extract_retry, "summarize_hq": create_summarize_hq, "image": create_image}
+def create_translate_hq(db: Session, limit: int = CREATE_PER_CLAIM) -> int:
+    """重要な英語の記事（チャンネルに合う・監視のThings・ホットトピック。本文を取り出せたもの）の高品質の翻訳の仕事。設定 translate.hq_jobs が切なら作らない。"""
+    from qnapnewshub import settings, translate_flow
+
+    if not settings.load()["translate"]["hq_jobs"]:
+        return 0
+    v = INPUT_V["translate_hq"]
+    return sum(enqueue(db, "translate_hq", i, v) for i in translate_flow.hq_candidates(db, limit, v))
+
+
+_CREATORS = {"extract_retry": create_extract_retry, "summarize_hq": create_summarize_hq, "image": create_image, "translate_hq": create_translate_hq}
 
 
 # ---- 借りる ----
@@ -125,6 +136,11 @@ def _payload(db: Session, job: Job) -> dict:
     row = db.get(NewsItem, job.ref_id)
     if row is None:
         return {"missing": True}
+    if job.kind == "translate_hq":
+        from qnapnewshub import settings, translate_flow
+
+        return {"item": {"id": row.id, "title": row.title, "summary": row.summary or "", "source": row.source, "url": row.url, "published_at": store.iso(row.published_at),
+                         "body": translate_flow.body_text(db, row.id, settings.load()["translate"]["body_max_chars"])}, "kind": "item", "target_lang": "ja"} if row else {"missing": True}
     base = {"id": row.id, "title": row.title, "summary": row.summary or "", "summary_ja": row.summary_ja or "", "source": row.source, "url": row.url,
             "published_at": store.iso(row.published_at)}
     if job.kind == "image":
@@ -214,6 +230,16 @@ def _apply(db: Session, job: Job, result: object, model: str) -> None:
         prep._stage_extract(row.id, {"extract": data}, model or "controldeck", sets)  # noqa: SLF001
         if sets:
             writer.get().patch_item(row.id, set=sets)
+    elif kind == "translate_hq":
+        row = db.get(NewsItem, job.ref_id)
+        if row is None:
+            raise Rejected("その記事はもうありません")
+        from qnapnewshub import translate_flow
+
+        rec = translate_flow.hq_record(result, model or "controldeck")
+        if rec is None:
+            raise Rejected("翻訳の形が合いません（title_ja・summary_ja・body_ja のどれかは日本語の文字を含む文字列）")
+        writer.get().stage_translation(row.id, rec)
     elif kind == "image":
         row = db.get(NewsItem, job.ref_id)
         sha = str(result.get("sha256") or "")
@@ -254,7 +280,7 @@ def complete(token_id: int, results: list[dict]) -> dict:
                     try:
                         _apply(db, job, r.get("result"), str(r.get("model") or "")[:200])
                         outcome = "done"
-                        pending_flush = pending_flush or job.kind in ("summarize_hq", "extract_retry")
+                        pending_flush = pending_flush or job.kind in ("summarize_hq", "extract_retry", "translate_hq")
                     except Rejected as exc:
                         outcome, err = "rejected", str(exc)[:300]
                 if outcome == "done":

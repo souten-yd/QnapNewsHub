@@ -3,6 +3,7 @@
 - 書くのは必ず Write Coordinator の書き手（writer.run）の 1 トランザクション単位（まとめ書き）。お休み中（rest.blocks_analysis）は何もしない。
 - 索引の作り直しは 1 回 2 万件・圧縮は 1 回 2,000 件。終わるまで次の巡回で続ける（待機中の CPU・書き込みは、仕事が無ければ 0）。
 - 本文の取り出しは bodies.run_once（1 分の上限・1 日の上限・robots）。
+- 軽い翻訳は translate_flow.run_once（時間の枠つき。取得の最中・お休み中は動かない）。
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, text
 
-from qnapnewshub import bodies, rest, searchindex, settings, writer, ztext
+from qnapnewshub import bodies, rest, searchindex, settings, translate_flow, writer, ztext
 from qnapnewshub import db as news_db
 from qnapnewshub.db import NewsCold, NewsItem
 
@@ -69,6 +70,10 @@ async def tick() -> dict:
         out["index"] = await asyncio.to_thread(index_step)
         out["compact"] = await asyncio.to_thread(compact_step)
     out["bodies"] = await bodies.run_once()
+    try:
+        out["translate"] = await translate_flow.run_once()      # 軽い翻訳（QuickMT）。切・お休み・モデル無し・取得の最中は何もしない
+    except Exception:  # noqa: BLE001 - 翻訳の失敗で巡回を止めない
+        logger.exception("翻訳の巡回に失敗しました")
     return out
 
 

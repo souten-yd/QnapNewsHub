@@ -284,6 +284,7 @@ def prune(db: Session, limit: int | None = None, removed_urls: list[str] | None 
     for i in range(0, len(ids), 500):
         db.execute(delete(news_db.NewsBody).where(news_db.NewsBody.item_id.in_(ids[i:i + 500])))
         db.execute(delete(news_db.NewsCold).where(news_db.NewsCold.item_id.in_(ids[i:i + 500])))
+        db.execute(delete(news_db.NewsTr).where(news_db.NewsTr.item_id.in_(ids[i:i + 500])))
         db.execute(delete(NewsItem).where(NewsItem.id.in_(ids[i:i + 500])))
     if commit:
         db.commit()
@@ -426,6 +427,9 @@ def attach_also(db: Session, rows: list[dict], collapse: bool = False) -> list[d
     from qnapnewshub import entities
 
     entities.attach_tags(db, rows)      # 物の札（要素の取り出しが済んだ記事だけ。無ければ空）
+    from qnapnewshub import translate
+
+    translate.attach(db, rows)      # 機械翻訳（題・概要）と「機械翻訳」の印・原文の切り替えの元
     if collapse:      # 同じ出来事（イベント）の記事は 1 つにまとめて、event: {id, others} を付ける（検索・日付・スターの一覧ではまとめない）
         from qnapnewshub import events
 

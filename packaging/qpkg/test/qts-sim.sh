@@ -110,6 +110,7 @@ echo "番号なしの setup → $(curl -s -o /dev/null -w '%{http_code}' -H 'Con
 echo "番号ありの setup → $(curl -s -c /tmp/cj -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "{\"username\":\"admin\",\"password\":\"correct-horse-battery\",\"setup_token\":\"$TOKEN\"}" http://127.0.0.1:8787/api/v1/auth/setup)"
 echo "番号のファイル: $([ -f "$DATA/setup-token.txt" ] && echo 残っている || echo 消えた)"
 echo "同梱の Python で HTTPS（証明書・TLS）: $(env -i PYTHONPATH="$ROOT/app:$ROOT/site" SSL_CERT_FILE="$ROOT/site/certifi/cacert.pem" "$ROOT/python/bin/python3" -c 'import httpx; print(httpx.get("https://hnrss.org/newest?points=300", timeout=20).status_code)' 2>&1 | tail -n1)"
+echo "翻訳の部品（glibc 2.17 の wheel で読み込めるか・CPU 判定。AVX 無しでも動く GENERIC を強制）: $(env -i PYTHONPATH="$ROOT/app:$ROOT/site" CT2_FORCE_CPU_ISA=GENERIC "$ROOT/python/bin/python3" -c 'import ctranslate2, sentencepiece, numpy, yaml; from qnapnewshub import translate; print("ctranslate2", ctranslate2.__version__, "sentencepiece", sentencepiece.__version__, "numpy", numpy.__version__, "protect:", translate.protect("see https://x.test/en/a", translate.Ctx([]))[0])' 2>&1 | tail -n1)"
 echo "QPKG の置き場に動いている間に書いた .pyc: $(find "$ROOT" -newer /tmp/install1.log -name '*.pyc' | wc -l) 件"
 
 step "3. 止める（SIGTERM で書き切る）"

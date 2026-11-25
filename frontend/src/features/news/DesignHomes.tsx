@@ -1,4 +1,4 @@
-import { BodyMark, TranslatedMark } from "./TranslatedMark";
+import { BodyMark, TranslatedMark, shownTitle } from "./TranslatedMark";
 import type { CSSProperties, ReactNode } from "react";
 import { KIND_STYLE, relativeTime, type NewsHome, type NewsItem, type NewsPrefs } from "../../api/news";
 import { ArchiveSection, ChannelSections, external, HomeAside, NumbersSection, Trio, visible } from "./BroadcastHome";
@@ -15,7 +15,7 @@ export interface DesignHomeProps {
 
 /** 記事への a の属性（外部は別タブ・開いたら既読の記録）。 */
 function Title({ item, onOpen }: { item: NewsItem; onOpen: (id: number) => void }) {
-  return <ArticleLink item={item} onOpen={() => onOpen(item.id)}>{item.title}</ArticleLink>;
+  return <ArticleLink item={item} onOpen={() => onOpen(item.id)}>{shownTitle(item)}</ArticleLink>;
 }
 const clock = (iso: string) => new Date(iso).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false });
 const domain = (url: string | null) => { try { return url && external(url) ? new URL(url).hostname.replace(/^www\./, "") : ""; } catch { return ""; } };

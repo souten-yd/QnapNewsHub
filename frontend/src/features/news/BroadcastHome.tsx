@@ -1,4 +1,4 @@
-import { BodyMark, TranslatedMark } from "./TranslatedMark";
+import { BodyMark, TranslatedMark, shownTitle } from "./TranslatedMark";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useSwipe } from "../../components/useSwipe";
 import { relativeTime, type NewsHome, type NewsItem, type NewsPrefs } from "../../api/news";
@@ -27,7 +27,7 @@ function OnAir({ home, onTopic, onOpen }: { home: NewsHome; onTopic: (t: string)
         <p className="nw-live"><i aria-hidden /> ON AIR{channel && <span className="nw-kicker" data-testid="onair-channel"> · {chNo(channel.number)} · {channel.name}</span>}</p>
         {item ? (
           <>
-            <h2 className="nw-head nw-onair-title" data-testid="onair-title"><ArticleLink item={item} onOpen={() => onOpen(item.id)}>{item.title}</ArticleLink></h2>
+            <h2 className="nw-head nw-onair-title" data-testid="onair-title"><ArticleLink item={item} onOpen={() => onOpen(item.id)}>{shownTitle(item)}</ArticleLink></h2>
             {item.summary && <p className="nw-muted" style={{ margin: 0, lineHeight: 1.6 }}>{item.summary}</p>}
             <TranslatedMark item={item} />
             <p className="card-meta"><span>{item.source}</span><span>· {relativeTime(item.published_at)}</span><BodyMark item={item} /></p>

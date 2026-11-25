@@ -97,6 +97,8 @@ export const SETTINGS: NewsRuntimeSettings = {
   digest_daily: { enabled: true, time: "06:30" }, digest_weekly: { enabled: true, weekday: 0, time: "07:00" }, quiet: { enabled: false, start: "01:00", end: "05:00" },
   rest: { enabled: false, start: "01:00", end: "06:00", mode: "keep_memory" }, storage: { flush_minutes: 30, max_items: 1000, max_mb: 128, log_file: false, access_log: false, compress_years: 1 },
   body: { enabled: true, per_day: 200, per_minute: 6 },
+  translate: { engine: "quickmt", threads: 2, batch: 32, beam: 2, cpu_isa: "", body_enabled: true, body_per_day: 100, body_max_chars: 20000, ondemand: true, hq_jobs: true, llm_wait_hours: 6,
+    glossary: { prefill: "プリフィル" }, keep: [], max_en_ratio: 0.5 },
   llm: { digest_model: "example/free-model:free", gist_enabled: false, gist_model: "example/free-model:free", digest_focus: "", prep_enabled: true, prep_model: "example/free-model:free", prep_max_per_run: 100, daily_limit: 800, minute_limit: 15,
     extract_enabled: true, fallback_models: [], quota: { prep: 300, gist: 150, digest: 20, card: 150, trend: 10, event: 100, spare: 70 }, night_from: 21, backfill_enabled: true,
     gateway: { enabled: false, base_url: "", model: "auto", first: true, batch: 10, timeout_seconds: 300, minute_limit: 6, cooldown_minutes: 10 } },
@@ -264,7 +266,7 @@ export const CONNECTORS = [
 
 export interface MockState {
   authenticated: boolean; setupNeeded: boolean; setupTokenRequired?: boolean; username: string; keySet: boolean; prefs: NewsPrefs; settings: NewsRuntimeSettings;
-  hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
+  trModel: boolean; hidden: Set<number>; calls: { method: string; path: string; body: unknown }[]; unhandled: string[];
   /** 画像の無い記事だけの一覧にしたいとき等、一覧を差し替える */
   items: NewsItem[];
   restActive: boolean; diagProblems: boolean; update: UpdateStatus; analyticsEmpty?: boolean; gatewayKeySet: boolean; gatewayDown: boolean;
@@ -283,7 +285,7 @@ export interface MockState {
 
 export function newState(over: Partial<MockState> = {}): MockState {
   return { authenticated: true, setupNeeded: false, username: "admin", keySet: false, prefs: structuredClone(PREFS), settings: structuredClone(SETTINGS),
-    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, update: structuredClone(UPDATE_BASE), gatewayKeySet: false, gatewayDown: false, link: structuredClone(LINK_BASE), connectors: structuredClone(CONNECTORS), decidedMentions: [], ...over };
+    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, trModel: false, update: structuredClone(UPDATE_BASE), gatewayKeySet: false, gatewayDown: false, link: structuredClone(LINK_BASE), connectors: structuredClone(CONNECTORS), decidedMentions: [], ...over };
 }
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -322,6 +324,10 @@ const diagnostics = (state: MockState) => ({
       raw_bytes: 1_800_000, packed_bytes: 520_000, cold: { items: 900, raw_bytes: 400_000, packed_bytes: 230_000 } }, compress_years: 1 },
   link: { peers: state.link.peers.filter((p) => !p.revoked).map((p) => ({ id: p.id, name: p.name, last_seen_at: p.last_seen_at })), last_seen_at: state.link.peers[0]?.last_seen_at ?? "", jobs: state.link.jobs,
     secrets: state.link.secrets.map((k) => ({ name: k.name, received_at: k.received_at })), change_seq: 120, artifacts: 3, research: 1 },
+  translate: { engine: "quickmt", installed: true, loaded: true, threads: 2, batch: 32, beam: 2, cpu_isa: "", llm_state: "ok", body_per_day: 100,
+    counts: { rows: { mt: 40, ja: 10 }, titles: 40, bodies: 6, today: 12, units: 300, fails: 9, fail_pct: 3.0, engines: { "quickmt-en-ja@c09e98b8:int8:beam2": 40 }, cache: 250 },
+    run: { units: 120, cache_hits: 30, cache_hit_pct: 25, checked: 120, failed: 4, fail_pct: 3.3, reasons: { numbers: 3, english: 1 }, chars: 20000, seconds: 5, chars_per_sec: 4000, items: 12, ondemand: 1, load_ms: 440, load_error: "", last_at: ago(1), recent: [] },
+    download: { phase: "done", message: "", done: 0, total: 0, file: "", error: "" } },
   problems: state.diagProblems ? [{ area: "fetch", level: "warn", text: "取得が止まった可能性のある取得先が 1 件あります" }] : [],
 });
 
@@ -528,6 +534,15 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     }
     if (is("DELETE", "/link/pairing")) { state.link.pairing = null; return json(route, { ok: true }); }
     if (is("DELETE", /^\/link\/peers\/\d+$/)) { const id = Number(path.split("/").pop()); state.link.peers = state.link.peers.map((p) => (p.id === id ? { ...p, revoked: true } : p)); return json(route, { ok: true }); }
+    if (is("GET", "/translate/status")) return json(route, {
+      engine: "quickmt", untranslated_mark: "〔未訳〕", default_glossary: { quantization: "量子化", prefill: "プリフィル", inference: "推論" }, llm_state: "ok",
+      model: { id: "quickmt-en-ja", title: "QuickMT 英→日", repo: "quickmt/quickmt-en-ja", rev: "c09e98b8", license: "CC-BY-4.0", license_note: "モデルは CC-BY-4.0（商用・再配布可・帰属表示）", size: 403_600_000, installed: state.trModel, loaded: state.trModel },
+      download: { phase: "idle", message: "", done: 0, total: 0, file: "", error: "" }, stats: { units: 0, cache_hit_pct: null, fail_pct: null, chars_per_sec: 0, load_ms: 0, load_error: "" }, counts: { titles: 0, bodies: 0, today: 0, fail_pct: null, cache: 0 } });
+    if (is("POST", "/translate/model")) { state.trModel = true; return json(route, { started: true }); }
+    if (is("DELETE", "/translate/model")) { state.trModel = false; return json(route, { removed: true }); }
+    if (is("POST", "/translate/try")) return json(route, { ja: "量子化はプリフィルの速度を改善します。", units: 2, failed: 0 });
+    if (is("GET", "/translate/articles/1")) return json(route, { translated: true, title_ja: "新しい量子化", summary_ja: "", body_ja: "", engine: "mock@1", hq: false, partial: false, untranslated_mark: "〔未訳〕" });
+    if (is("POST", "/translate/articles/1")) return json(route, { translated: true, title_ja: "新しい量子化", summary_ja: "", body_ja: "本文の訳です。\n〔未訳〕An English sentence.", engine: "mock@1", hq: false, partial: true, untranslated_mark: "〔未訳〕" });
     if (is("GET", "/diagnostics")) return json(route, diagnostics(state));
     if (is("GET", "/diagnostics/notice")) return json(route, state.diagProblems ? { message: "取得が止まった可能性のある取得先が 1 件あります", level: "warn", count: 1 } : { message: null, level: null, count: 0 });
     if (is("POST", "/diagnostics/selfcheck")) return json(route, { at: ago(0), ok: false, checks: [

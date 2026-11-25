@@ -186,6 +186,21 @@ export default function DiagnosticsPage() {
         </Card>
       )}
 
+      {d.translate && (
+        <Card id="diag-translate" title="翻訳" hint="軽い翻訳（QuickMT）の件数・速さ・キャッシュの当たり・検査で落ちた率です。落ちた文は原文のまま残しています。">
+          <dl data-testid="diag-translate">
+            <Row k="エンジン・モデル" v={`${d.translate.engine}・${d.translate.installed ? (d.translate.loaded ? "メモリに読み込み済み" : "入っている") : "未取得"}（スレッド ${d.translate.threads}・バッチ ${d.translate.batch}・beam ${d.translate.beam}${d.translate.cpu_isa ? `・${d.translate.cpu_isa}` : ""}）`} />
+            <Row k="保存した訳（題・本文・今日）" v={`${d.translate.counts.titles} · ${d.translate.counts.bodies} · ${d.translate.counts.today} 件`} id="tr-counts" />
+            <Row k="LLM の状態（ok 以外は題と本文だけ訳す）" v={d.translate.llm_state} />
+            <Row k="動いてからの文・速さ" v={`${d.translate.run.units} 文・${d.translate.run.chars_per_sec} 文字/秒（読み込み ${d.translate.run.load_ms} ms）`} />
+            <Row k="キャッシュの当たり" v={d.translate.run.cache_hit_pct == null ? "—" : `${d.translate.run.cache_hit_pct} %（覚え ${d.translate.counts.cache} 文）`} id="tr-cache" />
+            <Row k="検査で落ちた率（動いてから・保存した全体）" v={`${d.translate.run.fail_pct ?? "—"} % · ${d.translate.counts.fail_pct ?? "—"} %`} id="tr-fail" />
+            <Row k="落ちた理由" v={Object.entries(d.translate.run.reasons).map(([k, n]) => `${k} ${n}`).join("・") || "なし"} />
+            {d.translate.run.load_error && <Row k="読み込みの失敗" v={d.translate.run.load_error} />}
+          </dl>
+        </Card>
+      )}
+
       <SelfCheckCard />
     </div>
   );

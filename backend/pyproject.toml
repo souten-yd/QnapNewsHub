@@ -13,6 +13,12 @@ dependencies = [
     "cryptography==50.0.0",
     "trafilatura==2.4.0",
     "zstandard==0.25.0",
+    # 軽い翻訳（translate.py）。ctranslate2 は 4.6.2 が manylinux2014（glibc 2.17）の wheel のある最後の版（4.7 以降は manylinux_2_27 以上）。
+    # sentencepiece も 0.2.0 が最後（0.2.1 以降は manylinux_2_27 以上）。numpy・pyyaml は ctranslate2 の依存
+    "ctranslate2==4.6.2",
+    "sentencepiece==0.2.0",
+    "numpy==2.2.6",
+    "pyyaml==6.0.4",
     # trafilatura の依存（QPKG の manylinux2014 の wheel があるもの。requirements.lock と同じ版）
     "lxml==6.1.3",
     "courlan==1.5.0",
