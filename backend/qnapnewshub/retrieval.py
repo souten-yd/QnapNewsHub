@@ -349,6 +349,124 @@ def score_neighbors(out: dict, seed_ids: list[int], seed_scores: list[float], q:
     return out
 
 
+# ---- 会合（meet）と条件つきの深さ（2026-11-25。測定: 評価の置き場の「深さと会合とカードの形」） ----
+# 深さだけを上げても点数は動かない（深い段の点は減衰で必ず下になる）。上位の種から**別々に**展開し、2 つ以上の種から届いた物・辺へ加点（会合）して初めて深さが効く。
+# 既定の深さは 1（普通の問いは深くすると雑音が増える）。問いが 2 つ以上の物を結ぶときだけ、最大 MEET_DEPTH_MAX まで。
+
+MEET_SEEDS = 3        # 別々に展開する種の物の数（上位）
+MEET_BONUS = 0.3      # 2 つ以上の種から届いた物・辺へ足す点数（上限 0.99）
+MEET_DEPTH_MAX = 5
+MEET_LIMIT = 60       # 種 1 つの展開が読む辺の上限（段をまたいだ合計）
+MEET_HUB_K = 10       # 物 1 つにつき読む辺の数（ハブの抑制）
+LEGACY_LIMIT = 40     # 普通の問い（展開しない）の、辺の上限（今までの /graph/neighbors の使い方と同じ）
+MEET_NODES_MAX, MEET_EDGES_MAX = 80, 120      # 返す候補の上限（点数の大きい順）
+MEET_EXTRA = 1        # 最初の会合の段に足す段数（測定で決めた値。0＝会合した段で止める）
+CONNECT_CUES = ("関係", "つなが", "繋が", "つなぐ", "繋ぐ", "経由", "橋渡し", "間の", "between", "connect", "relation", "relate", "via ", "through", "link between")      # 高レベル（主題・関係）の語: 5 段まで
+COMPARE_CUES = ("違い", "比べ", "比較", "対比", "どちらが", " vs", "versus", "compare", "difference", "変わった", "変化")      # 2 段まで（比較・変化は 2 段が最良）
+DEPTH_CAP_CONNECT, DEPTH_CAP_COMPARE = 5, 2
+
+
+def _fold_q(q: str) -> str:
+    return unicodedata.normalize("NFKC", q or "").casefold()
+
+
+def depth_plan(q: str, named: int, n_seeds: int) -> dict:
+    """問いの種類から、展開する深さの上限を決める（規則だけ。LLM なし）。{"cap": 1〜5, "kind": "default|compare|connect", "named": 問いに名前が出た種の物の数, "cues": 当たった語}。
+    種の物が 2 つ未満なら会合が起きないので常に 1（深さは無益）。高レベル（関係・経由・経緯・between など）の語があれば 5、
+    比較・変化の語（並べただけの「A と B」は深くしない。複数の文書の問いが下がるため）なら 2、それ以外は 1（既定）。誤判定は既定の深さ 1 に戻るだけ（安全側）。"""
+    f = _fold_q(q)
+    if n_seeds < 2:
+        return {"cap": 1, "kind": "default", "named": named, "cues": []}
+    connect = [c for c in CONNECT_CUES if c in f]
+    if connect:
+        return {"cap": DEPTH_CAP_CONNECT, "kind": "connect", "named": named, "cues": connect}
+    compare = [c for c in COMPARE_CUES if c in f]
+    if compare:
+        return {"cap": DEPTH_CAP_COMPARE, "kind": "compare", "named": named, "cues": compare}
+    return {"cap": 1, "kind": "default", "named": named, "cues": []}
+
+
+def expand_meet(db: Session, ids: list[int], seed_scores: list[float], q: str, *, scopes: list[str], depth: int | None = None, meet: bool = True,
+                min_confidence: float = 0.0, budget: Budget) -> dict:
+    """上位 MEET_SEEDS の種の物から**別々に**展開（kg_view.neighbors を種ごと）し、2 つ以上の種から届いた物・辺へ MEET_BONUS を足して 1 つの候補にする。
+    depth=None（自動）: depth_plan の上限まで展開して、種の間の最初の会合の段（＝距離の見込みの半分）で止める（会合が無ければ上限まで）。数字ならその段に固定。
+    点数は score_neighbors と同じ（元の種より必ず低い）に、会合の加点（上限 0.99）。種自身も他の種から届けば会合の物。
+    時間（budget）・候補の上限を守る（深い段は期限で止まる）。返り値: {"plan", "depth", "seeds", "nodes", "edges", "meet": {"nodes", "edges"}, "truncated", "reason"}。"""
+    ids = list(dict.fromkeys(int(i) for i in ids))[:MEET_SEEDS]
+    scores = {i: (float(seed_scores[n]) if n < len(seed_scores) else 0.5) for n, i in enumerate(ids)}
+    ents = {e.id: e for e in db.scalars(select(Entity).where(Entity.id.in_(ids), Entity.sensitivity.in_(scopes)))} if ids else {}
+    ids = [i for i in ids if i in ents]
+    f = _fold_q(q)
+    named = sum(1 for i in ids if len(nm := _fold_q(ents[i].name)) >= 2 and nm in f)
+    plan = depth_plan(q, named, len(ids))
+    cap = plan["cap"] if depth is None else max(1, min(int(depth), MEET_DEPTH_MAX))
+    if depth is None and plan["kind"] == "default":      # 普通の問い: 今までどおり（まとめて 1 段・加点なし）。測定で、別々に展開すると nDCG が下がる問いがあったため
+        out = kg_view.neighbors(db, ids, depth=1, limit=LEGACY_LIMIT, scopes=scopes, min_confidence=min_confidence, order="weight", hub_k=MEET_HUB_K, deadline=budget.deadline)
+        score_neighbors(out, ids, [scores[i] for i in ids], q)
+        lv = [x for lv in out["levels"] for x in (lv["nodes"], lv["edges"])]
+        nodes = [{**n, "depth": 1, "seeds": [], "meet": False} for n in (lv[0] if lv else [])]
+        edges = [{**e, "depth": 1, "seeds": [], "meet": False} for e in (lv[1] if lv else [])]
+        nodes.sort(key=lambda x: (-x["score"], x["id"]))
+        edges.sort(key=lambda x: (-x["score"], x["id"]))
+        return {"plan": plan, "depth": 1, "seeds": ids, "nodes": nodes[:MEET_NODES_MAX], "edges": edges[:MEET_EDGES_MAX], "meet": {"nodes": 0, "edges": 0},
+                "truncated": bool(out["truncated"]) or budget.expired(), "reason": "time" if budget.hit else ""}
+    per: dict[int, dict] = {}
+    truncated = False
+    for sid in ids:
+        out = kg_view.neighbors(db, [sid], depth=cap, limit=MEET_LIMIT, scopes=scopes, min_confidence=min_confidence, order="weight", hub_k=MEET_HUB_K, deadline=budget.deadline)
+        score_neighbors(out, [sid], [scores[sid]], q)
+        truncated = truncated or bool(out["truncated"])
+        per[sid] = out
+    first_seen: dict[int, list[int]] = {}      # 物 → それに届いた種ごとの段（種自身は 0）
+    for sid, out in per.items():
+        first_seen.setdefault(sid, []).append(0)
+        for lv in out["levels"]:
+            for n in lv["nodes"]:
+                first_seen.setdefault(n["id"], []).append(lv["depth"])
+    meeting = [sorted(ds)[1] for ds in first_seen.values() if len(ds) >= 2]      # 2 つ目の種が届いた段＝会合の成り立つ段
+    used = cap
+    if depth is None and meeting:
+        used = min(cap, max(1, min(meeting)) + MEET_EXTRA)
+    node_score: dict[int, float] = {}
+    node_info: dict[int, dict] = {}
+    node_seeds: dict[int, set[int]] = {}
+    edge_score: dict[int, float] = {}
+    edge_info: dict[int, dict] = {}
+    edge_seeds: dict[int, set[int]] = {}
+    for sid, out in per.items():
+        for lv in out["levels"]:
+            if lv["depth"] > used:
+                continue
+            for n in lv["nodes"]:
+                node_seeds.setdefault(n["id"], set()).add(sid)
+                if n.get("score", 0.0) > node_score.get(n["id"], -1.0):
+                    node_score[n["id"]], node_info[n["id"]] = n.get("score", 0.0), {**n, "depth": lv["depth"]}
+            for e in lv["edges"]:
+                edge_seeds.setdefault(e["id"], set()).add(sid)
+                if e.get("score", 0.0) > edge_score.get(e["id"], -1.0):
+                    edge_score[e["id"]], edge_info[e["id"]] = e.get("score", 0.0), {**e, "depth": lv["depth"]}
+    for sid in ids:      # 種自身が他の種から届いたときは、種自身も届いた 1 つに数える（会合の物）
+        if sid in node_seeds:
+            node_seeds[sid].add(sid)
+    meets_n = meets_e = 0
+    if meet and len(ids) >= 2:
+        for nid, ss in node_seeds.items():
+            if len(ss) >= 2:
+                node_score[nid] = min(0.99, node_score[nid] + MEET_BONUS)
+                meets_n += 1
+        for eid, ss in edge_seeds.items():
+            if len(ss) >= 2:
+                edge_score[eid] = min(0.99, edge_score[eid] + MEET_BONUS)
+                meets_e += 1
+    nodes = [{**node_info[n], "score": round(node_score[n], 4), "seeds": sorted(node_seeds[n]), "meet": len(node_seeds[n]) >= 2} for n in node_info]
+    edges = [{**edge_info[e], "score": round(edge_score[e], 4), "seeds": sorted(edge_seeds[e]), "meet": len(edge_seeds[e]) >= 2} for e in edge_info]
+    nodes.sort(key=lambda x: (-x["score"], x["id"]))
+    edges.sort(key=lambda x: (-x["score"], x["id"]))
+    cut = len(nodes) > MEET_NODES_MAX or len(edges) > MEET_EDGES_MAX
+    return {"plan": plan, "depth": used, "seeds": ids, "nodes": nodes[:MEET_NODES_MAX], "edges": edges[:MEET_EDGES_MAX], "meet": {"nodes": meets_n, "edges": meets_e},
+            "truncated": truncated or cut or budget.expired(), "reason": "time" if budget.hit else ""}
+
+
 # ---- 局所 Personalized PageRank（push 法） ----
 
 PPR_NODES_MAX, PPR_TOP_MAX, PPR_SEEDS_MAX = 20000, 500, 50

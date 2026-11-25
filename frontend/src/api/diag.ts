@@ -15,6 +15,8 @@ export interface Diagnostics {
     quota: Record<string, number>; spare_used: number; leftover: number; night_from: number; extract_enabled: boolean; extract_waiting: number;
     chain: { gateway_down_in_seconds: number | null; chain: string[]; current: string; index: number; return_in_seconds: number | null; events: { at: string; kind: string; model: string; reason: string }[] };
     gateway: { enabled: boolean; base_set: boolean; key_set: boolean; calls: number; model: string; batch: number };
+    cards?: { night_from: number; window_open: boolean; next_run_at: string; blocked: string; pending: number; made: number; gave_up: number; max_tries: number;
+      last: { at: string; done: number; calls: number; error: string; failed: number; todo: number } | null };
     knowledge: { entities: number; claims: number; extracted_articles: number; cards?: number; communities?: number; mention_candidates?: number; merged?: number; merge_candidates?: number };
     events?: { events: number; summarized: number; summary_waiting: number; summary_gave_up: number; trend_note_day: string; trend_note_slot: number | null } };
   storage: {

@@ -211,7 +211,7 @@ def test_overview_truncated_when_more_nodes_than_limit(client):
 # ---- ⑦ context ----
 
 def test_context_is_short_scoped_and_batchable(client):
-    """目的: LLM の脳の API は、1 行の定義・frontmatter のような項目・型つきの関係（相手の定義つき）・主な事実と根拠の URL・未解決の問いを短く返す。空の項目は出さない。関係は上限の中で節ごとに配る。
+    """目的: LLM の脳の API は、1 行の定義・先頭の項目（種類・状態・確かさ）・型つきの関係（相手の定義つき）・主な事実と根拠の URL・未解決の問いを短く返す。空の項目は出さない。関係は上限の中で節ごとに配る。
     機密の物は、管理者でない読み取りトークンには 404（無い物と区別しない）。まとめて引く POST は読めない id を missing に。text 形式は JSON より短い。
     根拠: 利用者の指示（context のトークン節約・区分の強制は既存の read_user・link の範囲）。"""
     for i in range(3):
@@ -230,7 +230,7 @@ def test_context_is_short_scoped_and_batchable(client):
     one = client.get(f"/api/v1/things/{bid}/context?max_relations=1").json()
     assert sum(len(v) for v in one["relations"].values()) == 1
     text = client.get(f"/api/v1/things/{bid}/context?format=text")
-    assert text.headers["content-type"].startswith("text/plain") and text.text.startswith("---\nid: ") and "## 上位" in text.text and "## Open Questions" in text.text
+    assert text.headers["content-type"].startswith("text/plain") and text.text.startswith("# Brain (#") and "## 上位" in text.text and "## 未解決の問い" in text.text and "## 出典 3 件" in text.text
     assert len(text.text) < len(json.dumps(c, ensure_ascii=False)) and len(text.text) < 1500
     batch = client.post("/api/v1/things/context", json={"ids": [bid, 987654]}, headers=H).json()
     assert [i["name"] for i in batch["items"]] == ["Brain"] and batch["missing"] == [987654]

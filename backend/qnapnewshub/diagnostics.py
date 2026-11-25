@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text
 
-from qnapnewshub import bodies as bodies_mod, searchindex, channels, entities as entities_mod, events as events_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, translate as translate_mod, translate_flow, updater, writer
+from qnapnewshub import bodies as bodies_mod, kg_job, searchindex, channels, entities as entities_mod, events as events_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, translate as translate_mod, translate_flow, updater, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.config import data_dir
 from qnapnewshub.db import NewsFetchLog, NewsItem
@@ -156,7 +156,7 @@ def llm_section(db) -> dict:
             "chain": llm_models.status(), "daily_models": llm_models.load_daily(), "extract_enabled": cfg["extract_enabled"],
             "gateway": {"enabled": cfg["gateway"]["enabled"], "base_set": bool(cfg["gateway"]["base_url"]), "key_set": st["gateway_key_set"], "calls": st["gateway_calls"],
                         "model": cfg["gateway"]["model"], "batch": cfg["gateway"]["batch"]},
-            "knowledge": entities_mod.summary(db), "extract_waiting": int(extract_waiting), "events": events_mod.diag(db)}
+            "knowledge": entities_mod.summary(db), "cards": kg_job.diag(db), "extract_waiting": int(extract_waiting), "events": events_mod.diag(db)}
 
 
 def translate_section(db) -> dict:
@@ -246,6 +246,12 @@ def problems(section: dict) -> list[dict]:
             out.append({"area": "llm", "level": "warn", "text": f"有料のモデル（{mod['model']}）を使っています。OpenRouter の残高が減ります"})
         if mod["success_pct"] is not None and mod["ok"] + mod["fail"] >= 5 and mod["success_pct"] < 50:
             out.append({"area": "llm", "level": "warn", "text": f"{mod['model']} の成功率が {mod['success_pct']}% です。別のモデルへの切り替えを検討してください"})
+    cd = l.get("cards") or {}
+    last = cd.get("last") or {}
+    if last.get("error"):
+        out.append({"area": "llm", "level": "warn", "text": f"知識カードの概要を作れませんでした（{last['error'][:80]}）。次の夜の回でやり直します"})
+    elif last.get("failed") and last["failed"] >= max(3, last.get("todo", 0) // 2):
+        out.append({"area": "llm", "level": "warn", "text": f"知識カードの返事が検査に落ちた物が {last['failed']} 件あります（同じ材料では {cd['max_tries']} 回で諦めます）"})
     tr = section.get("translate") or {}
     if tr.get("run", {}).get("load_error"):
         out.append({"area": "translate", "level": "warn", "text": f"翻訳のモデルを読み込めません（{tr['run']['load_error']}）"})

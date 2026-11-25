@@ -46,6 +46,33 @@ def retrieve_seeds(body: SeedsIn, user: User = Depends(read_user), db: Session =
     return rcache.cached("seeds", scopes, body.model_dump(mode="json", exclude={"budget_ms"}), compute)
 
 
+class ExpandIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=retrieval.MEET_SEEDS * 4)      # 種の物（点数の大きい順。上位 MEET_SEEDS だけ使う）
+    seed_scores: list[float] = Field(default_factory=list, max_length=retrieval.MEET_SEEDS * 4)
+    q: str = Field("", max_length=500)
+    depth: int | None = Field(None, ge=1, le=retrieval.MEET_DEPTH_MAX)      # 省略＝自動（普通の問いは 1・物を結ぶ問いだけ最大 5。会合した段で止める）
+    meet: bool = True      # 2 つ以上の種から届いた物・辺に加点（会合）
+    min_confidence: float = Field(0.0, ge=0, le=1)
+    confidential: bool = False
+    sensitivity: list[str] | None = Field(None, max_length=2)
+    budget_ms: int = BUDGET
+
+
+@router.post("/graph/expand")
+def graph_expand(body: ExpandIn, user: User = Depends(read_user), db: Session = Depends(get_news_db)):
+    """上位の種から別々に展開し、2 つ以上の種から届いた物・辺に加点（会合）する。深さは問いで決める（既定 1・物を結ぶ問いだけ最大 5）。応答の plan に判定（cap・kind・当たった語）・depth に実際の段。"""
+    scopes = scopes_for(user, body.confidential, body.sensitivity)
+
+    def compute() -> dict:
+        budget = rcache.Budget(body.budget_ms)
+        with rcache.hard_limit(db, budget):
+            out = retrieval.expand_meet(db, body.ids, body.seed_scores, body.q, scopes=scopes, depth=body.depth, meet=body.meet, min_confidence=body.min_confidence, budget=budget)
+        out["meta"] = {"elapsed_ms": budget.elapsed_ms(), "budget_ms": budget.ms}
+        return rcache.fit(out, [(out, "edges"), (out, "nodes")])
+
+    return rcache.cached("expand", scopes, body.model_dump(mode="json", exclude={"budget_ms"}), compute)
+
+
 class PprIn(BaseModel):
     seeds: list[int] = Field(min_length=1, max_length=retrieval.PPR_SEEDS_MAX)
     weights: list[float] = Field(default_factory=list, max_length=retrieval.PPR_SEEDS_MAX)      # 種ごとの重み（空は均等）

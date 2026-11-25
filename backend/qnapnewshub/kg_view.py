@@ -1,7 +1,7 @@
 """知識カード・知識の地図（neighbors）・Obsidian の書き出し（v0.5）。読むだけ（メモの保存だけ書く）。ARCHITECTURE 6 章。
 
 - すべて scopes（読んでよい機密の区分。既定は public だけ）で絞る。confidential は管理者（ログイン）だけが指定できる（kg_router）。
-- **neighbors は段ごとにまとめて返す**: 物の id の一覧から、辺の型・確かさ・期間・物の種類で絞った辺を確かさの順に上限つきで読み、新しく出た物を次の段の入り口にする（深さ最大 3）。
+- **neighbors は段ごとにまとめて返す**: 物の id の一覧から、辺の型・確かさ・期間・物の種類で絞った辺を確かさの順に上限つきで読み、新しく出た物を次の段の入り口にする（深さ最大 5。既定の検索は 1・地図のローカルは 1〜5）。
   1 段 1 回の SQL（IN）で、物ごとに 1 回ずつ問い合わせない。一度に全部を送らず、辺の合計は limit（最大 1,000）まで。v0.6 で ControlDeck の MPKR が使う道具にもなる。
 - 利用者のメモ（entity_notes）は AI の部分（entity_cards）と別の表。再分析・カードの作り直しは触れない。
 - Obsidian の書き出しは範囲を指定したときだけ（常に書き出さない）。物ごとに 1 つの .md（front matter・[[関係する物]]・根拠の URL）を zip にする。
@@ -22,7 +22,7 @@ from qnapnewshub import kg
 from qnapnewshub.db import ArticleEntity, Claim, Document, Entity, EntityAlias, EntityCard, EntityNote, Evidence, NewsItem, Relationship, utcnow
 from qnapnewshub.extract import ENTITY_TYPES
 
-NEIGHBOR_LIMIT_DEFAULT, NEIGHBOR_LIMIT_MAX, NEIGHBOR_IDS_MAX, NEIGHBOR_DEPTH_MAX = 200, 1000, 50, 3
+NEIGHBOR_LIMIT_DEFAULT, NEIGHBOR_LIMIT_MAX, NEIGHBOR_IDS_MAX, NEIGHBOR_DEPTH_MAX = 200, 1000, 50, 5
 NOTE_MAX = 20000
 EXPORT_LIMIT_MAX = 2000
 STATUS_LABEL = {"extracted": "AI の取り出し（原文に引用あり）", "inferred": "推測", "statistical": "一緒に出る集計", "confirmed": "確認済み"}
@@ -321,6 +321,15 @@ def _topics_of(db: Session, entity_id: int) -> list[str]:
     return [t for t, _ in sorted(counts.items(), key=lambda kv: -kv[1])[:8]]
 
 
+def evidence_rank(evs: list[dict]) -> int:
+    """主張の根拠の強さ（小さいほど強い）。根拠の段階 stage（数。小さいほど強い）の列があればその最小、無ければ原文に照合できた根拠（grounded）が 1 つでもあれば 0・根拠があるが照合できなければ 1・根拠なしは 2。
+    カードの「主張と根拠」・context の facts の並べ替えに使う（強い根拠が先）。"""
+    stages = [e["stage"] for e in evs if isinstance(e.get("stage"), int)]
+    if stages:
+        return min(stages)
+    return 0 if any(e.get("grounded") for e in evs) else (1 if evs else 2)
+
+
 def _claims_with_evidence(db: Session, entity_id: int, scopes: list[str], limit: int = 50) -> list[dict]:
     claims = db.scalars(select(Claim).where(Claim.entity_id == entity_id, Claim.sensitivity.in_(scopes)).order_by(Claim.id.desc()).limit(limit)).all()
     evs: dict[int, list] = {}
@@ -328,7 +337,8 @@ def _claims_with_evidence(db: Session, entity_id: int, scopes: list[str], limit:
         for ev, d in db.execute(select(Evidence, Document).join(Document, Document.id == Evidence.document_id).where(Evidence.claim_id.in_([c.id for c in claims]))):
             if d.sensitivity in scopes:
                 evs.setdefault(ev.claim_id, []).append({"document": {"id": d.id, "kind": d.kind, "title": d.title, "url": d.url, "source": d.source, "published_at": kg.iso(d.published_at)}, "quote": ev.quote, "start": ev.start, "end": ev.end,
-                                                         "page": ev.page, "quote_hash": ev.quote_hash, "grounded": bool(ev.grounded)})
+                                                         "page": ev.page, "quote_hash": ev.quote_hash, "grounded": bool(ev.grounded),
+                                                         **({"stage": getattr(ev, "stage")} if getattr(ev, "stage", None) is not None else {})})      # stage は根拠の段階の列があるときだけ（無ければ grounded だけで並べる）
     return [{"id": c.id, "kind": c.kind, "text": c.text, "value": c.value, "ai_extracted": bool(c.ai_extracted), "model": c.model, "sensitivity": c.sensitivity,
              "evidences": evs.get(c.id, [])} for c in claims]
 
@@ -360,6 +370,7 @@ def card(db: Session, entity_id: int, scopes: list[str] | None = None) -> dict |
 
     rels = relations_of(db, entity_id, scopes)
     claims = _claims_with_evidence(db, entity_id, scopes)
+    claims.sort(key=lambda c: evidence_rank(c["evidences"]))      # カードの「主張と根拠」は、強い根拠（原文に照合できたもの）が先
     return {"id": ent.id, "name": ent.name, "type": ent.type, "sensitivity": ent.sensitivity, "ai_use": ent.ai_use,
             "overview": {"text": cd.summary, "model": cd.model, "at": kg.iso(cd.at), "ai": True} if cd and cd.summary else None,
             "elements": {"aliases": base.get("aliases", []), "first_seen": kg.iso(ent.first_seen), "last_seen": kg.iso(ent.last_seen), "article_count": ent.article_count,

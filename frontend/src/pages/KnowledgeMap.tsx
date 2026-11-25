@@ -27,7 +27,9 @@ const NODE_COLOR_DARK: Record<EntityType, string> = {
 const NODE_COLOR: Record<EntityType, string> = {
   model: "#3b64d9", software: "#0f8f84", org: "#b0741f", person: "#c2477f", tech: "#6d4fd1", product: "#0c8aa6", game: "#5a9a1f", policy: "#cc4a4a", place: "#5b6170", other: "#6b7285",
 };
-const LOCAL_LIMIT = [200, 400, 700];
+const LOCAL_LIMIT = [200, 400, 700, 900, 1000];      // ローカルの深さ 1〜5 ごとの辺の上限（サーバーの上限は 1000。点の数は辺の数を超えない）
+const LOCAL_HUB_K = 20;      // 深さ 3 以上は、点 1 つにつき読む辺をこの数までに絞る（ハブで広がりすぎない）
+const LOCAL_FADE = [1, 1, 0.82, 0.64, 0.46, 0.35];      // 深さ（始めの点 0・1 段目 1…）ごとの濃さ。深いほど薄く
 const BIG_LABELS = 16;      // 名前をいつも出す点の上限（「名前の量」で増減）
 const SELECT_COLOR = "#f59e0b";
 
@@ -43,7 +45,7 @@ const saveJson = (key: string, v: unknown) => { try { localStorage.setItem(key, 
 const clampNum = (v: unknown, lo: number, hi: number, d: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
 const sanitizeCfg = (c: Partial<MapCfg> | null | undefined): MapCfg => ({ nodeScale: clampNum(c?.nodeScale, 0.5, 2.5, 1), edgeAlpha: clampNum(c?.edgeAlpha, 0.03, 0.6, GALAXY.edgeAlpha), labels: clampNum(c?.labels, 0, 1, 0.5),
   color: c?.color === "kind" ? "kind" : "cluster", glow: c?.glow !== false, center: clampNum(c?.center, 0.05, 2, 0.3), repel: clampNum(c?.repel, 0.5, 12, 4), linkDist: clampNum(c?.linkDist, 0.5, 3, 1) });
-interface NodeRec { id: number; name: string; type: EntityType; degree: number; article_count: number; community: number; isolated?: boolean; importance?: number; x?: number; y?: number }
+interface NodeRec { id: number; name: string; type: EntityType; degree: number; article_count: number; community: number; isolated?: boolean; importance?: number; lvl?: number; x?: number; y?: number }
 interface EdgeRec { id: number; source: number; target: number; type: RelType; directed: boolean; confidence: number; status: string; evidence_count: number; last_at: string }
 interface NodeFlag { off: boolean; hit: boolean; dim: boolean }
 interface EdgeFlag { off: boolean; dim: boolean }
@@ -79,11 +81,11 @@ const themeOf = (dark: boolean): Theme => (dark
   ? { label: "#aeb4d6", dimNode: "#1a1c3a", dimEdge: 0.04, bg: "#0b0b1e", edge: "150,165,215", dark }
   : { label: "#4a5070", dimNode: "#e1e3ee", dimEdge: 0.06, bg: "#f3f4f8", edge: "90,100,135", dark });
 
-function addEdge(g: Graph, e: EdgeRec, local: boolean) {
+function addEdge(g: Graph, e: EdgeRec, local: boolean, lvl = 0) {
   const solid = REL_COLOR[e.type] ?? REL_COLOR.other;
   const weak = e.status === "inferred" || e.status === "statistical";      // 推測・集計は薄く（sigma は破線を持たないので、色の濃さで区別する）
   const attrs = { size: 0.55 + Math.min(e.evidence_count, 12) * 0.04, color: rgba(solid, 0.5), baseColor: solid, weak, local, type: local && e.directed ? "arrow" : "line",
-    rel: e.type, confidence: e.confidence, evidence: e.evidence_count, last_at: e.last_at, weight: edgeWeight(e) };
+    rel: e.type, confidence: e.confidence, evidence: e.evidence_count, last_at: e.last_at, weight: edgeWeight(e), lvl };
   const key = `e${e.id}`;
   if (local && e.directed) g.addDirectedEdgeWithKey(key, String(e.source), String(e.target), attrs);
   else g.addUndirectedEdgeWithKey(key, String(e.source), String(e.target), attrs);
@@ -350,12 +352,12 @@ export default function KnowledgeMapPage() {
     for (const n of ns) {
       const p = where?.get(n.id) ?? seed.get(n.id)!;
       const imp = n.importance ?? fallbackImportance(n.degree, maxDeg);
-      g.addNode(String(n.id), { x: p.x, y: p.y, imp: n.isolated ? 0 : imp, size: 1, label: n.name, color: "#888", kind: n.type, community: n.community, iso: !!n.isolated, degree: n.degree, forceLabel: false });
+      g.addNode(String(n.id), { x: p.x, y: p.y, imp: n.isolated ? 0 : imp, size: 1, label: n.name, color: "#888", kind: n.type, community: n.community, iso: !!n.isolated, degree: n.degree, lvl: local ? (n.lvl ?? 0) : 0, forceLabel: false });
     }
     for (const e of es) {
       if (!nodes.current.has(e.source) || !nodes.current.has(e.target) || edges.current.has(e.id)) continue;
       edges.current.add(e.id);
-      addEdge(g, e, local);
+      addEdge(g, e, local, local ? Math.max(nodes.current.get(e.source)?.lvl ?? 0, nodes.current.get(e.target)?.lvl ?? 0) : 0);
     }
     g.forEachNode((k, a) => {      // まとまりに入らなかった点は、つながる点のまとまりの色（無ければ、つながる最も関係の多い点の番号から）。すべての点に色がつく
       if (a.community) return;
@@ -406,6 +408,8 @@ export default function KnowledgeMapPage() {
           const out = { ...a };
           if (f?.off) { out.hidden = true; return out; }
           out.color = colorOf(a);
+          const lvl = (a.lvl as number | undefined) ?? 0;
+          if (lvl > 1) out.color = mixOnBg(out.color, LOCAL_FADE[Math.min(lvl, 5)], theme.current.bg);      // ローカルの深い点は薄く
           out.size = (a.size as number) * cfgRef.current.nodeScale;
           if (f?.dim) { out.color = theme.current.dimNode; out.label = ""; out.forceLabel = false; out.zIndex = 0; return out; }
           const fo = getFocus();
@@ -426,7 +430,7 @@ export default function KnowledgeMapPage() {
           if (a.local) {      // ローカルの線（矢印あり）は sigma で描く
             if (f?.dim) { out.color = mixOnBg(theme.current.edge, theme.current.dimEdge, theme.current.bg); return out; }
             if (fo.key && fo.edges.has(key)) { out.color = mixOnBg(a.baseColor as string, 0.9, theme.current.bg); out.size = out.size * 1.8; out.zIndex = 1; return out; }
-            out.color = mixOnBg(theme.current.edge, fo.key ? theme.current.dimEdge : Math.min(0.9, cfgRef.current.edgeAlpha * 3), theme.current.bg);
+            out.color = mixOnBg(theme.current.edge, (fo.key ? theme.current.dimEdge : Math.min(0.9, cfgRef.current.edgeAlpha * 3)) * LOCAL_FADE[Math.min((a.lvl as number | undefined) ?? 0, 5)], theme.current.bg);
             return out;
           }
           // 全体の線: sigma は透明度を無視するので、既定の線は背景の canvas に半透明で描く（drawGlow）。sigma に残すのは、触れた点・選んだ点の線（関係の型の色）だけ
@@ -578,12 +582,12 @@ export default function KnowledgeMapPage() {
   };
 
   const fromNeighbors = (res: Awaited<ReturnType<typeof neighbors>>): { ns: NodeRec[]; es: GraphEdge[] } => ({
-    ns: [...res.seeds, ...res.levels.flatMap((l) => l.nodes)].map((n) => toRec(n)), es: res.levels.flatMap((l) => l.edges) });
+    ns: [...res.seeds.map((n) => toRec(n)), ...res.levels.flatMap((l) => l.nodes.map((n) => ({ ...toRec(n), lvl: l.depth })))], es: res.levels.flatMap((l) => l.edges) });
 
-  /** ローカル: 選んだ点の周りを深さ 1〜3 で。全体の絵とは別に、その周りだけを描く。 */
+  /** ローカル: 選んだ点の周りを深さ 1〜5 で。深いほど薄く・上限の本数は LOCAL_LIMIT。全体の絵とは別に、その周りだけを描く。 */
   const enterLocal = useCallback((id: number, d: number) => guard(async () => {
     const f = filters.current;
-    const res = await neighbors({ ids: [id], depth: d, limit: LOCAL_LIMIT[d - 1], types: f.active.size === REL_TYPES.length ? [] : [...f.active], min_confidence: f.minConf, since: sinceIso(f.period) });
+    const res = await neighbors({ ids: [id], depth: d, limit: LOCAL_LIMIT[d - 1], hub_k: d >= 3 ? LOCAL_HUB_K : undefined, types: f.active.size === REL_TYPES.length ? [] : [...f.active], min_confidence: f.minConf, since: sinceIso(f.period) });
     const { ns, es } = fromNeighbors(res);
     if (res.seeds.length === 0) { setMsg("見つからないThingsか、読めない区分のThingsです。"); return; }
     localRoot.current = id;
@@ -711,7 +715,7 @@ export default function KnowledgeMapPage() {
         {view === "local" && (
           <div className="flex flex-wrap items-center gap-3" data-testid="map-local">
             <button type="button" data-testid="map-back" onClick={backToOverview} className={ghost}>全体へ戻る</button>
-            <label className="flex items-center gap-2 text-xs">深さ <input type="range" min={1} max={3} step={1} value={depth} data-testid="map-depth" aria-label="ローカルの深さ" disabled={busy}
+            <label className="flex items-center gap-2 text-xs">深さ <input type="range" min={1} max={5} step={1} value={depth} data-testid="map-depth" aria-label="ローカルの深さ" disabled={busy}
               onChange={(e) => { const d = Number(e.target.value); void enterLocal(localRoot.current, d); }} className="w-28" /><span className="num w-4">{depth}</span></label>
           </div>
         )}

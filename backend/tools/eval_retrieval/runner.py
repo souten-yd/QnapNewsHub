@@ -6,6 +6,7 @@
   ③ neighbors … ②の上位 3 つの物から POST /graph/neighbors（深さ 1。seed_scores・q を渡して辺の score をもらう）→ 辺（rel）・相手の物・辺の根拠の文書（POST /retrieve/evidence）。
                 ②の並びへ score で差し込む（fuse_scored。両方から来た参照は点数を足す）
   ④ ppr      … ②の上位 3 つの物から POST /graph/ppr → 物・上位の物の主張と根拠の文書（/retrieve/evidence）。②と RRF で合わせる
+  ③' meet    … ②の上位 3 つの物から POST /graph/expand（上位の種から別々に展開し、2 つ以上の種から届いた物・辺へ加点＝会合。深さは自動〔普通の問いは 1・物を結ぶ問いだけ最大 5〕か --meet-depth で固定）。③と同じに差し込む
   ⑤ context  … ③④を合わせ、上位の物の POST /things/context（LLM に渡す文脈）。文脈から取れる主張・関係・文書の参照も足す
 ④⑤の合わせ方 RRF は 1/(10+順位)。時間は、その道に必要な呼び出しを順に流した合計（キャッシュは呼び出しごとに捨てる）。
 文脈の密度: 渡した文脈（①〜④は上位 10 件を文にしたもの、⑤は物の文脈＋上位 5 文書の題）に入っていた正解の参照の数 ÷ 見積りのトークン数 × 1000。
@@ -18,8 +19,8 @@ from pathlib import Path
 
 from . import metrics
 
-PATHS = ("fulltext", "seeds", "neighbors", "ppr", "context")
-PATH_LABEL = {"fulltext": "① 全文だけ", "seeds": "② 種", "neighbors": "③ 種＋周り 1 段", "ppr": "④ 種＋局所 PPR", "context": "⑤ 物の文脈"}
+PATHS = ("fulltext", "seeds", "neighbors", "meet", "ppr", "context")
+PATH_LABEL = {"fulltext": "① 全文だけ", "seeds": "② 種", "neighbors": "③ 種＋周り 1 段", "meet": "③' 種＋会合の展開", "ppr": "④ 種＋局所 PPR", "context": "⑤ 物の文脈"}
 H = {"X-Requested-With": "NewsHub"}
 SEED_LIMIT = 10
 EXPAND_FROM = 3       # 種の物のうち、周りへ広げる数
@@ -91,9 +92,11 @@ class Lookup:
 
 
 class Run:
-    def __init__(self, client, lookup: Lookup):
+    def __init__(self, client, lookup: Lookup, meet_depth: int | None = None):
         self.c = client
         self.lk = lookup
+        self.meet_depth = meet_depth      # None＝自動（サーバーが問いで決める）
+        self.meet_info: dict = {}
         self.text: dict[str, str] = {}      # 参照 → 文脈に出す 1 行
 
     def call(self, method: str, url: str, **kw):
@@ -186,6 +189,45 @@ class Run:
         top = sorted(out.items(), key=lambda t: -t[1])[:EXPAND_MAX]
         return dict(top), ms + ms2
 
+    # ---- ③' ----
+    def meet(self, ent_ids: list[int], ent_scores: list[float], question: str) -> tuple[dict[str, float], float]:
+        """/graph/expand（会合の展開）の周りの参照 → 点数。物は物の点数・辺は辺の点数（両端の物にも辺の点数）・根拠の文書は辺の点数の 0.6 倍。"""
+        ids = ent_ids[:EXPAND_FROM]
+        if not ids:
+            return {}, 0.0
+        body: dict = {"ids": ids, "seed_scores": ent_scores[:EXPAND_FROM], "q": question}
+        if self.meet_depth:
+            body["depth"] = self.meet_depth
+        r, ms = self.call("POST", "/graph/expand", json=body)
+        self.meet_info = {"depth": r["depth"], "kind": r["plan"]["kind"], "meet": r["meet"], "n_nodes": len(r["nodes"]), "n_edges": len(r["edges"])}
+        names = {n["id"]: n["name"] for n in r["nodes"]}
+        edges = sorted(r["edges"], key=lambda e: -e["score"])[:EXPAND_MAX]
+        rel_ids = [e["id"] for e in edges if e["id"] in self.lk.rel_ids]
+        ev, ms2 = self._evidence_docs({"relationships": rel_ids[:20], "per_item": 2}) if rel_ids else ({"relationships": {}}, 0.0)
+        out: dict[str, float] = {}
+
+        def put(ref: str, sc: float) -> None:
+            if sc > out.get(ref, -1.0):
+                out[ref] = sc
+
+        for e in edges:
+            sc = e["score"]
+            if e["id"] in self.lk.rel_ids:
+                ref = f"rel:{e['id']}"
+                put(ref, sc)
+                self.text[ref] = f"{names.get(e['source'], e['source'])} -{e['type']}-> {names.get(e['target'], e['target'])}"
+            for end in [x for x in (e["source"], e["target"]) if x not in ids] or [e["target"]]:      # 種でない端（どちらも種なら ③ と同じく目的語）
+                put(f"ent:{end}", sc)
+                self.text.setdefault(f"ent:{end}", names.get(end, str(end)))
+            for evd in (ev["relationships"].get(str(e["id"])) or {}).get("evidences", []):
+                ref = f"doc:{evd['document']['id']}"
+                put(ref, sc * 0.6)
+                self.text.setdefault(ref, evd["document"]["title"])
+        for n in r["nodes"]:      # 辺の後に（同点では辺の相手が先。③ と同じ並び）。種が他の種から届いた会合の点（加点つき）もここで入る
+            put(f"ent:{n['id']}", n["score"])
+            self.text.setdefault(f"ent:{n['id']}", n["name"])
+        return dict(sorted(out.items(), key=lambda t: -t[1])[:EXPAND_MAX]), ms + ms2
+
     # ---- ④ ----
     def ppr(self, ent_ids: list[int], scores: list[float]) -> tuple[list[str], float]:
         ids = ent_ids[:EXPAND_FROM]
@@ -277,6 +319,11 @@ def run_question(run: Run, q: dict) -> dict[str, dict]:
     both = {r: min(0.99, sd["scores"][r] + sc) for r, sc in nb_scores.items() if r in sd["scores"]}      # 種と周りの両方から来た参照は、2 つの点数を足して（上限 0.99）押し上げる
     l3 = fuse_scored([r for r in sd["list"] if r not in both], sd["scores"], {**nb_scores, **both})
     done("neighbors", l3, ms_sd + ms_nb)
+    mt_scores, ms_mt = run.meet(sd["ent_ids"], sd["ent_scores"], q["q"])
+    both_m = {r: min(0.99, sd["scores"][r] + sc) for r, sc in mt_scores.items() if r in sd["scores"]}
+    lm = fuse_scored([r for r in sd["list"] if r not in both_m], sd["scores"], {**mt_scores, **both_m})
+    done("meet", lm, ms_sd + ms_mt)
+    out["meet"]["info"] = dict(run.meet_info)
     pp, ms_pp = run.ppr(sd["ent_ids"], sd["ent_scores"])
     l4 = rrf(sd["list"], pp)
     done("ppr", l4, ms_sd + ms_pp)
@@ -289,13 +336,13 @@ def run_question(run: Run, q: dict) -> dict[str, dict]:
     return out
 
 
-def run_all(client, db_path: Path, questions: list[dict], warmup: int = 3, progress=None) -> list[dict]:
+def run_all(client, db_path: Path, questions: list[dict], warmup: int = 3, progress=None, meet_depth: int | None = None) -> list[dict]:
     lk = Lookup(db_path)
     for q in questions[:warmup]:      # 温めてから測る（初回の接続・ページの読み込みを外す）
-        run_question(Run(client, lk), q)
+        run_question(Run(client, lk, meet_depth), q)
     rows = []
     for i, q in enumerate(questions):
-        res = run_question(Run(client, lk), q)
+        res = run_question(Run(client, lk, meet_depth), q)
         rows.append({"id": q["id"], "type": q["type"], "q": q["q"], "gold_n": len(gold_refs(q)), "paths": res})
         if progress:
             progress(i + 1, len(questions))

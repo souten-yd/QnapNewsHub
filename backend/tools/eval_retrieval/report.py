@@ -61,7 +61,7 @@ def render(rows: list[dict], info: dict) -> str:
         best = max(PATHS, key=lambda p: by[t][p]["r20"] or 0)
         zero = [r for r in sel if all(r["paths"][p]["r20"] == 0 for p in PATHS)]
         L.append(f"- **{TYPE_LABEL[t]}**（{len(sel)} 問）: 最良の道は {PATH_LABEL[best]}（R@20 {_f(by[t][best]['r20'])}）。どの道でも R@20 が 0 の問い {len(zero)} 問" + (": " + "・".join(r["id"] for r in zero) if zero else ""))
-    L += ["", f"## {n + 1}. 問いごとの R@10（①〜⑤）", "", "| id | 種類 | 問い | 正解数 | ① | ② | ③ | ④ | ⑤ |", "|---|---|---|---:|---:|---:|---:|---:|---:|"]
+    L += ["", f"## {n + 1}. 問いごとの R@10", "", "| id | 種類 | 問い | 正解数 | " + " | ".join(PATH_LABEL[p].split(" ")[0] for p in PATHS) + " |", "|---|---|---|---:|" + "---:|" * len(PATHS)]
     for r in rows:
         L.append(f"| {r['id']} | {TYPE_LABEL[r['type']]} | {r['q']} | {r['gold_n']} | " + " | ".join(f"{r['paths'][p]['r10']:.2f}" for p in PATHS) + " |")
     L.append("")

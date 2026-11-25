@@ -29,7 +29,7 @@ def test_context_text_has_no_long_url_but_json_keeps_it(client):
     js = client.get(f"/api/v1/things/{eid}/context").json()
     assert js["sources"] == [GNEWS] and len(js["source_label"]) == 1 and js["source_label"][0].startswith("Google News X 20") and " d" in js["source_label"][0]
     tx = client.get(f"/api/v1/things/{eid}/context?format=text").text
-    assert "news.google.com" not in tx and "http" not in tx and f"source: {js['source_label'][0]}" in tx
+    assert "news.google.com" not in tx and "http" not in tx and f"- {js['source_label'][0]}" in tx
     assert len(GNEWS) > 150 and len(tx) < len(json.dumps(js, ensure_ascii=False))      # 転送 URL は 150 文字超。text はそれを含まない分だけ JSON より短い
 
 

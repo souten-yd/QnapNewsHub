@@ -23,7 +23,7 @@ export interface GraphEdge {
   first_at: string; last_at: string; sensitivity: string;
 }
 export interface NeighborsResult { seeds: GraphNode[]; levels: { depth: number; nodes: GraphNode[]; edges: GraphEdge[] }[]; truncated: boolean }
-export interface NeighborsQuery { ids: number[]; types?: string[]; depth?: number; limit?: number; min_confidence?: number; kinds?: string[]; since?: string | null }
+export interface NeighborsQuery { ids: number[]; types?: string[]; depth?: number; limit?: number; hub_k?: number; min_confidence?: number; kinds?: string[]; since?: string | null }
 
 export const neighbors = (q: NeighborsQuery) => api<NeighborsResult>("/graph/neighbors", { method: "POST", json: q });
 export const useSeeds = () => useQuery({ queryKey: ["graph", "seeds"], queryFn: () => api<{ items: GraphNode[] }>("/graph/seeds?limit=12"), staleTime: 60_000, retry: false });

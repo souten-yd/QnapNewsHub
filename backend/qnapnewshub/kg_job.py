@@ -3,6 +3,8 @@
 - 概要を作る物は **public かつ AI_USE=allowed** だけ（機密・ローカル限定の物は OpenRouter 等の外部 LLM へ送らない。送る材料の主張も同じ区分のものだけ）。
 - 送る材料は、物の名前・種類・主張・関係の相手・記事の題（公開情報）。記事の中の命令に従わない（枠で囲んだデータとして送り、JSON だけを返させ、道具は渡さない）。
 - 返事の検査: 日本語・長さ・**材料に無い数字を含む概要は捨てる**（event_llm.valid_summary と同じ）。捨てたら tries を足し、同じ材料（sig）では 3 回で諦める（古い概要は残す）。
+- **失敗の扱い（2026-11-25 に確かめた）**: 通信・ゲートウェイ・OpenRouter が使えない失敗（LlmUnavailable・LlmNotAllowed）は tries を**数えず**、次の回（夜の間の次の取得）にそのままやり直す（名前解決の失敗など一時の不調で諦めない）。
+  返事が検査を通らなかった失敗だけ、同じ材料（sig）で MAX_TRIES 回まで数える（材料が変われば数え直し）。診断（diag）に、次に走る時刻・最後の結果（失敗の理由と回数）・まだ概要の無い物の数・諦めた物の数を出す。
 - 変化の判定: sig = 記事の数の桁・主張の数と最大 id・関係の数と根拠の数。同じなら作り直さない。夜（設定の night_from 時以降）だけ。
 """
 from __future__ import annotations
@@ -13,12 +15,13 @@ import json
 import logging
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, or_, select
 
 from qnapnewshub import db as news_db
 from qnapnewshub import entity_merge, event_llm, extract, kg, llm, llm_models, llm_task, mapgrav, rest, settings, things, writer
+from qnapnewshub import logbuf
 from qnapnewshub.db import Claim, Entity, EntityCard, NewsItem, NewsMeta, Relationship, ArticleEntity
 
 logger = logging.getLogger("qnapnewshub.kg_job")
@@ -224,12 +227,36 @@ def _save(results: list[tuple[dict, dict, str]]) -> None:
     writer.run("news.kg_card", do, user=False)
 
 
+LAST_KEY = "kg_cards_last"
+
+
+def _record_last(info: dict) -> None:
+    """最後に実際に LLM を呼んだ回の結果を残す（診断用。再起動をまたぐ）。"""
+    payload = json.dumps({"at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), **info}, ensure_ascii=False)
+
+    def do() -> None:
+        with news_db.session() as db:
+            row = db.get(NewsMeta, LAST_KEY)
+            if row is None:
+                db.add(NewsMeta(key=LAST_KEY, value=payload))
+            else:
+                row.value = payload
+            db.commit()
+
+    try:
+        writer.run("news.kg_card_last", do, user=False)
+    except Exception:  # noqa: BLE001 - 診断の保存の失敗で夜の仕事を止めない
+        logger.exception("知識カードの結果を保存できませんでした")
+
+
 async def run_cards() -> dict:
+    """{"done", "calls", "error", "failed"（検査に落ちて tries を数えた物の数）, "todo"（この回の対象の数）}。"""
     cfg = settings.load()["llm"]
     if not cfg["prep_enabled"] or rest.blocks_analysis() or datetime.now().hour < cfg["night_from"]:
-        return {"done": 0, "calls": 0, "error": ""}
+        return {"done": 0, "calls": 0, "error": "", "failed": 0, "todo": 0}
     todo = await asyncio.to_thread(targets)
-    done = calls = 0
+    done = calls = failed = 0
+    error = ""
     for i in range(0, len(todo), BATCH):
         part = todo[i:i + BATCH]
         try:
@@ -237,7 +264,8 @@ async def run_cards() -> dict:
             calls += 1
         except (llm.LlmNotAllowed, llm.LlmUnavailable) as exc:
             logger.info("知識カードの概要をつくりません: %s", exc)
-            return {"done": done, "calls": calls, "error": str(exc)}
+            error = logbuf.redact(str(exc))      # tries は数えない（次の回にやり直す）
+            break
         try:
             got = parse(text, part)
         except ValueError as exc:
@@ -246,12 +274,43 @@ async def run_cards() -> dict:
         llm_models.record(model, bool(got), "検査落ち")
         await asyncio.to_thread(_save, [(t, got.get(n, {}), model) for n, t in enumerate(part, 1)])
         done += len(got)
-    return {"done": done, "calls": calls, "error": ""}
+        failed += len(part) - len(got)
+    out = {"done": done, "calls": calls, "error": error, "failed": failed, "todo": len(todo)}
+    if todo:
+        await asyncio.to_thread(_record_last, out)
+    return out
+
+
+def next_run(now: datetime, night_from: int) -> datetime:
+    """次に知識カードを作りに行ける時刻（夜の窓＝night_from 時以降。窓の中なら now）。実際に走るのは、その後の最初の取得の回。"""
+    if now.hour >= night_from:
+        return now
+    return now.replace(hour=night_from, minute=0, second=0, microsecond=0) if night_from <= 23 else now
+
+
+def diag(db) -> dict:
+    """診断: 次に走る時刻・最後の結果・失敗の理由と回数・まだ概要の無い Things の数・同じ材料で諦めた数。読むだけ。"""
+    cfg = settings.load()["llm"]
+    now = datetime.now()
+    nxt = next_run(now, cfg["night_from"])
+    blocked = "休止中" if rest.blocks_analysis() else "下ごしらえが無効" if not cfg["prep_enabled"] else ""
+    row = db.get(NewsMeta, LAST_KEY)
+    try:
+        last = json.loads(row.value) if row else None
+    except ValueError:
+        last = None
+    base = select(func.count(Entity.id)).where(Entity.sensitivity == "public", Entity.ai_use == "allowed", Entity.article_count >= MIN_ARTICLES)
+    cards = select(EntityCard.entity_id).where(or_(EntityCard.summary != "", EntityCard.definition != ""))
+    pending = int(db.scalar(base.where(Entity.id.not_in(cards))) or 0)
+    gave_up = int(db.scalar(select(func.count(EntityCard.entity_id)).where(EntityCard.tries >= MAX_TRIES)) or 0)
+    made = int(db.scalar(select(func.count(EntityCard.entity_id)).where(or_(EntityCard.summary != "", EntityCard.definition != ""))) or 0)
+    return {"night_from": cfg["night_from"], "window_open": now.hour >= cfg["night_from"], "next_run_at": nxt.strftime("%Y-%m-%dT%H:%M:%S"), "blocked": blocked,
+            "last": last, "pending": pending, "made": made, "gave_up": gave_up, "max_tries": MAX_TRIES}
 
 
 async def run() -> dict:
     """夜に 1 日 1 回の集計（LLM なし）と、知識カードの概要。"""
-    info: dict = {"aggregate": None, "cards": {"done": 0, "calls": 0, "error": ""}}
+    info: dict = {"aggregate": None, "cards": {"done": 0, "calls": 0, "error": "", "failed": 0, "todo": 0}}
     if rest.blocks_analysis():
         return info
     cfg = settings.load()["llm"]
@@ -259,5 +318,9 @@ async def run() -> dict:
         info["aggregate"] = await asyncio.to_thread(aggregate)
         info["layout"] = await asyncio.to_thread(_layout)      # 知識の地図の配置・重要度（計算は書き手の外。保存だけ書き手）
         await asyncio.to_thread(_mark_aggregated)
-    info["cards"] = await run_cards()
+    try:
+        info["cards"] = await run_cards()
+    except Exception as exc:  # noqa: BLE001 - カードの失敗で、後ろの仕事（今日の傾向）を止めない
+        logger.exception("知識カードの仕事に失敗しました")
+        info["cards"] = {"done": 0, "calls": 0, "error": logbuf.redact(f"{type(exc).__name__}"), "failed": 0, "todo": 0}
     return info
