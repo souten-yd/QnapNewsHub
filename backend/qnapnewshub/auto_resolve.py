@@ -114,6 +114,13 @@ def wd_targets(limit: int = WD_TARGETS) -> list[dict]:
         return out
 
 
+def _missing_details(limit: int = 100) -> list[str]:
+    """QID は付いたが詳細（正式名・説明）がまだ無い照合の QID（前の回が 429 などで途中で止まったとき）。"""
+    with news_db.session() as db:
+        return list(dict.fromkeys(db.scalars(select(EntityWikidata.qid).where(EntityWikidata.status == "linked", EntityWikidata.label_ja == "", EntityWikidata.label_en == "",
+                                                                          EntityWikidata.description == "").limit(limit))))
+
+
 def _cache_rows(keys: list[str]) -> dict[str, tuple[object, datetime]]:
     out: dict[str, tuple[object, datetime]] = {}
     with news_db.session() as db:
@@ -200,14 +207,18 @@ async def run_wikidata(budget: int = WD_SLICE) -> dict:
     """段 2 を 1 回ぶん（budget 回までの問い合わせ）。{"checked", "linked", "none", "ambiguous", "merged", "split", "alias_pairs"（別名が一致して LLM の候補になった組）, "requests", "error"}。"""
     out = {"checked": 0, "linked": 0, "none": 0, "ambiguous": 0, "merged": 0, "split": 0, "alias_pairs": 0, "requests": 0, "error": ""}
     targets = await asyncio.to_thread(wd_targets)
-    if not targets or budget <= 0:
-        if targets == []:
+    missing = await asyncio.to_thread(_missing_details)      # QID は付いたが詳細がまだ無い照合（前の回が 429 などで途中で止まったとき）
+    if (not targets and not missing) or budget <= 0:
+        if not targets:
             out["merged"] = (await asyncio.to_thread(_settle_only))["merged"]
         return out
     keys = [_search_key(t["name"], wikidata.query_language(t["name"])) for t in targets]
     client = wikidata.Client(budget, await asyncio.to_thread(_cache_rows, keys))
     results: list[tuple[dict, str, str, str]] = []
+    details: dict[str, dict] = {}
     try:
+        if missing:      # 先に、前の回で取れなかった詳細を取る（検索で 429 になると、詳細がいつまでも空になるため）
+            details.update(await client.entities(missing))
         for t in targets:
             lang = wikidata.query_language(t["name"])
             status, qid, why = wikidata.pick(t["name"], t["type"], await client.search(t["name"], lang))
@@ -216,20 +227,21 @@ async def run_wikidata(budget: int = WD_SLICE) -> dict:
                 if other:
                     status, qid, why = wikidata.pick(other, t["type"], await client.search(other, wikidata.query_language(other)))
             results.append((t, status, qid, why))
+        qids = [q for _, s, q, _ in results if s == "linked"]
+        if qids:
+            details.update(await client.entities(qids))
     except wikidata.WikidataStop as exc:
         out["error"] = logbuf.redact(str(exc))
-    details: dict[str, dict] = {}
-    qids = [q for _, s, q, _ in results if s == "linked"]
-    if qids and not out["error"]:
-        try:
-            details = await client.entities(qids)
-        except wikidata.WikidataStop as exc:
-            out["error"] = logbuf.redact(str(exc))
     out["requests"] = client.used
     fresh = dict(client.fresh)
 
     def save() -> dict:
         with news_db.session() as db:
+            for row in db.scalars(select(EntityWikidata).where(EntityWikidata.status == "linked", EntityWikidata.label_ja == "", EntityWikidata.label_en == "", EntityWikidata.description == "")):
+                d = details.get(row.qid)
+                if d:
+                    row.label_ja, row.label_en, row.description = d.get("label_ja", ""), d.get("label_en", ""), d.get("description", "")
+                    row.aliases = json.dumps(d.get("aliases", []), ensure_ascii=False)
             for t, status, qid, why in results:
                 d = details.get(qid, {}) if status == "linked" else {}
                 row = db.get(EntityWikidata, t["id"])
@@ -331,6 +343,7 @@ def build_prompt(pairs: list[dict]) -> str:
     return ("次の組それぞれについて、A と B が現実の同じ物（同じ会社・製品・モデル・人・技術など）を指す別の表記かを判定してください。\n"
             "- 同じ物の言い換え・略称・日本語と英語の表記の違い・表記の揺れ → same\n"
             "- 版・大きさ・世代が違う（GPT-4 と GPT-5 など）・親と子（会社と製品）・競合・同じ会社の別の製品 → different\n"
+            "- 日本法人・米国法人・子会社・支社・部門と、その親会社（Huawei Japan と Huawei など）は別の組織 → different\n"
             "- 材料が足りず決められない → unsure。Wikidata の説明（あれば）と記事の題を最も重視する。\n"
             "返事は JSON だけ: {\"results\":[{\"n\":1,\"verdict\":\"same|different|unsure\",\"confidence\":0.0〜1.0,\"reason\":\"60 字以内の日本語\"}]}（全部の組を n で答える）\n"
             "<data>\n" + "\n".join(rows) + "\n</data>")
@@ -405,8 +418,8 @@ def _apply(pairs: list[dict], got: dict[int, dict], model: str) -> dict:
 
 
 async def run_llm(max_calls: int = LLM_SLICE_CALLS) -> dict:
-    """段 3 を 1 回ぶん（20 組ずつ max_calls 回まで）。{"pairs", "calls", "same", "different", "unsure", "merged", "low", "error"}。"""
-    out = {"pairs": 0, "calls": 0, "same": 0, "different": 0, "unsure": 0, "merged": 0, "low": 0, "error": ""}
+    """段 3 を 1 回ぶん（20 組ずつ max_calls 回まで）。{"pairs", "calls", "bad"（返事が使えなかった呼び出し）, "same", "different", "unsure", "merged", "low", "error"}。"""
+    out = {"pairs": 0, "calls": 0, "bad": 0, "same": 0, "different": 0, "unsure": 0, "merged": 0, "low": 0, "error": ""}
     if max_calls <= 0:
         return out
     cfg = settings.load()["llm"]
@@ -424,6 +437,8 @@ async def run_llm(max_calls: int = LLM_SLICE_CALLS) -> dict:
         except ValueError as exc:
             logger.info("名寄せの判定の返事を読めませんでした: %s", exc)
             got = {}
+        if not got:
+            out["bad"] += 1      # 返事が読めない・全部検査に落ちた（診断に出す。判定は記録されないので、次の回にやり直す）
         llm_models.record(model, bool(got), "検査落ち")
         res = await asyncio.to_thread(_apply, part, got, model)
         out["pairs"] += len(part)

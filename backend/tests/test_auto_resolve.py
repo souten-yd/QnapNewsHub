@@ -90,6 +90,8 @@ def test_pick_needs_name_match_type_fit_and_a_single_candidate():
     assert wikidata.pick("オープンエーアイ", "org", [_hit("Q1", "OpenAI", "アメリカの人工知能研究機関", "オープンエーアイ", "alias")])[1] == "Q1"      # alias の一致
     assert wikidata.pick("Open", "org", [org])[0] == "none"      # 名前の一致が無い（前方一致の候補は付けない）
     assert wikidata.pick("A", "org", [org])[0] == "none"
+    assert wikidata.pick("Alpamayo", "other", [_hit("Q9", "Alpamayo", "mountain in Peru")])[0] == "none"      # 種類不明の物に同名の山を付けない
+    assert wikidata.pick("Alpamayo", "other", [_hit("Q9", "Alpamayo", "autonomous driving AI model by a company")])[0] == "linked"
     assert wikidata.clusters_compatible("model", "software") and not wikidata.clusters_compatible("org", "person") and wikidata.clusters_compatible("org", "other")
 
 
@@ -333,3 +335,91 @@ def test_wikidata_alias_match_becomes_an_llm_candidate(client, monkeypatch):
     with news_db.session() as db:
         c = db.scalar(select(MergeCandidate))
         assert c.reason == "wd_alias" and c.status == "candidate"
+
+
+def test_busy_server_is_retried_a_few_times_then_stops(client, monkeypatch):
+    """目的: Wikidata が「検索が混んでいる（cirrussearch-too-busy-error）」「maxlag」と返したら、間をあけて最大 2 回やり直す。直れば先へ進み、続けば止まって落ちない。
+    根拠: 2026-11-26 の実測で、1 秒おきでも検索の混雑の応答が出た（HTTP 200・error.code）。1 回ごとに諦めると、一晩で進まない。"""
+    _three([("Alpha", "tech")])
+    calls: list[int] = []
+
+    async def flaky(params):
+        calls.append(1)
+        if len(calls) < 3:
+            raise wikidata.WikidataBusy("busy")
+        return {"search": []}
+
+    async def nosleep(_s):
+        return None
+
+    monkeypatch.setattr(wikidata, "_fetch", flaky)
+    monkeypatch.setattr(wikidata, "_sleep", nosleep)
+    out = _run(auto_resolve.run_wikidata(10))
+    assert out["checked"] == 1 and len(calls) == 3 and out["requests"] == 3 and out["error"] == ""
+
+    async def always(params):
+        raise wikidata.WikidataBusy("busy")
+
+    monkeypatch.setattr(wikidata, "_fetch", always)
+    with news_db.session() as db:
+        db.query(EntityWikidata).delete()
+        db.query(WikidataCache).delete()
+        db.commit()
+    out = _run(auto_resolve.run_wikidata(10))
+    assert out["checked"] == 0 and out["error"] == "busy" and out["requests"] == 3
+
+
+def test_rate_limit_with_short_retry_after_waits_and_continues_but_long_stops(client, monkeypatch):
+    """目的: 429 の Retry-After が短ければ（90 秒以下）待って続け、長ければ止める。待つのは 1 回の取りまとめで 2 回まで。根拠: 2026-11-26 の実測（1.1 秒おきの検索で十数回のあと 429・23 秒待てと返った）と Wikidata の決まり。"""
+    _three([("Alpha", "tech"), ("Beta", "tech")])
+    slept: list[float] = []
+    state = {"n": 0, "wait": 5.0}
+
+    async def fetch(params):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise wikidata.WikidataRateLimited("429", state["wait"])
+        return {"search": []}
+
+    async def sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(wikidata, "_fetch", fetch)
+    monkeypatch.setattr(wikidata, "_sleep", sleep)
+    out = _run(auto_resolve.run_wikidata(10))
+    assert out["checked"] == 2 and out["error"] == "" and 6.0 in slept
+    with news_db.session() as db:
+        db.query(EntityWikidata).delete()
+        db.query(WikidataCache).delete()
+        db.commit()
+    state.update(n=0, wait=600.0)
+    out = _run(auto_resolve.run_wikidata(10))
+    assert out["checked"] == 0 and "429" in out["error"]
+
+
+def test_details_missing_after_a_stop_are_filled_in_next_run(client, monkeypatch):
+    """目的: 検索のあと 429 などで詳細（正式名・説明・別名）を取れずに止まっても、QID は残り、次の回に詳細だけ補う。根拠: 2026-11-26 の実測で、検索の途中の 429 で詳細が空のまま残った。"""
+    _three([("OpenAI", "org")])
+    hit = _hit("Q1", "OpenAI", "artificial intelligence research organization")
+    state = {"stop": True}
+
+    async def fetch(params):
+        if params["action"] == "wbgetentities" and state["stop"]:
+            raise wikidata.WikidataStop("429")
+        if params["action"] == "wbsearchentities":
+            return {"search": [hit]}
+        return {"entities": {"Q1": _entity("OpenAI", "OpenAI", "人工知能の研究機関")}}
+
+    async def nosleep(_s):
+        return None
+
+    monkeypatch.setattr(wikidata, "_fetch", fetch)
+    monkeypatch.setattr(wikidata, "_sleep", nosleep)
+    _run(auto_resolve.run_wikidata(10))
+    with news_db.session() as db:
+        w = db.scalar(select(EntityWikidata))
+        assert w.qid == "Q1" and w.description == ""
+    state["stop"] = False
+    _run(auto_resolve.run_wikidata(10))
+    with news_db.session() as db:
+        assert db.scalar(select(EntityWikidata)).description == "人工知能の研究機関"

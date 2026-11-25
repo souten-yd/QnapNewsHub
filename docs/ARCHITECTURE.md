@@ -265,6 +265,22 @@
 - 診断: `entities.summary` に retired・variant_merged・gleaned_articles・relations_exact／inferred。
 - 実データ（評価 DB のコピー）での前後と物差しは評価の置き場の md。LLM を呼ぶ部分（新プロンプト・gleaning）は模擬の試験だけで、本物の質は未測定。
 
+### 6 章の続き: 名寄せの自動化（利用者の操作なしで、表記ゆれ・日英の表記の違いを同じ Things へ。2026-11-26・feat/auto-resolve）
+利用者の決定（2026-11-25）: 「文字の揺らぎを寄せる件、ウェブ検索をして寄せられないか。ユーザー側に操作させるのは極力なくしたい。ウェブ検索をして最終的に LLM が判断するで問題ない」。
+管理者が確定する候補の画面は無くし、**夜に 3 つの段で自動で寄せ、記録して、戻せる**ようにした（`auto_resolve.py`・`wikidata.py`・`entity_merge.py`）。
+
+| 段 | 中身 | 寄せる条件 |
+|---|---|---|
+| 1 規則（夜の集計） | 従来どおり（会社の語尾・版の書き方・org/repo・大きさ違い）。残った迷う組が `merge_candidates` に残り、段 3 の入口になる | 確かな表記の違いだけ |
+| 2 Wikidata | 候補に出る物と、記事 3 件以上の未照合の物を、**名前の言語（ASCII なら英語・それ以外は日本語。別の言語の別名があればもう 1 回）で `wbsearchentities`**。QID・正式名（日英）・別名・短い説明を `entity_wikidata` に保存（カードの定義の材料にもなる）。QID の詳細は `wbgetentities` で 50 件まとめて 1 回 | 名前が label／alias と正規化して一致し、**説明が物の種類に合い、ちょうど 1 つ**だけ QID を付ける。**同じ QID の物**を、種類のまとまり（model・software・tech・product は 1 つ）が合い、版・大きさが同じなら寄せる。別の QID を持つ候補の組は「違う」にする。別名が一致する未照合の物は LLM の候補（`wd_alias`） |
+| 3 LLM の判断 | 決まらない組を **20 組ずつ**、用途 `resolve`（既存の割り当て・予備・ゲートウェイ→OpenRouter の順番。`llm_task.ask`）。材料: 両方の名前・種類・別名・Wikidata の説明・記事の題 3 件・関係の相手 5 件。答えは JSON `{n, verdict: same/different/unsure, confidence, reason}` | **same で確かさ 0.85 以上**（種類のまとまりが違う組は 0.92）。different は「違う」にして二度と聞かない。unsure・確かさの低い same は記録して 14 日あける。別の QID の組は聞かない・寄せない |
+
+- **守り**: 機密（confidential）・AI_USE が allowed 以外の物は、Wikidata にも外部の LLM にも送らない（規則の段だけ）。お休みモード・設定 `llm.resolve_enabled` が切・夜の窓の外では動かない。記事の題は `<data>` の枠の中の信用しないデータ（枠を閉じる記号は無害にする・道具なし・JSON だけを返させ、範囲外の n・理由の無い same などは捨てる）。
+- **Wikidata の使い方**（MediaWiki の API:Etiquette・Wikimedia の User-Agent policy・Wikidata:Data access で確かめた〔2026-11-26〕。出典は DESIGN 24）: 読み取りの固い上限は無いが、直列・まとめる・`maxlag`・429 と `Retry-After` を守る。実装は **1.5 秒に 1 回**（`PACE`）・1 回の取りまとめ 60 回・**1 晩 500 回**・結果は `wikidata_cache` に覚える（見つからなかった結果も 30 日・見つかった結果は 90 日）・429 は Retry-After が 90 秒以下なら待って 2 回まで続ける・「検索が混んでいる」（cirrussearch-too-busy-error）は 5 秒・20 秒あけて 2 回やり直す・それ以上は止める。User-Agent は `QnapNewsHub/<版> (open-source self-hosted news reader; low-volume entity lookup)`（Wikimedia は連絡先を推奨するが、公開のリポジトリに利用者の連絡先は入れない。止められたら診断に理由が出る）。
+- **LLM の呼び出し**: 1 晩 15 回（最大 300 組）・1 回の取りまとめ 5 回。用途 `resolve` の既定の割り当ては 40（card 150→130・予備 70→50。割り当ての無い古い設定は 0 で予備から借りて動く）。
+- **記録と戻し**: すべて `entity_merges`（`mode`＝段: auto・wikidata・llm・confirmed、`basis`＝根拠〔QID と説明・LLM の確かさと理由〕）。`undo` は段によらず同じ（Wikidata の照合の行も戻る）。戻した組は「違う」になり、どの段も二度と寄せない。画面（Things）は「最近自動で寄せたもの」（段・根拠・戻す）と、判断待ちの組の数だけ。確定・却下のボタンは無い（API の `confirm`・`dismiss` は互換のため残す）。診断に段ごとの寄せた数・戻した数・Wikidata の照合の数・今夜の使用量・止まった理由。
+- 夜の仕事: `kg_job.run` の最後で `auto_resolve.run` を取得の回ごとに 1 回ぶん進める（1 晩の上限の中で何回かに分かれる）。状態は `news_meta.resolve_state`。
+
 ## 7. トレンド
 - 単純な頻度の上位だけにしない（「AI」「ゲーム」が並ぶだけになる）。点数（初期の配点）: 過去 30 日と比べた急上昇 25%・関わる独立したイベントの数 20%・独立した出どころの数 15%・新しさ 15%・利用者の関心 15%・一次情報の裏付け 10%。
 - 方法: TF-IDF・c-TF-IDF（トピックの代表の語）・N-gram（「SSD Offload」のような複合語）・急上昇の検出（Kleinberg 法か z 値）・一緒に出る分析・トピックの分類（BERTopic の考え方を ControlDeck で。埋め込み → 次元を下げる → クラスタ → c-TF-IDF、増分）・新しい物の検出・イベントの検出・変化点の検出。
