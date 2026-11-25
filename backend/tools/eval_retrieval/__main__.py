@@ -1,7 +1,7 @@
 """`./hub.sh eval-retrieval --data <評価用の DB の置き場（コピー）> --questions <json> --out <md> [--build] [--per-type 10] [--raw <json>]`
 
 --data の下の news/news.sqlite3 を使う（呼ぶ側がコピーしたもの。ここでは読むだけではなく、ハブを起動するので開いたときの更新は入る。本物の置き場を指さないこと）。
---build を付けると、--questions に問いの集めを作ってから流す。外へ通信しない・LLM は呼ばない。
+--build を付けると、--questions に問いの集めを作ってから流す。--build-bridge は橋渡しの問い（経路 2〜6 段）を作る。外へ通信しない・LLM は呼ばない。
 """
 from __future__ import annotations
 
@@ -21,6 +21,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--build", action="store_true", help="問いの集めを作ってから流す")
     ap.add_argument("--per-type", type=int, default=10)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--build-bridge", action="store_true", help="橋渡しの問い（経路 2〜6 段の 2 物。--questions に作る。評価の置き場へ。リポジトリに入れない）を作ってから流す")
+    ap.add_argument("--per-length", type=int, default=20, help="橋渡しの問いの、経路の長さごとの数")
+    ap.add_argument("--meet-depth", default="auto", help="③' の会合の展開の深さ（auto＝問いで決める・1〜5＝固定）")
     ap.add_argument("--raw", default="", help="問いごとの生の点数の JSON の出力先（任意）")
     a = ap.parse_args(argv)
     data = Path(a.data).expanduser().resolve()
@@ -37,7 +40,10 @@ def main(argv: list[str] | None = None) -> int:
     qpath = Path(a.questions).expanduser()
     from . import build_questions, report, runner
 
-    if a.build:
+    if a.build_bridge:
+        d = build_questions.main_bridge(db_path, qpath, a.per_length, a.seed)
+        print("橋渡しの問いを作りました:", d["counts"])
+    elif a.build:
         d = build_questions.main(db_path, qpath, a.per_type, a.seed)
         print("問いを作りました:", d["counts"])
     questions = json.loads(qpath.read_text(encoding="utf-8"))["questions"]
@@ -62,7 +68,8 @@ def main(argv: list[str] | None = None) -> int:
             if r.status_code != 200:
                 print("評価用の利用者でログインできません:", r.text[:200], file=sys.stderr)
                 return 2
-        rows = runner.run_all(client, db_path, questions, progress=lambda i, n: print(f"\r{i}/{n}", end="", file=sys.stderr))
+        meet_depth = None if a.meet_depth == "auto" else int(a.meet_depth)
+        rows = runner.run_all(client, db_path, questions, meet_depth=meet_depth, progress=lambda i, n: print(f"\r{i}/{n}", end="", file=sys.stderr))
     print(file=sys.stderr)
     out = Path(a.out).expanduser()
     out.parent.mkdir(parents=True, exist_ok=True)

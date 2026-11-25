@@ -6,6 +6,8 @@
 - change（変化）: replaces の関係、または日をまたぐ release の主張が複数ある物 → 正解は、その関係／主張・文書・物。
 - multi（複数の文書）: 記事が 3 件以上のイベント → 正解は、イベントの主な物 2 つを両方含む記事（最大 5 件）とそのイベント。
 - relation（関係）: ある物を object にした uses／implements／supports／part_of／cites の関係 → 正解は、subject の物・関係・根拠の文書・object の物。
+- bridge（橋渡し。build_bridge で別に作る）: 関係（co_occurs を除く・向きなし）の最短経路が 2〜6 段の 2 物「A と B はどうつながっているか」→ 正解は、途中の物・経路の関係・その根拠の文書（経路上の全部）。
+  通常の問いの正解は 1 段先までで作られ、深さを測れない。これは深さ・会合（retrieval.expand_meet）を測る物差し。端の物は名前が 1 つしか無いものだけ。
 - crosslingual（日本語の問い・英語の記事が正解）: 題がほぼ ASCII の記事（英語）に付いた日本語の主張 → 日本語の主張を含む問い（半分は物の名前つき、半分は名前なし）。正解は、その英語の記事・主張・物。
 正解が 1 件も無い・記事の根拠が無いものは問いにしない。区分が public の物・文書だけ。
 DB は読むだけ（mode=ro）。出力の JSON は利用者の実データ由来なので、リポジトリに入れない。
@@ -19,8 +21,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-TYPES = ("fact", "compare", "change", "multi", "relation", "crosslingual")
-TYPE_LABEL = {"fact": "事実", "compare": "比較", "change": "変化", "multi": "複数の文書", "relation": "関係", "crosslingual": "日本語の問い・英語の記事"}
+TYPES = ("fact", "compare", "change", "multi", "relation", "crosslingual", "bridge")
+BRIDGE_LENGTHS = (2, 3, 4, 5, 6)
+TYPE_LABEL = {"fact": "事実", "compare": "比較", "change": "変化", "multi": "複数の文書", "relation": "関係", "crosslingual": "日本語の問い・英語の記事", "bridge": "橋渡し（2〜6 段）"}
 GOLD_DOCS_MAX = 5
 GOLD_CLAIMS_MAX = 4
 _JA = re.compile(r"[぀-ヿ㐀-鿿]")
@@ -224,10 +227,75 @@ def make_crosslingual(s: Src, rng: random.Random, n: int) -> list[dict]:
 MAKERS = {"fact": make_fact, "compare": make_compare, "change": make_change, "multi": make_multi, "relation": make_relation, "crosslingual": make_crosslingual}
 
 
+def make_bridge(s: Src, rng: random.Random, per_length: int) -> list[dict]:
+    """関係の最短経路が長さ L（BRIDGE_LENGTHS）の 2 物を、L ごとに最大 per_length 問。共起の集計（co_occurs）は経路に使わない（つながりの根拠にならない）。"""
+    adj: dict[int, dict[int, int]] = {}
+    for r in s.rels:
+        if r["type"] == "co_occurs" or r["subject_id"] == r["object_id"]:
+            continue
+        if r["subject_id"] in s.ents and r["object_id"] in s.ents:
+            adj.setdefault(r["subject_id"], {}).setdefault(r["object_id"], r["id"])
+            adj.setdefault(r["object_id"], {}).setdefault(r["subject_id"], r["id"])
+    starts = sorted(i for i in adj if i in s.unique_name)
+    rng.shuffle(starts)
+    found: dict[int, list[tuple[int, int, list[int], list[int]]]] = {L: [] for L in BRIDGE_LENGTHS}
+    used: dict[int, set[int]] = {L: set() for L in BRIDGE_LENGTHS}      # 長さごとに、同じ物を端に 2 度使わない
+    for a in starts:
+        if all(len(found[L]) >= per_length for L in BRIDGE_LENGTHS):
+            break
+        parent: dict[int, tuple[int, int]] = {a: (-1, -1)}
+        dist = {a: 0}
+        frontier = [a]
+        while frontier and dist[frontier[0]] < max(BRIDGE_LENGTHS):
+            nxt = []
+            for u in frontier:
+                for v, rid in sorted(adj[u].items()):
+                    if v not in dist:
+                        dist[v] = dist[u] + 1
+                        parent[v] = (u, rid)
+                        nxt.append(v)
+            frontier = nxt
+        for L in BRIDGE_LENGTHS:
+            if len(found[L]) >= per_length or a in used[L]:
+                continue
+            cands = sorted(v for v, d in dist.items() if d == L and v in s.unique_name and v not in used[L] and v != a)
+            if not cands:
+                continue
+            b = rng.choice(cands)
+            nodes, rels, cur = [b], [], b
+            while parent[cur][0] != -1:
+                u, rid = parent[cur]
+                rels.append(rid)
+                nodes.append(u)
+                cur = u
+            docs = [d for rid in rels for d in s.rel_ev.get(rid, [])]
+            if not docs:
+                continue
+            found[L].append((a, b, nodes, rels))
+            used[L].update({a, b})
+    out = []
+    for L in BRIDGE_LENGTHS:
+        for a, b, nodes, rels in found[L]:
+            na, nb = s.ents[a]["name"], s.ents[b]["name"]
+            docs = sorted({d for rid in rels for d in s.rel_ev.get(rid, [])})
+            out.append({"type": "bridge", "length": L, "q": rng.choice(["{a} と {b} はどうつながっているか", "{a} と {b} の関係を、間の物をたどって知りたい"]).format(a=na, b=nb), "keywords": [na, nb],
+                        "gold": _gold(docs=docs, ents=nodes, rels=rels), "anchor": {"a": a, "b": b, "path": nodes[::-1], "relationships": rels}})
+    return out
+
+
+def build_bridge(db_path: Path, per_length: int = 20, seed: int = 1) -> dict:
+    s = Src(db_path)
+    qs = make_bridge(s, random.Random(f"{seed}:bridge"), per_length)
+    for n, q in enumerate(qs, 1):
+        q["id"] = f"b{n:03d}"
+    return {"version": 1, "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "seed": seed, "per_length": per_length,
+            "counts": {f"L{L}": sum(1 for q in qs if q["length"] == L) for L in BRIDGE_LENGTHS}, "questions": qs}
+
+
 def build(db_path: Path, per_type: int = 10, seed: int = 1) -> dict:
     s = Src(db_path)
     questions: list[dict] = []
-    for t in TYPES:
+    for t in MAKERS:
         rng = random.Random(f"{seed}:{t}")
         for q in MAKERS[t](s, rng, per_type):
             if not q["gold"]["docs"] and not q["gold"]["entities"]:
@@ -247,6 +315,13 @@ def build(db_path: Path, per_type: int = 10, seed: int = 1) -> dict:
 
 def main(db_path: Path, out: Path, per_type: int = 10, seed: int = 1) -> dict:
     data = build(db_path, per_type, seed)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    return data
+
+
+def main_bridge(db_path: Path, out: Path, per_length: int = 20, seed: int = 1) -> dict:
+    data = build_bridge(db_path, per_length, seed)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return data

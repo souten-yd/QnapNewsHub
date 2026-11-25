@@ -5,8 +5,8 @@ import { useDecideMention } from "../../api/things";
 import { ENTITY_TYPE_LABEL } from "../../api/news";
 import { Card, field } from "../news/settingsUi";
 
-/** 知識カード（Things のページの上半分）。先頭の帯（1 行の定義・種類・今の状態・確かさ・別名・根拠の数と新しさ・最後に確かめた日）・概要（AI。夜にまとめて作る）・関係（型ごと。畳める）・
- *  未解決の問い・反対の見方・主な数値・つなぐ候補・変化と矛盾・主張と根拠・利用者のメモ。
+/** 知識カード（Things のページの上半分）。**形は固定**（context と同じ順）: 先頭の帯（1 行の定義・種類・今の状態・確かさ・別名）→ 概要（AI。夜にまとめて作る）→ 関係（型ごと。畳める）→
+ *  主張と根拠（原文に照合できた根拠が先）→ 主な数値（条件つき）→ 未解決の問い・反対の見方 → 変化と矛盾・つなぐ候補 → 出典の数と新しさ・最後に確かめた日 → 利用者のメモ。
  *  AI の部分と利用者のメモは別に保存する。メモは打つとすぐ保存し、再分析・概要の作り直しでは上書きされない。 */
 const AI = "AI の取り出し";
 const day = (iso: string) => (iso ? new Date(iso).toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" }) : "—");
@@ -39,9 +39,14 @@ function BriefBand({ c }: { c: KnowledgeCardData }) {
         <span data-testid="brief-confidence" title="根拠の文書（記事）の数から決めた値です" className="num rounded-md bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium dark:bg-zinc-800">確かさ {b.confidence}（{b.confidence_label}）</span>
         {b.aliases.map((a) => <span key={a} className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[11px] text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">{a}</span>)}
       </p>
-      <p className="num text-[11px] text-zinc-500" data-testid="brief-evidence">根拠 {b.evidence_count} 件{b.latest_evidence_at && ` · 最新 ${day(b.latest_evidence_at)}`} · 最後に確かめた日 {b.checked_at ? day(b.checked_at) : "まだ"}</p>
     </section>
   );
+}
+
+/** カードの AI の部分の末尾: 出典の数と新しさ・最後に確かめた日（固定の形の最後の節）。 */
+function SourceFooter({ c }: { c: KnowledgeCardData }) {
+  const b = c.brief;
+  return <p className="num px-1 text-[11px] text-zinc-500" data-testid="brief-evidence">根拠 {b.evidence_count} 件{b.latest_evidence_at && ` · 最新 ${day(b.latest_evidence_at)}`} · 最後に確かめた日 {b.checked_at ? day(b.checked_at) : "まだ"}</p>;
 }
 
 function RelationItem({ r }: { r: CardRelation & { other: { id: number; name: string; type: string; definition?: string } } }) {
@@ -126,7 +131,7 @@ function Claims({ rows }: { rows: CardClaim[] }) {
     <ul className="space-y-2" data-testid="card-claims">
       {rows.map((c) => (
         <li key={c.id} className="rounded-xl border border-zinc-200 p-3 text-sm dark:border-zinc-800">
-          <p className="flex flex-wrap items-center gap-2"><Badge>{KIND[c.kind] ?? c.kind}</Badge>{c.value && <span className="num rounded-md bg-zinc-100 px-1.5 py-0.5 text-[11px] dark:bg-zinc-800">{c.value}</span>}<span className="min-w-0 break-words">{c.text}</span></p>
+          <p className="flex flex-wrap items-center gap-2"><Badge>{KIND[c.kind] ?? c.kind}</Badge>{c.evidences.some((e) => e.grounded) && <span title="根拠の引用が原文に見つかった主張です" data-testid="claim-grounded" className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">原文一致</span>}{c.value && <span className="num rounded-md bg-zinc-100 px-1.5 py-0.5 text-[11px] dark:bg-zinc-800">{c.value}</span>}<span className="min-w-0 break-words">{c.text}</span></p>
           <details className="mt-1.5 text-[11px] text-zinc-500">
             <summary className="cursor-pointer select-none">根拠 {c.evidences.length} 件{c.ai_extracted && <span className="ml-2 font-semibold text-amber-700 dark:text-amber-400">{AI}</span>}</summary>
             <ul className="mt-1 space-y-1">
@@ -199,8 +204,8 @@ export default function KnowledgeCard({ id }: { id: number }) {
         {c.relations.length === 0 ? <p className="text-xs text-zinc-500" data-testid="card-no-relations">関係はまだありません。</p> : <Groups groups={c.groups} />}
       </Card>
 
-      <Card id="card-open" title="未解決の問い・反対の見方" hint="AI が材料から作ります。材料に無い事実は書かせず、根拠が無いことは問いとして出します。">
-        {c.questions.length + c.opposing.length === 0 ? <p className="text-xs text-zinc-500" data-testid="card-no-questions">まだありません（夜に作ります）。</p> : <Questions c={c} />}
+      <Card id="card-claims" title="主張と根拠" hint="根拠は複数持てます。文書・位置（ページ・文字の範囲）・短い引用を確かめられます。">
+        {c.claims.length === 0 ? <p className="text-xs text-zinc-500">主張はまだありません。</p> : <Claims rows={c.claims} />}
       </Card>
 
       {c.metrics.length > 0 && (
@@ -208,6 +213,10 @@ export default function KnowledgeCard({ id }: { id: number }) {
           <Metrics rows={c.metrics} />
         </Card>
       )}
+
+      <Card id="card-open" title="未解決の問い・反対の見方" hint="AI が材料から作ります。材料に無い事実は書かせず、根拠が無いことは問いとして出します。">
+        {c.questions.length + c.opposing.length === 0 ? <p className="text-xs text-zinc-500" data-testid="card-no-questions">まだありません（夜に作ります）。</p> : <Questions c={c} />}
+      </Card>
 
       {c.mentions.length > 0 && (
         <Card id="card-mentions" title="つなぐ候補（リンクされていない言及）" hint="名前・別名が題や抜粋に出ているのに、この Things とつながっていない記事です。夜にまとめて探します。「つなぐ」で確定します。">
@@ -236,9 +245,7 @@ export default function KnowledgeCard({ id }: { id: number }) {
         )}
       </Card>
 
-      <Card id="card-claims" title="主張と根拠" hint="根拠は複数持てます。文書・位置（ページ・文字の範囲）・短い引用を確かめられます。">
-        {c.claims.length === 0 ? <p className="text-xs text-zinc-500">主張はまだありません。</p> : <Claims rows={c.claims} />}
-      </Card>
+      <SourceFooter c={c} />
 
       <Card id="card-note" title="自分のメモ" hint="打つとすぐ保存します。AI の再分析・概要の作り直しでは上書きしません。">
         <Note id={c.id} initial={c.note.body} />

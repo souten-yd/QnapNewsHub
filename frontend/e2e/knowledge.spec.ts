@@ -170,6 +170,7 @@ for (const vp of SIZES) {
         await expect(cv).toHaveAttribute("data-nodes", "7");
         const depths = state.calls.filter((c) => c.path === "/graph/neighbors").map((c) => (c.body as { depth: number }).depth);
         expect(depths).toEqual([1, 2]);
+        await expect(page.getByTestId("map-depth")).toHaveAttribute("max", "5");      // ローカルの深さは 1〜5
         await expectNoHorizontalOverflow(page);
         await shot(page, `map-local-${vp.name}-${scheme}`);
         await page.getByTestId("map-back").click();

@@ -179,6 +179,7 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
         if not took or left <= 0:
             break
     claims = kg_view._claims_with_evidence(db, ent.id, scopes, limit=max_facts * 3)
+    claims.sort(key=lambda c: kg_view.evidence_rank(c["evidences"]))      # 強い根拠（原文に照合できたもの）が先（安定。同じ強さは新しい順のまま）
     facts = []
     for c in claims:
         docs = [e["document"] for e in c["evidences"] if e["document"]["url"]][:2]
@@ -189,6 +190,8 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
             if docs:
                 row["src"] = [d["url"] for d in docs]
                 row["src_label"] = [doc_label(d.get("source", ""), d.get("published_at", ""), d["id"]) for d in docs]
+            if any(e.get("grounded") for e in c["evidences"]):
+                row["grounded"] = True
             facts.append(row)
         if len(facts) >= max_facts:
             break
@@ -196,7 +199,8 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
                           .outerjoin(NewsDocument, NewsDocument.news_item_id == NewsItem.id).where(ArticleEntity.entity_id == ent.id, NewsItem.url != "")
                           .order_by(NewsItem.published_at.desc()).limit(3)).all()
     sources = [u for u, *_ in src_rows]
-    out: dict = {"id": ent.id, "name": ent.name, "type": ent.type, "status": b["state"]["key"], "confidence": b["confidence"], "updated": (b["latest_evidence_at"] or "")[:10]}
+    out: dict = {"id": ent.id, "name": ent.name, "type": ent.type, "status": b["state"]["key"], "confidence": b["confidence"], "updated": (b["latest_evidence_at"] or "")[:10],
+                 "source_count": b["evidence_count"]}
     if b["definition"]:
         out["definition"] = b["definition"]
     elif cd and cd.summary:
@@ -210,6 +214,13 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
         out["relations"] = rel_out
     if facts:
         out["facts"] = facts
+    nums, seen_num = [], set()
+    for m in metric_rows(db, ent, claims, limit=max_facts * 3):      # 同じ条件・値の数値（複数の記事が同じことを述べた）は 1 行
+        if m["value"] and (m["label"], m["value"]) not in seen_num and len(nums) < max_facts:
+            seen_num.add((m["label"], m["value"]))
+            nums.append(m)
+    if nums:
+        out["metrics"] = [{"label": m["label"][:100], "value": m["value"], **({"unit": m["unit"]} if m["unit"] else {})} for m in nums]      # 数値は条件（主張の文）つき
     qs = _loads(cd.questions) if cd else []
     if qs:
         out["open_questions"] = qs[:4]
@@ -220,29 +231,35 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
 
 
 def context_text(c: dict) -> str:
-    """context を、LLM に読ませる短い Markdown（frontmatter ＋ 本文）にする。JSON より短い。"""
-    fm = [f"id: {c['id']}", f"name: {c['name']}", f"type: {c['type']}", f"status: {c['status']}", f"confidence: {c['confidence']}"]
-    if c.get("aliases"):
-        fm.append("aliases: " + ", ".join(c["aliases"]))
-    if c.get("updated"):
-        fm.append(f"updated: {c['updated']}")
-    for s in c.get("source_label", []):
-        fm.append(f"source: {s}")
-    lines = ["---", *fm, "---"]
+    """context を、LLM に読ませる短い Markdown にする。**カードの形（固定の順・空の節は出さない）**:
+    ① 見出し（名前・id）と 1 行の定義 ② 種類・状態・確かさ・別名 ③ 型ごとの関係（相手の 1 行の定義つき） ④ 主張と根拠（原文に照合できたものが先。◎＝原文一致）
+    ⑤ 数値（条件つき。値を持つ主張は ④ から外してここだけ） ⑥ 未解決の問い ⑦ 反対の見方 ⑧ 出典の数と新しさ（出どころの印つき）。"""
+    lines = [f"# {c['name']} (#{c['id']})"]
     if c.get("definition"):
         lines.append(c["definition"])
+    head = [f"type: {c['type']}", f"status: {c['status']}", f"confidence: {c['confidence']}"]
+    if c.get("aliases"):
+        head.append("aliases: " + ", ".join(c["aliases"]))
+    lines.append(" | ".join(head))
     for key, rows in c.get("relations", {}).items():
         lines.append(f"## {GROUP_LABEL.get(key, key)}")
         lines += [f"- [{r['name']}]#{r['id']} ({r['rel']}, {r['conf']})" + (f": {r['def']}" if r.get("def") else "") for r in rows]
-    if c.get("facts"):
-        lines.append("## Facts")
-        lines += [f"- {f['text']}" + (f" = {f['value']}" if f.get("value") else "") + ("".join(f" <{u}>" for u in f.get("src_label", []))) for f in c["facts"]]
+    plain = [f for f in c.get("facts", []) if not f.get("value")]
+    if plain:
+        lines.append("## 主張と根拠")
+        lines += [f"- {'◎ ' if f.get('grounded') else ''}{f['text']}" + ("".join(f" <{u}>" for u in f.get("src_label", []))) for f in plain]
+    if c.get("metrics"):
+        lines.append("## 数値")
+        lines += [f"- {m['label']}: {m['value']}{m.get('unit', '')}" for m in c["metrics"]]
     if c.get("open_questions"):
-        lines.append("## Open Questions")
+        lines.append("## 未解決の問い")
         lines += [f"- {q}" for q in c["open_questions"]]
     if c.get("opposing"):
-        lines.append("## Opposing Views")
+        lines.append("## 反対の見方")
         lines += [f"- {q}" for q in c["opposing"]]
+    if c.get("source_count") or c.get("source_label"):
+        lines.append(f"## 出典 {c.get('source_count', len(c.get('source_label', [])))} 件" + (f"・最新 {c['updated']}" if c.get("updated") else ""))
+        lines += [f"- {s}" for s in c.get("source_label", [])]
     return "\n".join(lines)
 
 
