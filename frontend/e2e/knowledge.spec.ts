@@ -7,8 +7,9 @@ import { mockApi, newState } from "./mock";
 import { SCHEMES, expectNoHorizontalOverflow, shot } from "./helpers";
 
 const SIZES = [{ name: "320", width: 320, height: 700 }, { name: "1280", width: 1280, height: 900 }] as const;
-const tap = (page: Page, id: number) => page.evaluate((i) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __cy: { getElementById(s: string): { emit(e: string): void } } }).__cy.getElementById(String(i)).emit("tap"), id);
-const cyCount = (page: Page, sel: string) => page.evaluate((s) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __cy: { elements(q: string): { length: number } } }).__cy.elements(s).length, sel);
+const tap = (page: Page, id: number) => page.evaluate((i) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __tap(n: number): void }).__tap(i), id);
+/** 試験用の旗の数（hit 一致・dim 薄く・off 隠す・big いつも名前を出す点・sizeMax/sizeMin 点の大きさの幅）。 */
+const stat = (page: Page, key: "hit" | "dim" | "off" | "big" | "sizeMax" | "sizeMin") => page.evaluate((k) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __stat(): Record<string, number> }).__stat()[k], key);
 
 for (const vp of SIZES) {
   for (const scheme of SCHEMES) {
@@ -102,6 +103,8 @@ for (const vp of SIZES) {
         await expect(page.getByTestId("map-node-legend")).toContainText("ソフト");
         await expectNoHorizontalOverflow(page);
         await shot(page, `map-overview-${vp.name}-${scheme}`);
+        // 点の大きさ＝重要度（重い点が大きく、軽い点が小さい）
+        expect(await stat(page, "sizeMax")).toBeGreaterThan((await stat(page, "sizeMin")) * 2.5);
         await page.getByTestId("map-iso").check();
         await expect(cv).toHaveAttribute("data-nodes", "8");      // 孤立した点の表示の切り替え
         await page.getByTestId("map-iso").uncheck();
@@ -110,9 +113,9 @@ for (const vp of SIZES) {
         await page.getByTestId("map-search").fill("qwen");
         await expect(page.getByTestId("map-hits")).toContainText("一致 1 件・一致を強調");
         await expect(cv).toHaveAttribute("data-hits", "1");
-        expect(await cyCount(page, "node.hit")).toBe(1);
-        expect(await cyCount(page, "node.dim")).toBe(7);      // 一致以外 6 点＋隠れている孤立した点
-        expect(await cyCount(page, "node.off")).toBe(1);      // 孤立した点だけ隠れている
+        expect(await stat(page, "hit")).toBe(1);
+        expect(await stat(page, "dim")).toBe(7);      // 一致以外 6 点＋隠れている孤立した点
+        expect(await stat(page, "off")).toBe(1);      // 孤立した点だけ隠れている
         await shot(page, `map-highlight-${vp.name}-${scheme}`);
         // 絞る: 一致と近傍だけ（Qwen・Alibaba・llama.cpp・GGUF）
         await page.getByTestId("mode-filter").click();
@@ -188,6 +191,18 @@ for (const vp of SIZES) {
         expect(state.unhandled).toEqual([]);
       });
 
+      test("夜の配置の計算の前（保存した座標が無い）でも、まとまりごとの塊で全体が出て、押すとカードへ行ける", async ({ page }) => {
+        const state = newState({ noLayout: true });
+        await mockApi(page, state);
+        await page.goto("/map");
+        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-nodes", "7");
+        await expect(page.getByTestId("map-count")).toContainText("点 7");
+        await tap(page, 2);
+        await expect(page.getByTestId("map-selected")).toContainText("Qwen 3.5");
+        await shot(page, `map-nolayout-${vp.name}-${scheme}`);
+        expect(state.unhandled).toEqual([]);
+      });
+
       test("主題の入口（MOC）: 一覧・まとまり・チャンネル。主要な Things・最近の出来事・未解決の問い", async ({ page }) => {
         const state = newState();
         await mockApi(page, state);
@@ -253,41 +268,43 @@ for (const vp of SIZES) {
   }
 }
 
-test.describe("全体の地図の重さ（1,500 点・3,500 本）", () => {
+for (const N of [1500, 5000]) {
+test.describe(`全体の地図の重さ（${N.toLocaleString()} 点）`, () => {
   test.use({ viewport: { width: 1280, height: 900 } });
 
-  test("開いて 3 秒以内に全体が出て、拡大・縮小・移動が滑らか（1 コマの平均 60ms 以下）。まとまりを押すと中を開く", async ({ page }, info) => {
-    const state = newState({ bigMap: true });
+  test(`開いて 3 秒以内に全体が出て、拡大・縮小・移動が滑らか（1 コマの平均 ${N > 1500 ? 200 : 60}ms 以下）。まとまりを押すと中を開く`, async ({ page }, info) => {
+    const state = newState({ bigMap: N });
     await mockApi(page, state);
     const t0 = Date.now();
     await page.goto("/map");
-    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-nodes", "1500", { timeout: 10_000 });
+    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-nodes", String(N), { timeout: 10_000 });
     const ready = Date.now() - t0;
-    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-edges", "3500");
-    expect(ready).toBeLessThan(3000);
-    await shot(page, "map-big-overview");
-    expect(await cyCount(page, "node.big")).toBe(24);      // 全体の地図で、縮小したまま名前を出すのは次数の大きい 24 点だけ（残りは拡大するほど出す）
+    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-edges", String(Math.round((N * 3500) / 1500)));
+    expect(ready).toBeLessThan(N > 1500 ? 5000 : 3000);
+    await shot(page, `map-big-overview-${N}`);
+    expect(await stat(page, "big")).toBe(24);      // 全体の地図で、縮小したまま名前を出すのは重要度の大きい 24 点だけ（残りは大きな点から順に、拡大するほど出す）
     const frame = await page.evaluate(async () => {
-      const cy = (document.querySelector("[data-testid=map-canvas]") as unknown as { __cy: { zoom(o: unknown): void; pan(p: unknown): void; width(): number; height(): number; zoom(): number } }).__cy;
+      const sg = (document.querySelector("[data-testid=map-canvas]") as unknown as { __sigma: { getCamera(): { getState(): { x: number; y: number; ratio: number }; setState(s: { x?: number; y?: number; ratio?: number }): void } } }).__sigma;
+      const cam = sg.getCamera();
       const times: number[] = [];
       const raf = () => new Promise<number>((r) => requestAnimationFrame(r));
       let last = await raf();
       for (let i = 0; i < 40; i += 1) {
-        cy.zoom({ level: cy.zoom() * (i < 20 ? 1.06 : 1 / 1.06), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
-        cy.pan({ x: (i % 2 ? 6 : -6) + 0, y: 0 });
+        const st = cam.getState();
+        cam.setState({ ratio: st.ratio * (i < 20 ? 1 / 1.06 : 1.06), x: st.x + (i % 2 ? 0.002 : -0.002) });      // 拡大・縮小しながら左右へ動かす
         const now = await raf();
         times.push(now - last);
         last = now;
       }
       return { avg: times.reduce((a, b) => a + b, 0) / times.length, max: Math.max(...times) };
     });
-    info.annotations.push({ type: "perf", description: `全体 1,500 点: 開くまで ${ready}ms・1 コマ 平均 ${frame.avg.toFixed(1)}ms・最大 ${frame.max.toFixed(1)}ms` });
-    console.log(`PERF 全体 1,500 点: 開くまで ${ready}ms・1 コマ 平均 ${frame.avg.toFixed(1)}ms・最大 ${frame.max.toFixed(1)}ms`);
-    expect(frame.avg).toBeLessThan(60);
+    info.annotations.push({ type: "perf", description: `全体 ${N} 点: 開くまで ${ready}ms・1 コマ 平均 ${frame.avg.toFixed(1)}ms・最大 ${frame.max.toFixed(1)}ms` });
+    console.log(`PERF 全体 ${N} 点: 開くまで ${ready}ms・1 コマ 平均 ${frame.avg.toFixed(1)}ms・最大 ${frame.max.toFixed(1)}ms`);
+    expect(frame.avg).toBeLessThan(N > 1500 ? 200 : 60);      // 5,000 点はヘッドレス（GPU なしのソフトウェア描画）の目安。実機の GPU はこれより軽い
     await page.getByTestId("map-group").first().click();
-    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-hits", "63");
-    await shot(page, "map-big-group");
+    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-hits", String(Math.min(300, Math.ceil(N / 24))));
+    await shot(page, `map-big-group-${N}`);
     expect(state.unhandled).toEqual([]);
   });
 });
-
+}

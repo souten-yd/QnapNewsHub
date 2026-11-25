@@ -41,6 +41,15 @@ def _llm_try(args: argparse.Namespace) -> int:
     return llm_try.run(args.provider, args.base, args.model, args.items)
 
 
+def _map_layout(args: argparse.Namespace) -> int:
+    from qnapnewshub import mapgrav, writer
+
+    info = mapgrav.compute_and_save()
+    writer.shutdown()
+    print(f"地図の配置を保存しました: {info['nodes']} 点・{info['seconds']} 秒・版 {info['version']}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -68,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     try_p.add_argument("--model", required=True)
     try_p.add_argument("--items", type=int, default=10)
     try_p.set_defaults(func=_llm_try)
+    sub.add_parser("map-layout", help="知識の地図の配置（ForceAtlas2）と重要度を今すぐ計算して保存する（夜の仕事と同じ）").set_defaults(func=_map_layout)
     sub.add_parser("run", help="起動する").set_defaults(func=_run)
     args = parser.parse_args(argv)
     return args.func(args)

@@ -20,6 +20,7 @@
 #                           取り出しを 1 回だけ流して、検査の結果・物と facts を表示する（評価用。記事は NEWSHUB_DATA の DB の新しい順。鍵は環境変数 NEWSHUB_LLM_TRY_KEY。何も書かない）
 #   ./hub.sh eval-retrieval --data <評価用 DB の置き場（コピー）> --questions <json> --out <md> [--build]
 #                           検索の評価の物差し（問いの集め・5 つの道・Recall/MRR/nDCG/文脈の密度/時間）。外へ通信しない・LLM は呼ばない。結果は公開しない（docs/DESIGN.md）
+#   ./hub.sh map-layout     知識の地図の配置（ForceAtlas2）と重要度を今すぐ計算して保存する（夜の仕事と同じ。NEWSHUB_DATA の DB に書く）
 #   ./hub.sh <cli のコマンド>  python -m qnapnewshub.cli へそのまま渡す
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

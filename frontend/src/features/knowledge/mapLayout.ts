@@ -58,3 +58,14 @@ export function ringPositions(ids: number[], radius: number): Map<number, Pos> {
   ids.forEach((id, i) => { const a = (i / Math.max(1, ids.length)) * Math.PI * 2; out.set(id, { x: radius * Math.cos(a), y: radius * Math.sin(a) }); });
   return out;
 }
+
+/** 点の大きさ（画面の px。sigma の size）。重要度（0〜1。検索・カードを開いた回数・直近の記事・関係の中心性を混ぜて log で縮めたもの）の 1.6 乗で、
+ *  少数の大きな点と多数の小さな点にする（重力のように、重いものほど大きい）。 */
+export const sizeOf = (importance: number) => 3 + 26 * Math.pow(Math.max(0, Math.min(1, importance)), 1.6);
+
+/** 重要度が保存されていない点（夜の計算の前・あとから足した点）の代わり: 関係の数を log で縮めた 0〜0.6。 */
+export const fallbackImportance = (degree: number, maxDegree: number) => (maxDegree > 0 ? (0.6 * Math.log1p(Math.max(0, degree))) / Math.log1p(maxDegree) : 0);
+
+/** 保存した配置（ワールドの座標）のときの丸の半径。座標と同じ単位なので、拡大すると丸も一緒に大きくなり、夜の配置が「丸が重ならない」ように離した距離がそのまま見える。
+ *  backend/qnapnewshub/mapgrav.py の radius と同じ式（R_MIN 5・R_SPAN 55・重要度の 1.6 乗）。 */
+export const radiusOf = (importance: number) => 5 + 55 * Math.pow(Math.max(0, Math.min(1, importance)), 1.6);

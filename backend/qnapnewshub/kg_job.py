@@ -18,7 +18,7 @@ from datetime import datetime
 from sqlalchemy import func, or_, select
 
 from qnapnewshub import db as news_db
-from qnapnewshub import entity_merge, event_llm, extract, kg, llm, llm_models, llm_task, rest, settings, things, writer
+from qnapnewshub import entity_merge, event_llm, extract, kg, llm, llm_models, llm_task, mapgrav, rest, settings, things, writer
 from qnapnewshub.db import Claim, Entity, EntityCard, NewsItem, NewsMeta, Relationship, ArticleEntity
 
 logger = logging.getLogger("qnapnewshub.kg_job")
@@ -50,6 +50,14 @@ def aggregate() -> dict:
             return {"mapped": mapped, **out, "merged": merged["merged"], "merge_candidates": merged["candidates"], "communities": comm["communities"], "mention_candidates": ment["candidates"]}
 
     return writer.run("news.kg_aggregate", do, user=False)
+
+
+def _layout() -> dict:
+    try:
+        return mapgrav.compute_and_save()
+    except Exception:  # noqa: BLE001 - 地図の配置が失敗しても、夜の集計は止めない（前回の配置が残る）
+        logger.exception("地図の配置の計算に失敗しました")
+        return {"nodes": 0, "seconds": 0, "version": 0, "error": True}
 
 
 def _aggregate_due() -> bool:
@@ -249,6 +257,7 @@ async def run() -> dict:
     cfg = settings.load()["llm"]
     if datetime.now().hour >= cfg["night_from"] and await asyncio.to_thread(_aggregate_due):
         info["aggregate"] = await asyncio.to_thread(aggregate)
+        info["layout"] = await asyncio.to_thread(_layout)      # 知識の地図の配置・重要度（計算は書き手の外。保存だけ書き手）
         await asyncio.to_thread(_mark_aggregated)
     info["cards"] = await run_cards()
     return info

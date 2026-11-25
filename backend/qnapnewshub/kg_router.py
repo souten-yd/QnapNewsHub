@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from qnapnewshub import auth as auth_mod
 from qnapnewshub import rcache
-from qnapnewshub import kg, kg_job, kg_view, writer
+from qnapnewshub import kg, kg_job, kg_view, mapgrav, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.auth import AuthUser as User
 from qnapnewshub.auth import current_user as get_current_user
@@ -201,6 +201,7 @@ def get_card(entity_id: int, confidential: bool = False, user: User = Depends(ge
     found = kg_view.card(db, entity_id, scopes_for(user, confidential))
     if found is None:
         raise HTTPException(status_code=404, detail="その物は見つかりません")
+    mapgrav.note_card(entity_id)      # カードを開いた回数（地図の点の大きさの材料）
     return found
 
 

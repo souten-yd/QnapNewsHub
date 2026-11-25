@@ -222,23 +222,28 @@ const GROUP_LABELS: [string, string][] = [["upper", "上位"], ["lower", "下位
 const DEFS: Record<number, string> = { 1: "ローカルで LLM を動かす C/C++ の推論エンジン。", 2: "Alibaba が公開する汎用の大規模言語モデル。", 3: "中国の IT 企業。", 5: "モデルの重みを小さい数値で表して軽くする技術。" };
 
 /** 全体の地図の見本。小さい版は KG_NODES・KG_EDGES、bigMap は 1,500 点・3,500 本・24 のまとまり（決まった乱数なので毎回同じ）。 */
-export function overviewMock(big: boolean) {
+export function overviewMock(big: boolean | number, noLayout = false) {
+  const N = typeof big === "number" ? big : 1500;      // bigMap に数を渡すと、その点数（性能の測定用。1,500 は既定）
   if (!big) {
-    const nodes = KG_NODES.map((n) => ({ id: n.id, name: n.name, type: n.type, article_count: n.article_count, degree: DEGREE(n.id), recent: 1, community: 1 }));
+    // 夜に計算して保存した配置の見本（重い llama.cpp が中心・小さな点が周り）。noLayout は夜の計算の前（x・y・importance なし）
+    const SAVED: Record<number, [number, number, number]> = { 1: [0, 0, 1], 2: [120, 40, 0.62], 3: [260, 70, 0.35], 5: [-110, 60, 0.25], 9: [180, -90, 0.3], 10: [-80, -120, 0.42], 11: [-30, 150, 0.15] };
+    const nodes = KG_NODES.map((n) => ({ id: n.id, name: n.name, type: n.type, article_count: n.article_count, degree: DEGREE(n.id), recent: 1, community: 1, ...(noLayout ? {} : { x: SAVED[n.id][0], y: SAVED[n.id][1], importance: SAVED[n.id][2] }) }));
     return { nodes, edges: KG_EDGES.map(({ first_at, sensitivity, ...e }) => e), isolated: [{ id: 4, name: "Radeon AI PRO R9700", type: "product", article_count: 6, degree: 0, recent: 0, community: 0 }],
-      communities: [{ id: 1, name: "llama.cpp", size: 7, rep_id: 1, shown: 7, top: [{ id: 1, name: "llama.cpp" }, { id: 2, name: "Qwen 3.5" }] }], truncated: false, limit: 1500,
+      communities: [{ id: 1, name: "llama.cpp", size: 7, rep_id: 1, shown: 7, top: [{ id: 1, name: "llama.cpp" }, { id: 2, name: "Qwen 3.5" }] }], truncated: false, limit: 1500, layout: noLayout ? null : { version: 3, at: "2026-11-25T03:10:00Z", placed: 7 },
       totals: { with_relations: 7, edges: 7, shown_nodes: 7, shown_edges: 7 } };
   }
   let seed = 12345;
   const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
   const types = ["model", "software", "org", "person", "tech", "product", "game", "policy", "place", "other"];
-  const nodes = Array.from({ length: 1500 }, (_, i) => ({ id: 1000 + i, name: `Things ${i + 1}`, type: types[i % types.length], article_count: Math.max(1, Math.floor(200 / (i + 1) ** 0.7)), degree: Math.max(1, Math.floor(80 / (i + 1) ** 0.6)), recent: 0, community: (i % 24) + 1 }));
+  const nodes = Array.from({ length: N }, (_, i) => ({ id: 1000 + i, name: `Things ${i + 1}`, type: types[i % types.length], article_count: Math.max(1, Math.floor(200 / (i + 1) ** 0.7)), degree: Math.max(1, Math.floor(80 / (i + 1) ** 0.6)), recent: 0, community: (i % 24) + 1,
+    ...(() => { const c = i % 24, a = c * 2.4 + (i * 0.7), r = 160 + 60 * Math.sqrt(i + 1) * (0.5 + ((i * 7919) % 100) / 100); return { x: 900 * Math.sqrt(N / 1500) * Math.cos(c * 2.4) * Math.sqrt((c + 1) / 24) + r * Math.cos(a) * 0.35, y: 900 * Math.sin(c * 2.4) * Math.sqrt((c + 1) / 24) + r * Math.sin(a) * 0.35, importance: Math.min(1, 1 / (i + 1) ** 0.3) }; })() }));
   nodes[0].name = "Qwen 3.5"; nodes[1].name = "llama.cpp";
   const rels = ["uses", "supports", "part_of", "co_occurs", "competes", "implements"];
-  const edges = Array.from({ length: 3500 }, (_, i) => { const a = Math.floor(rnd() ** 2 * 1500), c = a % 24; const b = (Math.floor(rnd() * 62) * 24 + c) % 1500;
-    return { id: 5000 + i, source: 1000 + a, target: 1000 + (b === a ? (b + 24) % 1500 : b), type: rels[i % rels.length], directed: i % 2 === 0, confidence: 0.3 + (i % 7) / 10, status: i % 5 === 0 ? "inferred" : "extracted", evidence_count: 1 + (i % 9), last_at: ago(24 * (i % 90)) }; });
-  const communities = Array.from({ length: 24 }, (_, c) => ({ id: c + 1, name: nodes[c].name, size: 62, rep_id: nodes[c].id, shown: 62, top: [{ id: nodes[c].id, name: nodes[c].name }] }));
-  return { nodes, edges, isolated: [], communities, truncated: true, limit: 1500, totals: { with_relations: 4604, edges: 23821, shown_nodes: 1500, shown_edges: 3500 } };
+  const E = Math.round(N * 3500 / 1500);
+  const edges = Array.from({ length: E }, (_, i) => { const a = Math.floor(rnd() ** 2 * N), c = a % 24; const b = (Math.floor(rnd() * Math.ceil(N / 24)) * 24 + c) % N;
+    return { id: 10000 + i, source: 1000 + a, target: 1000 + (b === a ? (b + 24) % N : b), type: rels[i % rels.length], directed: i % 2 === 0, confidence: 0.3 + (i % 7) / 10, status: i % 5 === 0 ? "inferred" : "extracted", evidence_count: 1 + (i % 9), last_at: ago(24 * (i % 90)) }; });
+  const communities = Array.from({ length: 24 }, (_, c) => ({ id: c + 1, name: nodes[c].name, size: Math.floor(N / 24), rep_id: nodes[c].id, shown: Math.floor(N / 24), top: [{ id: nodes[c].id, name: nodes[c].name }] }));
+  return { nodes, edges, isolated: [], communities, truncated: true, limit: N, totals: { with_relations: 4604, edges: 23821, shown_nodes: N, shown_edges: E } };
 }
 
 const MOC_COMMUNITY = { kind: "community", id: 1, title: "llama.cpp のまとまり", size: 7,
@@ -277,7 +282,8 @@ export interface MockState {
   /** 知識カードの利用者のメモ（PUT で更新される） */
   kgNote?: string;
   /** 全体の地図を 1,500 点の大きい見本にする（性能の確認） */
-  bigMap?: boolean;
+  bigMap?: boolean | number;
+  noLayout?: boolean;      // 夜の配置の計算の前（x・y・importance なしの全体の地図）
   /** 確定・却下したつなぐ候補の記事 id */
   decidedMentions: number[];
   /** 名寄せの候補の決めた操作（confirm:id・dismiss:id・undo:id） */
@@ -458,8 +464,8 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
         merges: [{ id: 1, winner: { id: 1, name: "Sony" }, loser: { id: 5, name: "Sony Corporation" }, mode: "auto", reason: "rule", merged_at: ago(5), undone: done.includes("undo:1"), can_undo: !done.includes("undo:1") }] });
     }
     if (is("POST", /^\/things\/(merge-candidates\/\d+\/(confirm|dismiss)|merges\/\d+\/undo)$/)) { const p = path.split("/"); (state.mergeActions ??= []).push(`${p[2] === "merges" ? "undo" : p[4]}:${p[2] === "merges" ? p[3] : p[3]}`); return json(route, { status: "ok" }); }
-    if (is("GET", "/things/map/overview")) return json(route, overviewMock(Boolean(state.bigMap)));
-    if (is("GET", /^\/things\/map\/community\/\d+$/)) { const o = overviewMock(Boolean(state.bigMap)); const id = Number(path.split("/")[4]); const ns = o.nodes.filter((n) => n.community === id).slice(0, 300); const ids = new Set(ns.map((n) => n.id));
+    if (is("GET", "/things/map/overview")) return json(route, overviewMock(state.bigMap ?? false, Boolean(state.noLayout)));
+    if (is("GET", /^\/things\/map\/community\/\d+$/)) { const o = overviewMock(state.bigMap ?? false); const id = Number(path.split("/")[4]); const ns = o.nodes.filter((n) => n.community === id).slice(0, 300); const ids = new Set(ns.map((n) => n.id));
       return json(route, { id, name: o.communities[0].name, size: ns.length, nodes: ns, edges: o.edges.filter((e) => ids.has(e.source) && ids.has(e.target)) }); }
     if (is("GET", "/things/moc")) return json(route, { communities: [{ id: 1, name: "llama.cpp", size: 7 }, { id: 2, name: "Alibaba", size: 4 }], channels: [{ id: "local-llm", name: "ローカル LLM", color: "#f5c518" }, { id: "amd-gpu", name: "AMD・GPU", color: "#38bdf8" }] });
     if (is("GET", /^\/things\/moc\/community\/\d+$/)) return json(route, MOC_COMMUNITY);
