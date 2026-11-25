@@ -99,7 +99,7 @@ async def try_once(provider: str, base: str, model: str, key: str, arts: list[di
                         f["llm_added"] += 1
                     else:
                         f["none"] += 1
-                if len(out["samples"]) < 12:
+                if len(out["samples"]) < 200:
                     out["samples"].append({"title": part[n - 1]["title"][:60], "about": it["about"], "metric": it["metric"], "value": it["value"], "unit": it["unit"],
                                            "cond": numeric.merge_cond(rule, llm_c), "tier": it["tier"]})
     out["seconds"] = round(time.monotonic() - started, 1)
@@ -117,7 +117,8 @@ def report(info: dict, result: dict) -> str:
     for k in bench.COND_KEYS:
         f = result["fields"][k]
         lines.append(f"  {k:8s} {f['rule_only']:4d} / {f['llm_added']:4d} / {f['both_same']:4d} / {f['none']:4d}")
-    for s in result["samples"]:
+    # 条件の付いた数値を先に（確かめたいのはそちら）。全部で 30 個まで
+    for s in sorted(result["samples"], key=lambda s: not s["cond"])[:30]:
         lines.append(f"  - {s['title']} | {s['about']} {s['metric']} {s['value']}{s['unit']} | {s['cond'] or '条件なし'} | {s['tier']}")
     return "\n".join(lines)
 

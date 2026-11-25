@@ -198,7 +198,7 @@ def build_prompt(arts: list[dict]) -> str:
 
 # ---- 検査と合流 ----
 
-_UNIT_MAP = {"tokens/s": "tok/s", "token/s": "tok/s", "tokens/sec": "tok/s", "tok/sec": "tok/s", "t/s": "tok/s", "tps": "tok/s", "％": "%"}
+_UNIT_MAP = {"tokens per second": "tok/s", "tokens per sec": "tok/s", "tokens/second": "tok/s", "tok/second": "tok/s", "tokens/s": "tok/s", "token/s": "tok/s", "tokens/sec": "tok/s", "tok/sec": "tok/s", "t/s": "tok/s", "tps": "tok/s", "％": "%"}
 
 
 def _clean_str(v: object, limit: int) -> str:
@@ -229,8 +229,8 @@ def check_item(raw: object, art: dict) -> tuple[dict | None, str]:
     wanted = extract.numbers_in(value)
     if not wanted or not wanted <= extract.numbers_in(source):
         return None, "value"
-    unit = _clean_str(raw.get("unit"), 16)
-    unit = _UNIT_MAP.get(unit.lower(), unit)
+    unit = _clean_str(raw.get("unit"), 40)
+    unit = _UNIT_MAP.get(unit.lower(), unit)[:16]      # 長い書き方（tokens per second）は切る前に短い形へ
     if unit and bench.fold(unit) not in bench.fold(source) and not bench.parse_value(f"1 {unit}")[1]:
         unit = ""      # 渡した文に無い単位は捨てる（数値そのものは残す）
     llm_cond = bench.clean_cond({k: raw.get(k) for k in bench.COND_KEYS}, source)

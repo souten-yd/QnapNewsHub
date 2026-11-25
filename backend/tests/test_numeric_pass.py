@@ -256,3 +256,11 @@ def test_numeric_try_counts_fields_and_writes_nothing(monkeypatch):
     writer.flush("t")
     with news_db.session() as db:
         assert db.get(NewsItem, a).num_v == 0 and llm.calls_today("prep") == 0
+
+
+def test_long_unit_spelling_is_normalized_before_clipping():
+    """目的: LLM が単位を「tokens per second」と書いても、16 文字で切れて「tokens per secon」にならず tok/s に揃う。
+    根拠: 2026-11-26 ローカル LLM で numeric-try を流したとき、単位が切れて比較の組（物・単位・条件）が分かれた。"""
+    from qnapnewshub import numeric
+
+    assert numeric._UNIT_MAP["tokens per second"] == "tok/s"
