@@ -255,7 +255,10 @@
   その物についての主張・関係も作らない。夜の掃除 `retire_sweep` が既にある物（文脈なしで言える分と、出どころの名前になった媒体らしい組織）を外し、記録は `entity_retirements`（元に戻す道は規則をゆるめて取り出し直すこと）。人・ソフト・発表する側の組織は出どころと同名でも残す。
 - **寄せ**（`entity_merge.compute_variants`）: `org/repo`→repo・版つき→本体・大きさ違い→本体。本体が実在し種類が合うときだけ自動（model の版は別の物なので候補止まり・整数だけの版は版とみなさない）。版は別名＋release の主張（rule:variant・言い換えの段）。記録・戻しは entity_merges（undo は付けた主張も消す）。
 - **関係**: 型に made_by・develops。型ごとの主語・目的語の種類を `extract.REL_RULES`・`relation_ok` で検査し、合わない関係は登録で捨てる。型 other は作らない（夜に既存の分も捨てる `kg.sweep_relations`）。プラットフォームは関係の相手にしない。
-  プロンプトは `ex3`（関係は原文が明示しているものだけ・引用を必ず・取得元と一般語の禁止例・題の数を fact に）。
+  プロンプトは `ex3`（関係は原文が明示しているものだけ・引用を必ず・取得元と一般語の禁止例・題の数を fact に）→ **`ex4`**（2026-11-25・fix/generic-things）: 物は固有名（製品名・会社名・組織名・人名・モデル名・ソフト名・規格名・法令名）だけ。一般名詞・カテゴリ・役職・説明的な句・数値つきの仕様の句・題の言い換えを入れない（禁止例・許す例つき）。
+- **一般名詞の機械の規則**（`thing_filter.generic_phrase`・登録と夜の掃除の両方）: ①小文字だけの英語の複数語の句（固有名の印〔大文字・数字・記号〕が無い。人名・場所は除く）②数値＋単位＋一般名詞（144Hz AMOLED display・理由 spec。主張の主語だったときは記事の主な物〔最初に結び付いた物〕の主張に付け替え、物にはしない）
+  ③語尾が説明的な一般名詞（library・subscription・videos など）か、複数形＋for/your の句（Gifts for Dads）。org・person・place・software・model・game で取り出された物は除く（Samsung Display・Prime Video）④役職・職業が語尾の句（physicist・designer）⑤題の大半と同じで固有名の印が弱い句（理由 title。登録のときだけ・題が要る）。
+  外した記録は `entity_retirements`（理由 lower・spec・phrase・role・title）。
 - **根拠の段階**（`extract.quote_tier`）: exact（引用が原文にそのまま）・paraphrase（言い換え、または値が原文にある）・none。`evidences.tier`・確かさ 0.7／0.3／0.15（`kg.TIER_CONF`）。exact だけが extracted、他は推測（inferred）。
   カードの主張（`kg_view._claims_with_evidence`）は 一致→言い換え→無し の順・主張に `claims.stated_at`（既定は記事の公開日）。検索の辺の重み・根拠の並びは確かさ経由で効く。
 - **gleaning**（`prep.run_gleaning`）: 物が 0〜1 個の記事だけ、既出の物を示して「漏れている物は」を 1 回問い直す。20 件ずつ・prep の割り当ての中・1 日 5 回まで。前の取り出しを消さず足す（additive）。済みは extract_v=2。
