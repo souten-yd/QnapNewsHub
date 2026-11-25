@@ -27,7 +27,7 @@ for (const vp of VIEWPORTS) {
 test.describe("携帯の ☰ ドロワー", () => {
   test.use({ viewport: { width: 320, height: 700 }, hasTouch: true });
 
-  test("☰ で左から出て、8 つの行き先があり、選ぶと閉じる。下部ナビは無い", async ({ page }) => {
+  test("☰ で左から出て、9 つの行き先があり、選ぶと閉じる。下部ナビは無い", async ({ page }) => {
     await mockApi(page, newState());
     await page.goto("/");
     const drawer = page.getByTestId("nav-drawer");
@@ -37,7 +37,7 @@ test.describe("携帯の ☰ ドロワー", () => {
     await expect(drawer).not.toHaveAttribute("inert", "");
     await expect.poll(async () => (await drawer.boundingBox())?.x ?? -999).toBeGreaterThanOrEqual(-1);      // 左から出ている（動きが終わるまで待つ）
     const links = drawer.getByRole("link");
-    await expect(links).toHaveText(["ニュース", "分析", "イベント", "Things", "知識の地図", "取得先の管理", "診断", "設定"]);
+    await expect(links).toHaveText(["ニュース", "分析", "イベント", "Things", "ウォッチ", "知識の地図", "取得先の管理", "診断", "設定"]);
     await shot(page, "drawer-320");
     // 画面の下端に固定のナビが無い
     const bottomFixed = await page.evaluate(() => [...document.querySelectorAll("nav, footer")].filter((el) => {
