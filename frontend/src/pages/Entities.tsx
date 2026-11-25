@@ -4,8 +4,8 @@ import { ENTITY_TYPE_LABEL, relativeTime, useEntities, useEntity, type EntityRow
 import KnowledgeCard from "../features/knowledge/KnowledgeCard";
 import { Card, field } from "../features/news/settingsUi";
 
-/** 物（/entities）: 要素の取り出し（AI。無料 LLM）で記事から取れた、モデル・ソフト・組織などの一覧。名前の検索・種類・期間で絞る。
- *  物のページ（/entities/:id）は記事の年表・facts・一緒に出る物。facts は「AI の取り出し」の印つき（確かめた事実ではない）。 */
+/** Things（/entities）: 要素の取り出し（AI。無料 LLM）で記事から取れた、モデル・ソフト・組織などの一覧。名前の検索・種類・期間で絞る。
+ *  Thingsのページ（/entities/:id）は記事の年表・facts・一緒に出るThings。facts は「AI の取り出し」の印つき（確かめた事実ではない）。 */
 const AI_MARK = "AI の取り出し";
 const DAY_CHOICES: [number, string][] = [[0, "全期間"], [1, "1 日"], [7, "7 日"], [30, "30 日"]];
 const FACT_KIND: Record<string, string> = { release: "公開", benchmark: "性能", price: "価格", date: "日付", claim: "主張", other: "その他" };
@@ -37,10 +37,14 @@ export default function EntitiesPage() {
   const list = useEntities({ q, type, days, sort });
   return (
     <div className="mx-auto max-w-3xl space-y-3 p-3 md:p-6" data-testid="entities-page">
-      <h1 className="text-xl font-semibold tracking-tight">物</h1>
+      <h1 className="text-xl font-semibold tracking-tight">Things</h1>
       <p className="text-xs leading-relaxed text-zinc-500">記事から AI（無料の LLM）が取り出した、モデル・ソフト・組織などの一覧です。{AI_MARK}なので、間違いを含みます。</p>
+      <p className="flex flex-wrap gap-2 text-xs">
+        <Link to="/moc" data-testid="things-moc-link" className="inline-flex min-h-9 items-center rounded-lg border border-zinc-300 px-3 hover:border-accent-600 dark:border-zinc-700">主題の入口（まとまり・チャンネル）</Link>
+        <Link to="/map" data-testid="things-map-link" className="inline-flex min-h-9 items-center rounded-lg border border-zinc-300 px-3 hover:border-accent-600 dark:border-zinc-700">知識の地図（全体）</Link>
+      </p>
       <div className="grid gap-2 sm:grid-cols-4">
-        <input type="search" aria-label="物を探す" placeholder="名前で探す" value={q} onChange={(e) => setQ(e.target.value)} className={`${field} sm:col-span-2`} />
+        <input type="search" aria-label="Thingsを探す" placeholder="名前で探す" value={q} onChange={(e) => setQ(e.target.value)} className={`${field} sm:col-span-2`} />
         <select aria-label="種類" value={type} onChange={(e) => setType(e.target.value)} className={field}>
           <option value="">すべての種類</option>
           {(Object.keys(ENTITY_TYPE_LABEL) as EntityType[]).map((t) => <option key={t} value={t}>{ENTITY_TYPE_LABEL[t]}</option>)}
@@ -56,10 +60,10 @@ export default function EntitiesPage() {
         ))}
       </div>
       {list.isLoading && <p role="status" className="text-sm text-zinc-500">読み込み中…</p>}
-      {list.isError && <p role="alert" className="text-sm">物を読み込めませんでした。</p>}
+      {list.isError && <p role="alert" className="text-sm">Thingsを読み込めませんでした。</p>}
       {list.data && list.data.items.length === 0 && (
         <p className="rounded-xl border border-dashed border-zinc-300 p-6 text-center text-sm text-zinc-500 dark:border-zinc-700" data-testid="entities-empty">
-          まだ物がありません。OpenRouter の鍵を入れると、新しい記事から順に取り出します。
+          まだThingsがありません。OpenRouter の鍵を入れると、新しい記事から順に取り出します。
         </p>
       )}
       {list.data && list.data.items.length > 0 && (
@@ -76,11 +80,11 @@ export function EntityPage() {
   const id = Number(useParams().id);
   const q = useEntity(id);
   if (q.isLoading) return <div className="p-6 text-sm text-zinc-500" role="status">読み込み中…</div>;
-  if (q.isError || !q.data) return <div className="p-6 text-sm" role="alert">その物は見つかりません。<Link to="/entities" className="ml-2 text-accent-700 underline">物の一覧へ</Link></div>;
+  if (q.isError || !q.data) return <div className="p-6 text-sm" role="alert">そのThingsは見つかりません。<Link to="/entities" className="ml-2 text-accent-700 underline">Thingsの一覧へ</Link></div>;
   const d = q.data;
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-3 md:p-6" data-testid="entity-page">
-      <Link to="/entities" className="text-xs text-accent-700 underline dark:text-accent-300">← 物の一覧</Link>
+      <Link to="/entities" className="text-xs text-accent-700 underline dark:text-accent-300">← Thingsの一覧</Link>
       <header>
         <h1 className="break-words text-xl font-semibold tracking-tight" data-testid="entity-name">{d.name}</h1>
         <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
@@ -111,7 +115,7 @@ export function EntityPage() {
         )}
       </Card>
 
-      <Card id="entity-timeline" title="記事の年表" hint="この物が出た記事を、新しい順に並べます。">
+      <Card id="entity-timeline" title="記事の年表" hint="このThingsが出た記事を、新しい順に並べます。">
         <ol className="space-y-2" data-testid="entity-timeline">
           {d.timeline.map((a) => (
             <li key={a.id} className="border-l-2 border-accent-600/50 pl-3">
@@ -124,7 +128,7 @@ export function EntityPage() {
       </Card>
 
       {d.related.length > 0 && (
-        <Card id="entity-related" title="一緒に出る物" hint="同じ記事に出た回数の多い順です。">
+        <Card id="entity-related" title="一緒に出るThings" hint="同じ記事に出た回数の多い順です。">
           <ul className="flex flex-wrap gap-1.5" data-testid="entity-related">
             {d.related.map((r) => (
               <li key={r.id}><Link to={`/entities/${r.id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700">{r.name}<span className="num text-zinc-500">{r.count}</span></Link></li>

@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-25（v0.6 検索の道具の API〔feat/retrieval-api〕の後）
+最終更新: 2026-11-25（Things の脳〔feat/things-brain〕の後）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -36,6 +36,7 @@
 | v0.5 知識グラフ（feat/knowledge-graph） | **統合の土台として汎用に**: 表 documents・news_documents（記事の対応）・evidences・relationships・entity_notes・entity_cards（`kg.py`・`kg_view.py`・`kg_job.py`・`kg_router.py`）・機密の区分の引き継ぎ（既定は public だけ・confidential は管理者だけ）・LLM の型つきの関係（下ごしらえの同じ 1 回の呼び出しに relations。引用が原文に無ければ「推測」）・co_occurs の集計（夜・回数 3・比 2）・履歴と矛盾（読むときに計算）・知識カード（概要は夜に変化のあった物だけ・メモは別の表に即時保存）・知識の地図（Cytoscape.js 3.33.1・`POST /graph/neighbors`）・Obsidian の書き出し（zip）。試験 351 件・性能 P95 216 ms 以下（10 万件の模擬）。ARCHITECTURE 6 章・DESIGN 13 章 |
 | v0.6 検索の道具の API（feat/retrieval-api） | **ControlDeck の MPKR が使う道具**（`retrieval.py`・`retrieval_router.py`・`rcache.py`）: `POST /retrieve/seeds`（全文 OR・物・イベント・ニュース以外の文書）・`POST /graph/neighbors` の拡張（向き・時系列・矛盾だけ・ハブの抑制・次数）・`POST /graph/ppr`（局所 push 法）・`POST /retrieve/evidence`・`GET /research?topic=`・**区分の強制**（link のトークンは、つないだときの設定 `link.allow_confidential` の範囲だけ。既定 public）・版つきメモリキャッシュ・時間と大きさの上限・datetime の警告 0。ARCHITECTURE 8 章（v0.6）・DESIGN 15 |
 | v0.7 前半（feat/connectors） | **収集の connector の枠組み**（`connectors.py`・種類 feed／api／historical／change／discovery／market・取得の間隔・1 日の件数と通信量の予算・鍵〔任意〕・利用条件の記録〔`connector_terms.py`。未確認は既定で切〕・取得先の管理の「connector」の節）・**保存の段 L0〜L4 と昇格**（`docstore.py`。documents.tier・document_promotions・昇格の規則）・論文の同定（document_aliases）・document_links・Metric の時系列（metric_points）・L0 の検索（doc_fts）・connector: GitHub の発見とスターの急増・HF の新しいモデルと派生版・OpenAlex・Crossref・Semantic Scholar・HN 検索・Sitemap・変化の検出（既存の RSS・Release・arXiv・HN・HF は載せ替え）。試験 376 件。ARCHITECTURE 10 章の続き・DESIGN 14 章 |
+| Things の脳（feat/things-brain） | 画面の「物」を **Things** へ（API の道は互換）・**カードの帯**（定義・状態・確かさ〔根拠の数だけで決める〕・根拠の数と新しさ）・**関係を型ごとに**（上位・下位・仲間・使う・使われる・置き換え・矛盾）・夜のカードの LLM に**定義・状態・未解決の問い・反対の見方**（材料に無い数字・英字の名前を捨てる）・主な数値・**つなぐ候補**（リンクされていない言及。押すと確定）・**まとまり（Louvain）と MOC**（`/moc`）・**全体の地図**（最初に主要 1,500 点・検索は強調／絞る・ローカル深さ 1〜3・孤立した点の切り替え）・**LLM の脳の API**（`/things/{id}/context`・`POST /things/context`・`/things/lookup`）・Obsidian の書き出し（frontmatter・Connections・Open Questions・`_MOC/`・README）。`things.py`・`things_router.py`・`features/knowledge/mapLayout.ts`・`pages/Moc.tsx`。試験 11 件・性能 P95 73ms 以下（10 万件の模擬）。ARCHITECTURE 6 章の続き・DESIGN 16 |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
 - 試験: backend 376 件（v0.7 前半の時点）・E2E 223 件（v0.5 で 211 件・v0.7 前半で `connectors.spec.ts` 12 件を足した）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
@@ -57,6 +58,7 @@
 8. （済）v0.7 前半（feat/connectors・2026-11-25）。残り: **実データで昇格の規則（既定のチャンネルの語は広い）と、1 日の予算の既定を調整**／本物の Semantic Scholar・Crossref・Sitemap・変化の検出を 1 回ずつ確かめる／HF の `filter=base_model:…` の効き／L2 に上がった非ニュースの本文の取得／診断・画面に文書（論文・リポジトリ・モデル）の見方を足す。v0.8 は e-Stat・日銀・国会会議録・e-Gov・EDINET・DefiLlama・CoinGecko・GDELT・Wikidata・PyPI／npm・OSV／NVD（ControlDeck の PLAN-integrated-knowledge 8.5）。
 9. v0.6 の続き: **ControlDeck 側の MPKR（I4）が `/retrieve/seeds`・`/graph/neighbors`・`/graph/ppr`・`/retrieve/evidence`・`GET /research` を呼ぶ**（トークンは `Authorization: Bearer`・POST も通る・区分は `confidential: true` を付けたときだけ。機密を読ませるには、つなぐ前に設定 `link.allow_confidential` を true にする）。本物のデータでの評価（I0 の問い）・hub_k と ε の既定の調整。
 10. v0.4・v0.6 以降は PLAN.md の順。
+11. （済）Things の脳（feat/things-brain・2026-11-25）。残り: **本物の LLM でカードの定義・状態・問い・反対の見方を夜に回し、検査の落ちる率と質を見る**／つなぐ候補の一般語の雑音（名前の長さ・語の絞り）／スマホでの全体の地図の操作／**ControlDeck の MPKR・MCP が `/things/{id}/context`・`/things/lookup` を呼ぶ**（トークンは `Authorization: Bearer`。区分は既存の範囲）。
 
 
 ## 5. 開発の仕方
@@ -85,6 +87,7 @@
 - **claims.article_id は NULL 可になった（v0.5）**: 古いファイルは開いたとき 1 回だけ表が作り直される（`db._rebuild_claims`）。`Claim` を記事と inner join するコードは、記事の無い文書の主張を落とす（物のページの facts はそれで良い＝公開のニュースだけ）。新しく claims を読むコードは `sensitivity` で絞ること。
 - **派生データの区分（v0.5）**: 主張・関係・物・カードを新しく作る経路は、必ず `kg.inherit` で文書から区分を引き継ぐ。読む API は `scopes_for`（confidential は session だけ）を通す。LLM に送る材料は public かつ allowed だけ（`kg_job.targets`）。ここを緩めない。
 - **LLM の出力の上限**: `prep.TOKENS_PER_ITEM`（600）× 件数。relations を足すと 20 件は上限ぎりぎり。件数を増やす・出力の項目を足すときは、DESIGN 13 章の見積もりをやり直す（30 件は 2026-11-24 に切れた）。
+- **Things の脳（2026-11-25）**: 画面の名前は Things、データ・API は entity のまま（`/entities`・`/kg`・`/things` の 3 つの道が同じ中身）。カードの帯の確かさは根拠の数だけ（`things.confidence_of`）で、LLM の値を混ぜない。カードの LLM の検査（`kg_job._grounded_line`）を緩めない（材料に無い英字の名前・数字を捨てる）。夜の集計（`kg_job.aggregate`）がまとまり（`things.compute_communities`）と候補（`compute_mentions`）も作る＝検索の索引が無いと候補は 0。まとまりは public の関係だけで計算（機密の物は入れない）。まとまりの id は夜ごとに変わる（覚えない）。全体の地図の応答は 1MB 未満に保つ（`OVERVIEW_EDGES_MAX`。超えるとキャッシュされない）。`/things/context` は `read_user` なので POST でもトークンが通る（副作用を足さない）。
 - **co_occurs の行の id は夜ごとに変わる**（置き換え）。id を覚えておく使い方をしない（物の id と型で引く）。
 - **作業の場所**: 子エージェントが `QnapNewsHub` の checkout で作業している間に docs を直すときは、`git worktree add ../QnapNewsHub-xxx origin/main` で別の場所を作り、終わったら `git worktree remove` する。
 

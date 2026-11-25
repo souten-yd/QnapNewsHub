@@ -155,7 +155,7 @@ export function NewsRuntimeCards() {
             <input type="number" min={10} max={100000} aria-label="まとめ書きの件数の上限" value={draft.storage.max_items} disabled={dis}
               onChange={(e) => set({ storage: { ...draft.storage, max_items: num(e.target.value, 10, 100000, 1000) } })} className={`${field} mt-1 w-full`} /></label>
         </div>
-        <label className={label}>古い記事の抜粋を圧縮する年数（0 は圧縮しない。圧縮した記事は検索の対象が題・概要・物だけになります）
+        <label className={label}>古い記事の抜粋を圧縮する年数（0 は圧縮しない。圧縮した記事は検索の対象が題・概要・Thingsだけになります）
           <input type="number" min={0} max={30} aria-label="圧縮する年数" data-testid="compress-years" value={draft.storage.compress_years} disabled={dis}
             onChange={(e) => set({ storage: { ...draft.storage, compress_years: num(e.target.value, 0, 30, 1) } })} className={`${field} mt-1 w-full sm:w-1/2`} /></label>
         <Toggle label="ログをファイルにも書く（再起動で効く）" hint="既定は切（ログはメモリだけ）。書くと書き込みが増えます" value={draft.storage.log_file} disabled={dis} onChange={(on) => set({ storage: { ...draft.storage, log_file: on } })} />
@@ -208,7 +208,7 @@ export function NewsRuntimeCards() {
               {data.model_chain && data.model_chain.chain.length > 1 && <p className="num text-xs" role="status" data-testid="chain-status">いま使っているモデル: <span className="font-mono">{data.model_chain.current}</span>{data.model_chain.return_in_seconds !== null ? `（あと約 ${Math.ceil(data.model_chain.return_in_seconds / 60)} 分で 1 番目へ戻します）` : ""}</p>}
               <PaidNote names={[draft.llm.prep_model, ...draft.llm.fallback_models]} />
             </div>
-            <Toggle label="要素の取り出し（物と fact）を、下ごしらえと同じ呼び出しで行う" hint="記事ごとに、物（モデル・ソフト・組織など）と事実を取り出して「物」の画面にためます。AI の取り出しなので、間違いを含みます。呼び出しの回数は増えません。" value={draft.llm.extract_enabled} disabled={dis} onChange={(on) => set({ llm: { ...draft.llm, extract_enabled: on } })} />
+            <Toggle label="要素の取り出し（Thingsと fact）を、下ごしらえと同じ呼び出しで行う" hint="記事ごとに、Things（モデル・ソフト・組織など）と事実を取り出して「Things」の画面にためます。AI の取り出しなので、間違いを含みます。呼び出しの回数は増えません。" value={draft.llm.extract_enabled} disabled={dis} onChange={(on) => set({ llm: { ...draft.llm, extract_enabled: on } })} />
             <label className={label}>1 回の取得で下ごしらえする上限（件。{data.prep_batch} 件で 1 回の呼び出し）
               <input type="number" min={1} max={200} aria-label="下ごしらえの上限" data-testid="prep-max" value={draft.llm.prep_max_per_run} disabled={dis}
                 onChange={(e) => set({ llm: { ...draft.llm, prep_max_per_run: num(e.target.value, 1, 200, 1) } })} className={`${field} mt-1 w-28`} /></label>

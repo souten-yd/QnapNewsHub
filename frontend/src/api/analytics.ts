@@ -16,7 +16,7 @@ export interface SeriesItem { key: string; label: string; counts: number[]; tota
 export interface Series { range: Range; grain: "hour" | "day"; by: By; metric: "all" | "indep"; buckets: string[]; series: SeriesItem[]; total: number }
 export interface HotTopic {
   term: string; label: string; score: number | null; count: number; count_all: number; baseline_mean: number; baseline_sd: number; growth_pct: number | null; sources: number; spark: number[];
-  /** 語（term）か物（entity）。物なら entity_id・entity_type がある（押すと物のページ）。古いサーバーには無い */
+  /** 語（term）かThings（entity）。Thingsなら entity_id・entity_type がある（押すとThingsのページ）。古いサーバーには無い */
   kind?: "term" | "entity"; entity_id?: number; entity_type?: string;
 }
 export interface HotTopics {

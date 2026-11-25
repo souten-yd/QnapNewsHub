@@ -153,7 +153,7 @@ export function ConnectorsPanel() {
   if (!q.data) return <p className="text-xs text-zinc-500">読み込んでいます…</p>;
   const d = q.data;
   const total = (tier: string) => Object.values(d.tiers).reduce((n, row) => n + (row[tier] ?? 0), 0);
-  const rules: [string, string][] = [["channel", "チャンネルに合う"], ["hot", "ホットトピックを含む"], ["watch", "監視の物を含む"], ["surge", "スターの急増"], ["derivative", "監視のモデルの派生版"]];
+  const rules: [string, string][] = [["channel", "チャンネルに合う"], ["hot", "ホットトピックを含む"], ["watch", "監視のThingsを含む"], ["surge", "スターの急増"], ["derivative", "監視のモデルの派生版"]];
   return (
     <section aria-label="connector" className="space-y-3" data-testid="connectors-panel">
       <p className="text-xs leading-relaxed text-zinc-500">

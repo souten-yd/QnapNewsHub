@@ -17,7 +17,7 @@ export const REL_COLOR: Record<RelType, string> = {
 export type RelStatus = "extracted" | "inferred" | "statistical" | "confirmed";
 export const STATUS_LABEL: Record<RelStatus, string> = { extracted: "AI の取り出し", inferred: "推測", statistical: "集計", confirmed: "確認済み" };
 
-export interface GraphNode { id: number; name: string; type: EntityType; article_count: number; sensitivity: string; last_seen: string }
+export interface GraphNode { id: number; name: string; type: EntityType; article_count: number; sensitivity: string; last_seen: string; degree?: number; last_edge_at?: string }
 export interface GraphEdge {
   id: number; source: number; target: number; type: RelType; directed: boolean; confidence: number; status: RelStatus; evidence_count: number;
   first_at: string; last_at: string; sensitivity: string;
@@ -32,7 +32,18 @@ export interface CardEvidence { document: { id: number; kind: string; title: str
 export interface CardClaim { id: number; kind: string; text: string; value: string; ai_extracted: boolean; model: string; sensitivity: string; evidences: CardEvidence[] }
 export interface CardRelation extends GraphEdge { direction: "out" | "in" | "both"; other: { id: number; name: string; type: EntityType }; status_label: string }
 export interface HistoryEntry { claim_id: number; t: string; value: string; text: string; title: string; url: string; mark: "first" | "same" | "change" | "contradiction"; from?: string; ai_extracted: boolean }
+export type ThingState = "official" | "experimental" | "deprecated" | "unknown";
+/** カードの先頭の帯（things.brief）。確かさは根拠の文書の数だけで決まる（1 件 0.5・2 件 0.75…）。 */
+export interface ThingBrief {
+  definition: string; type: EntityType; state: { key: ThingState; label: string }; confidence: number; confidence_label: string; aliases: string[];
+  evidence_count: number; latest_evidence_at: string; checked_at: string;
+}
+export type GroupKey = "upper" | "lower" | "peers" | "uses" | "used_by" | "replaces" | "replaced_by" | "contradicts" | "other";
+export interface RelationGroup { key: GroupKey; label: string; count: number; more: number; items: (CardRelation & { other: { id: number; name: string; type: EntityType; definition: string } })[] }
+export interface MetricRow { source: "claim" | "metric"; kind: string; label: string; value: string; unit: string; at: string; url: string }
+export interface MentionCand { article_id: number; title: string; url: string; source: string; matched: string; published_at: string }
 export interface KnowledgeCardData {
+  brief: ThingBrief; groups: RelationGroup[]; questions: string[]; opposing: string[]; metrics: MetricRow[]; mentions: MentionCand[];
   id: number; name: string; type: EntityType; sensitivity: string; ai_use: string;
   overview: { text: string; model: string; at: string; ai: boolean } | null;
   elements: { aliases: string[]; first_seen: string; last_seen: string; article_count: number; topics: string[] };
@@ -41,7 +52,7 @@ export interface KnowledgeCardData {
   history: { series: { kind: string; entries: HistoryEntry[] }[]; changes: number; contradictions: number };
   note: { body: string; updated_at: string };
 }
-export const useCard = (id: number) => useQuery({ queryKey: ["kg", "card", id], queryFn: () => api<KnowledgeCardData>(`/kg/entities/${id}/card`), enabled: Number.isFinite(id), staleTime: 30_000, retry: false });
+export const useCard = (id: number) => useQuery({ queryKey: ["kg", "card", id], queryFn: () => api<KnowledgeCardData>(`/things/${id}/card`), enabled: Number.isFinite(id), staleTime: 30_000, retry: false });
 export function useSaveNote(id: number) {
   const qc = useQueryClient();
   return useMutation({

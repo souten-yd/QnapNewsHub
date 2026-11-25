@@ -9,10 +9,10 @@ const SIZES = [{ name: "320", width: 320, height: 700 }, { name: "1280", width: 
 
 for (const vp of SIZES) {
   for (const scheme of SCHEMES) {
-    test.describe(`物 ${vp.name}px ${scheme}`, () => {
+    test.describe(`Things ${vp.name}px ${scheme}`, () => {
       test.use({ viewport: { width: vp.width, height: vp.height }, colorScheme: scheme, hasTouch: vp.width < 768 });
 
-      test("物の一覧: 検索・種類で絞れ、物のページへ行ける。はみ出さない", async ({ page }) => {
+      test("Things の一覧: 検索・種類で絞れ、物のページへ行ける。はみ出さない", async ({ page }) => {
         const state = newState();
         await mockApi(page, state);
         await page.goto("/entities");
@@ -20,15 +20,15 @@ for (const vp of SIZES) {
         await expect(page.getByTestId("entities-total")).toContainText("6 件");
         await expectNoHorizontalOverflow(page);
         await shot(page, `entities-list-${vp.name}-${scheme}`);
-        await page.getByLabel("物を探す").fill("qwen");
+        await page.getByLabel("Thingsを探す").fill("qwen");
         await expect(page.getByTestId("entity-row")).toHaveCount(1);
-        await page.getByLabel("物を探す").fill("");
+        await page.getByLabel("Thingsを探す").fill("");
         await page.getByLabel("種類").selectOption("org");
         await expect(page.getByTestId("entity-row")).toHaveCount(1);
         await page.getByLabel("種類").selectOption("");
-        await page.getByLabel("物を探す").fill("zzz");
+        await page.getByLabel("Thingsを探す").fill("zzz");
         await expect(page.getByTestId("entities-empty")).toBeVisible();
-        await page.getByLabel("物を探す").fill("qwen");
+        await page.getByLabel("Thingsを探す").fill("qwen");
         await page.getByTestId("entity-row").click();
         await expect(page.getByTestId("entity-name")).toContainText("Qwen 3.5");
         expect(state.unhandled).toEqual([]);
@@ -132,7 +132,7 @@ for (const vp of SIZES) {
         await expect(page.getByTestId("llm-quota")).toContainText("下ごしらえと取り出し");
         await expect(page.getByTestId("llm-current-model")).toContainText("second-model");
         await expect(page.getByTestId("llm-chain-events")).toContainText("切り替え");
-        await expect(page.getByTestId("llm-knowledge")).toContainText("128 物");
+        await expect(page.getByTestId("llm-knowledge")).toContainText("128 Things");
         await expect(page.getByTestId("llm-gateway")).toContainText("あと約 8 分");
         await page.getByTestId("llm-quota").scrollIntoViewIfNeeded();
         await expectNoHorizontalOverflow(page);

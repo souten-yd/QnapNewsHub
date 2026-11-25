@@ -356,11 +356,18 @@ def card(db: Session, entity_id: int, scopes: list[str] | None = None) -> dict |
     base = entities_mod.detail(db, entity_id, limit=30, scopes=scopes) or {}
     cd = db.get(EntityCard, entity_id)
     note = db.get(EntityNote, entity_id)
+    from qnapnewshub import things
+
+    rels = relations_of(db, entity_id, scopes)
+    claims = _claims_with_evidence(db, entity_id, scopes)
     return {"id": ent.id, "name": ent.name, "type": ent.type, "sensitivity": ent.sensitivity, "ai_use": ent.ai_use,
             "overview": {"text": cd.summary, "model": cd.model, "at": kg.iso(cd.at), "ai": True} if cd and cd.summary else None,
             "elements": {"aliases": base.get("aliases", []), "first_seen": kg.iso(ent.first_seen), "last_seen": kg.iso(ent.last_seen), "article_count": ent.article_count,
                          "topics": _topics_of(db, entity_id)},
-            "timeline": base.get("timeline", []), "claims": _claims_with_evidence(db, entity_id, scopes), "relations": relations_of(db, entity_id, scopes),
+            "timeline": base.get("timeline", []), "claims": claims, "relations": rels,
+            "brief": things.brief(db, ent), "groups": things.relation_groups(rels, things.definitions(db, [r["other"]["id"] for r in rels])),
+            "questions": things._loads(cd.questions) if cd else [], "opposing": things._loads(cd.opposing) if cd else [],
+            "metrics": things.metric_rows(db, ent, claims), "mentions": things.mentions_of(db, entity_id),
             "history": kg.history(db, entity_id, scopes), "note": {"body": note.body if note else "", "updated_at": kg.iso(note.updated_at) if note else ""}}
 
 
@@ -418,8 +425,38 @@ def _sources_for_pair(db: Session, a: int, b: int, n: int = 3) -> list[tuple[str
     return [(t, u) for t, u in rows if u]
 
 
+README_VAULT = """# このフォルダについて（vault の使い方）
+
+QNAP ニュースハブの Things（知識の単位）を、Obsidian で開ける Markdown にしたものです。LLM に読ませるときは、まずこのファイルを読ませてください。
+
+## 規約
+- 1 つの Things が 1 ファイル（`種類/名前.md`）。先頭の `---` で囲んだ部分（frontmatter）に、type（種類）・status（状態: official 正式公開・experimental 実験的・deprecated 廃止・unknown 不明）・aliases（別名）・confidence（確かさ 0〜1。根拠の文書の数だけで決めた値）・updated（最新の根拠の日）・sources（根拠の URL）があります。
+- `## Connections` は関係を型ごとに分けた節です（上位・下位・仲間・使う・使われる・置き換える・置き換えられる・矛盾・その他）。`[[名前]]` で相手へ移れます。関係の後ろの「推測」は、原文に根拠が見つからなかった関係です。確定として扱わないでください。
+- `## Open Questions` は未解決の問い、`## Opposing Views` は反対の見方です。ここに書かれていないことを、事実として補わないでください。
+- `_MOC/` は主題の入口（まとまりごと）です。主要な Things・最近の出来事・未解決の問いが並びます。調べ始めるときの入口に使います。
+- `[AI]` の付いた記述は AI が取り出したもので、確かめた事実ではありません。根拠の URL を開いて確かめてください。
+- 既定では public（公開）の Things だけを書き出しています。
+
+## LLM の使い方の目安
+1. `_MOC/` から主題を選ぶ。2. 気になる Things を開き、frontmatter の status と confidence を見る。3. `## Connections` で関係をたどる。4. 断定する前に根拠の URL と Open Questions を確かめる。
+"""
+
+
+def _frontmatter(e: Entity, c: dict, exported: str, srcs: list[str]) -> list[str]:
+    b = c["brief"]
+    fm = ["---", f"id: {e.id}", f"name: {json.dumps(e.name, ensure_ascii=False)}", f"type: {e.type}", f"status: {b['state']['key']}", f"aliases: {_yaml_list(c['elements']['aliases'])}",
+          f"confidence: {b['confidence']}", f"updated: {json.dumps((b['latest_evidence_at'] or '')[:10])}", f"sources: {_yaml_list(srcs)}",
+          f"first_seen: {json.dumps(c['elements']['first_seen'])}", f"last_seen: {json.dumps(c['elements']['last_seen'])}", f"article_count: {e.article_count}",
+          f"sensitivity: {e.sensitivity}", f"ai_use: {e.ai_use}", f"exported_at: {json.dumps(exported)}", "tags: [qnapnewshub]", "---", ""]
+    return fm
+
+
 def export_zip(db: Session, entities: list[Entity], scopes: list[str], *, include_notes: bool = True) -> tuple[bytes, dict]:
-    """物ごとの .md を zip にする。リンクは範囲の中の物だけ（範囲外の機密の物の名前を漏らさない）。(zip の中身, {"files", "scopes"}) を返す。"""
+    """物ごとの .md と、_MOC/（まとまりごとの入口）・README.md（vault の使い方）を zip にする。リンクは範囲の中の物だけ（範囲外の機密の物の名前を漏らさない）。(zip の中身, {"files", "scopes"}) を返す。
+    各ファイル: frontmatter（type・status・aliases・confidence・updated・sources）・`## Connections`（型ごと）・`## Open Questions`・根拠。"""
+    from qnapnewshub import things
+    from qnapnewshub.db import Community, EntityCommunity
+
     names: dict[int, str] = {}
     used: set[str] = set()
     for e in entities:
@@ -431,28 +468,41 @@ def export_zip(db: Session, entities: list[Entity], scopes: list[str], *, includ
     exported = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("README.md", README_VAULT)
         for e in entities:
             c = card(db, e.id, scopes)
             if c is None:
                 continue
-            fm = ["---", f"id: {e.id}", f"name: {json.dumps(e.name, ensure_ascii=False)}", f"type: {e.type}", f"aliases: {_yaml_list(c['elements']['aliases'])}",
-                  f"first_seen: {json.dumps(c['elements']['first_seen'])}", f"last_seen: {json.dumps(c['elements']['last_seen'])}", f"article_count: {e.article_count}",
-                  f"sensitivity: {e.sensitivity}", f"ai_use: {e.ai_use}", f"exported_at: {json.dumps(exported)}", "tags: [qnapnewshub]", "---", ""]
+            srcs = [u for (u,) in db.execute(select(NewsItem.url).join(ArticleEntity, ArticleEntity.article_id == NewsItem.id).where(ArticleEntity.entity_id == e.id, NewsItem.url != "")
+                                             .order_by(NewsItem.published_at.desc()).limit(5))]
+            fm = _frontmatter(e, c, exported, srcs)
             body = [f"# {e.name}", ""]
+            if c["brief"]["definition"]:
+                body += [f"> {c['brief']['definition']} [AI]", ""]
             if c["overview"]:
                 body += ["## 概要（AI が作った要約）", c["overview"]["text"], f"（{c['overview']['model']}。確かめた事実ではありません）", ""]
-            if c["relations"]:
-                body += ["## 関係"]
-                for r in c["relations"]:
-                    other = r["other"]
-                    link = names.get(other["id"]) or safe_name(other["name"])
-                    arrow = {"out": "→", "in": "←", "both": "↔"}[r["direction"]]
-                    line = f"- {arrow} {REL_LABEL.get(r['type'], r['type'])} [[{link}]]（確かさ {r['confidence']}・{r['status_label']}・根拠 {r['evidence_count']} 件）"
-                    if r["type"] == "co_occurs":
-                        src = _sources_for_pair(db, e.id, other["id"])
-                        line += "".join(f"\n  - [{t}]({u})" for t, u in src)
-                    body.append(line)
+            if c["groups"]:
+                body += ["## Connections"]
+                for g in c["groups"]:
+                    body.append(f"### {g['label']}")
+                    for r in g["items"]:
+                        other = r["other"]
+                        link = names.get(other["id"]) or safe_name(other["name"])
+                        arrow = {"out": "→", "in": "←", "both": "↔"}[r["direction"]]
+                        line = f"- {arrow} {REL_LABEL.get(r['type'], r['type'])} [[{link}]]（確かさ {r['confidence']}・{r['status_label']}・根拠 {r['evidence_count']} 件）"
+                        if other.get("definition"):
+                            line += f" — {other['definition']}"
+                        if r["type"] == "co_occurs":
+                            src = _sources_for_pair(db, e.id, other["id"])
+                            line += "".join(f"\n  - [{t}]({u})" for t, u in src)
+                        body.append(line)
                 body.append("")
+            if c["questions"]:
+                body += ["## Open Questions", *[f"- {q} [AI]" for q in c["questions"]], ""]
+            if c["opposing"]:
+                body += ["## Opposing Views", *[f"- {q} [AI]" for q in c["opposing"]], ""]
+            if c["metrics"]:
+                body += ["## Key Numbers", *[f"- {m['label']}: {m['value']}{m['unit']}" for m in c["metrics"]], ""]
             if c["history"]["series"]:
                 body += ["## 変化と矛盾"]
                 for g in c["history"]["series"]:
@@ -472,4 +522,30 @@ def export_zip(db: Session, entities: list[Entity], scopes: list[str], *, includ
             if include_notes and c["note"]["body"]:
                 body += ["## 自分のメモ", c["note"]["body"], ""]
             z.writestr(f"{e.type}/{names[e.id]}.md", "\n".join(fm + body))
+        # 主題の入口（MOC）: 書き出す物が 2 つ以上入っているまとまりだけ。リンクは書き出した物だけ
+        by_comm: dict[int, list[int]] = {}
+        for eid, cid in db.execute(select(EntityCommunity.entity_id, EntityCommunity.community_id).where(EntityCommunity.entity_id.in_([e.id for e in entities]))):
+            by_comm.setdefault(cid, []).append(eid)
+        order = {e.id: n for n, e in enumerate(entities)}
+        moc_names: set[str] = set()
+        for cid, members in sorted(by_comm.items(), key=lambda kv: -len(kv[1]))[:30]:
+            if len(members) < 2:
+                continue
+            c = db.get(Community, cid)
+            if c is None:
+                continue
+            moc = things.moc_community(db, cid, scopes) or {}
+            members.sort(key=lambda i: order[i])
+            title = safe_name(f"MOC {c.name}")
+            if title.casefold() in moc_names:
+                title = f"{title} ({cid})"
+            moc_names.add(title.casefold())
+            lines = ["---", "type: moc", f"size: {c.size}", f"exported_at: {json.dumps(exported)}", "tags: [qnapnewshub, moc]", "---", "", f"# {c.name} のまとまり", "", "## 主要な Things"]
+            lines += [f"- [[{names[i]}]]" for i in members[:30]]
+            if moc.get("events"):
+                lines += ["", "## 最近の出来事", *[f"- {ev['last_at'][:10]} {ev['title']}" for ev in moc["events"]]]
+            qs = [q for q in moc.get("questions", []) if q["entity_id"] in names]
+            if qs:
+                lines += ["", "## Open Questions", *[f"- [[{names[q['entity_id']]}]]: {q['question']} [AI]" for q in qs]]
+            z.writestr(f"_MOC/{title}.md", "\n".join(lines) + "\n")
     return buf.getvalue(), {"files": len(entities), "scopes": scopes}

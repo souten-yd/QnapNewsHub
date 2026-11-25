@@ -1,5 +1,5 @@
-/** 知識カード・知識の地図・Obsidian の書き出し（v0.5）。
- *  E2E の目的: ①カードに概要（AI の印）・関係（推測の印）・変化と矛盾・主張の根拠が出て、利用者のメモが打つだけで保存される ②地図が遅延読み込みで描かれ、始める物から段階的に広がり、型・確かさ・期間で絞れ、
+/** Things の脳（2026-11-25）: カードの帯・関係の型ごと・未解決の問い・主な数値・つなぐ候補・全体の地図・検索の強調と絞り・ローカル・主題の入口（MOC）・Obsidian の書き出し。
+ *  E2E の目的（v0.5 の分も含む）: ①カードに概要（AI の印）・関係（推測の印）・変化と矛盾・主張の根拠が出て、利用者のメモが打つだけで保存される ②地図が遅延読み込みで描かれ、始める物から段階的に広がり、型・確かさ・期間で絞れ、
  *  点を押すとカードへ行ける ③書き出しは押したときだけ zip を受け取り、機密の区分の既定は含めない。320px と 1280px・ライト／ダークではみ出さない。
  *  根拠: 利用者の指示 v0.5（知識カード・知識の地図・Obsidian の書き出し）・AGENTS.md「実画面（320px と PC の幅、ライト・ダーク）」。 */
 import { expect, test, type Page } from "@playwright/test";
@@ -8,30 +8,56 @@ import { SCHEMES, expectNoHorizontalOverflow, shot } from "./helpers";
 
 const SIZES = [{ name: "320", width: 320, height: 700 }, { name: "1280", width: 1280, height: 900 }] as const;
 const tap = (page: Page, id: number) => page.evaluate((i) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __cy: { getElementById(s: string): { emit(e: string): void } } }).__cy.getElementById(String(i)).emit("tap"), id);
+const cyCount = (page: Page, sel: string) => page.evaluate((s) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __cy: { elements(q: string): { length: number } } }).__cy.elements(s).length, sel);
 
 for (const vp of SIZES) {
   for (const scheme of SCHEMES) {
-    test.describe(`知識 ${vp.name}px ${scheme}`, () => {
+    test.describe(`Things の脳 ${vp.name}px ${scheme}`, () => {
       test.use({ viewport: { width: vp.width, height: vp.height }, colorScheme: scheme, hasTouch: vp.width < 768 });
 
-      test("知識カード: 概要・関係・変化と矛盾・根拠・メモ（打つとすぐ保存・読み直しても残る）", async ({ page }) => {
+      test("カード: 帯・関係の型ごと・問い・数値・つなぐ候補・変化と矛盾・根拠・メモ（打つとすぐ保存）", async ({ page }) => {
         const state = newState();
         await mockApi(page, state);
         await page.goto("/entities/2");
-        const card = page.getByTestId("knowledge-card");
-        await expect(card).toBeVisible();
+        await expect(page.getByTestId("knowledge-card")).toBeVisible();
+        // 先頭の帯: 1 行の定義・種類・状態・確かさ・別名・根拠の数と新しさ・最後に確かめた日
+        const band = page.getByTestId("card-brief");
+        await expect(page.getByTestId("brief-definition")).toContainText("Alibaba が公開する汎用の大規模言語モデル");
+        await expect(page.getByTestId("brief-state")).toHaveText("正式公開");
+        await expect(page.getByTestId("brief-confidence")).toContainText("確かさ 0.97（高）");
+        await expect(band).toContainText("通義千問 3.5");
+        await expect(page.getByTestId("brief-evidence")).toContainText("根拠 17 件");
+        await expect(page.getByTestId("brief-evidence")).toContainText("最後に確かめた日");
         await expect(page.getByTestId("card-overview")).toContainText("AI の要約");
+        // 関係は型ごとの節（上位・使う・使われる）。畳める
         await expect(page.getByTestId("card-relations").locator("li")).toHaveCount(3);
-        await expect(page.getByTestId("card-relations").locator('li[data-status="inferred"]')).toContainText("推測");
+        await expect(page.getByTestId("group-upper")).toContainText("Alibaba");
+        await expect(page.getByTestId("group-upper").getByTestId("relation-definition")).toContainText("中国の IT 企業");
+        await expect(page.getByTestId("group-used_by")).toContainText("llama.cpp");
+        await expect(page.getByTestId("group-uses").locator('li[data-status="inferred"]')).toContainText("推測");
+        await page.getByTestId("group-upper").locator("summary").click();
+        await expect(page.getByTestId("group-upper").locator("li")).toBeHidden();
+        await page.getByTestId("group-upper").locator("summary").click();
+        // 未解決の問い・反対の見方・主な数値
+        await expect(page.getByTestId("card-question")).toHaveCount(2);
+        await expect(page.getByTestId("card-opposing")).toContainText("日本語に強い");
+        await expect(page.getByTestId("card-metrics")).toContainText("25 tok/s");
+        await expect(page.getByTestId("card-metrics")).toContainText("Metric");
         await expect(page.getByTestId("card-history").locator('li[data-mark="change"]')).toContainText("前は 1000");
-        await expect(page.getByTestId("card-history").locator('li[data-mark="contradiction"]')).toHaveCount(2);
         await expect(page.getByRole("heading", { name: /変化 1 · 矛盾 2/ })).toBeVisible();
         const claim = page.getByTestId("card-claims").locator("li").first();
         await claim.locator("summary").click();
         await expect(claim).toContainText("p.3");
-        await expect(claim).toContainText("Qwen 3.5 を公開");
         await expectNoHorizontalOverflow(page);
         await shot(page, `card-${vp.name}-${scheme}`);
+        // つなぐ候補: 押すと確定（候補から消える）
+        await expect(page.getByTestId("card-mentions").locator("li")).toHaveCount(2);
+        await page.getByTestId("mention-confirm").first().click();
+        await expect(page.getByTestId("card-mentions").locator("li")).toHaveCount(1);
+        expect(state.calls.some((c) => c.method === "POST" && c.path === "/things/2/mentions/3/confirm")).toBe(true);
+        await page.getByTestId("mention-dismiss").first().click();
+        await expect(page.getByTestId("card-mentions")).toHaveCount(0);
+        expect(state.calls.some((c) => c.path === "/things/2/mentions/4/dismiss")).toBe(true);
         const note = page.getByTestId("card-note");
         await note.fill("自分の考察: R9700 で試す");
         await expect(page.getByTestId("note-state")).toContainText("保存しました");
@@ -40,60 +66,137 @@ for (const vp of SIZES) {
         await expect(page.getByTestId("card-note")).toHaveValue("自分の考察: R9700 で試す");
         await page.getByTestId("card-open-map").click();
         await expect(page).toHaveURL(/\/map\?focus=2$/);
+        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-view", "local");
         await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-nodes", "4");      // Qwen・Alibaba・llama.cpp・GGUF
         expect(state.unhandled).toEqual([]);
       });
 
-      test("カードの概要が無い物は「まだ概要はありません」・関係が無ければ空の表示", async ({ page }) => {
+      test("カードの定義・問いが無い Things は「まだ…」・関係が無ければ空の表示", async ({ page }) => {
         const state = newState();
         await mockApi(page, state);
         await page.goto("/entities/4");
         await expect(page.getByTestId("card-no-overview")).toBeVisible();
+        await expect(page.getByTestId("brief-definition")).toContainText("まだありません");
+        await expect(page.getByTestId("brief-state")).toHaveText("不明");
         await expect(page.getByTestId("card-no-relations")).toBeVisible();
+        await expect(page.getByTestId("card-no-questions")).toBeVisible();
         await expect(page.getByTestId("card-no-history")).toBeVisible();
+        await expectNoHorizontalOverflow(page);
         expect(state.unhandled).toEqual([]);
       });
 
-      test("知識の地図: 始める物から広げ、型・確かさ・期間で絞り、点を押してカードへ", async ({ page }) => {
+      test("知識の地図: 最初は全体・検索は強調と絞り・ローカルは深さ 1〜3・絞り込みと凡例", async ({ page }) => {
         const state = newState();
         await mockApi(page, state);
         await page.goto("/map");
-        await expect(page.getByTestId("map-empty")).toBeVisible();
-        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-ready", "true");
-        await shot(page, `map-empty-${vp.name}-${scheme}`);
-        await page.getByTestId("map-search").fill("llama");
-        await page.getByTestId("map-result").first().click();
-        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-nodes", "5");
-        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-edges", "4");
-        await expect(page.getByTestId("map-count")).toContainText("点 5 · 線 4");
+        const cv = page.getByTestId("map-canvas");
+        await expect(cv).toHaveAttribute("data-ready", "true");
+        await expect(cv).toHaveAttribute("data-view", "overview");
+        await expect(cv).toHaveAttribute("data-nodes", "7");      // 検索なしで最初から全体（孤立した点は隠れている）
+        await expect(cv).toHaveAttribute("data-edges", "7");
+        await expect(page.getByTestId("map-count")).toContainText("関係のある Things 7 件のうち、主要な 7 点");
+        expect(state.calls.filter((c) => c.path === "/things/map/overview").length).toBe(1);
+        expect(state.calls.some((c) => c.path === "/graph/neighbors")).toBe(false);      // 全体はサーバーの 1 回で出る
+        await expect(page.getByTestId("map-group")).toHaveCount(1);
+        await page.getByTestId("map-filters-toggle").click();
+        await expect(page.getByTestId("map-node-legend")).toContainText("ソフト");
         await expectNoHorizontalOverflow(page);
-        await shot(page, `map-${vp.name}-${scheme}`);
-        // 絞り込み（期間・確かさ・型）は読み込み済みの線を隠す。点・線は消さない
+        await shot(page, `map-overview-${vp.name}-${scheme}`);
+        await page.getByTestId("map-iso").check();
+        await expect(cv).toHaveAttribute("data-nodes", "8");      // 孤立した点の表示の切り替え
+        await page.getByTestId("map-iso").uncheck();
+        await expect(cv).toHaveAttribute("data-nodes", "7");
+        // 検索: 強調（一致は明るく・ほかは薄く）
+        await page.getByTestId("map-search").fill("qwen");
+        await expect(page.getByTestId("map-hits")).toContainText("一致 1 件・一致を強調");
+        await expect(cv).toHaveAttribute("data-hits", "1");
+        expect(await cyCount(page, "node.hit")).toBe(1);
+        expect(await cyCount(page, "node.dim")).toBe(7);      // 一致以外 6 点＋隠れている孤立した点
+        expect(await cyCount(page, "node.off")).toBe(1);      // 孤立した点だけ隠れている
+        await shot(page, `map-highlight-${vp.name}-${scheme}`);
+        // 絞る: 一致と近傍だけ（Qwen・Alibaba・llama.cpp・GGUF）
+        await page.getByTestId("mode-filter").click();
+        await expect(cv).toHaveAttribute("data-nodes", "4");
+        await expect(page.getByTestId("map-hits")).toContainText("一致と近傍だけを表示");
+        await shot(page, `map-filter-${vp.name}-${scheme}`);
+        await page.getByTestId("mode-highlight").click();
+        await page.getByTestId("map-search").fill("");
+        await expect(cv).toHaveAttribute("data-hits", "0");
+        await expect(cv).toHaveAttribute("data-nodes", "7");
+        // 絞り込み（型・確かさ・期間）
         await page.getByTestId("legend-co_occurs").click();
         await expect(page.getByTestId("map-count")).toContainText("1 本を隠しています");
         await page.getByTestId("legend-co_occurs").click();
         await page.getByTestId("map-filters").getByLabel("確かさ").selectOption("0.7");
-        await expect(page.getByTestId("map-count")).toContainText("3 本を隠しています");
+        await expect(page.getByTestId("map-count")).toContainText("5 本を隠しています");
         await page.getByTestId("map-filters").getByLabel("確かさ").selectOption("0");
-        await expect(page.getByTestId("map-count")).not.toContainText("隠しています");
-        // 点を押す → 札 → 周りを広げる（段階的）。広げた先の「推測」の線は 200 日前が最後なので、期間 90 日で隠れる
+        await page.getByTestId("map-filters").getByLabel("期間").selectOption("90");
+        await expect(page.getByTestId("map-count")).toContainText("1 本を隠しています");      // 200 日前が最後の「推測」の線
+        await page.getByTestId("map-filters").getByLabel("期間").selectOption("0");
+        await page.getByTestId("map-filters").getByLabel("Things の種類").selectOption("org");
+        await expect(cv).toHaveAttribute("data-nodes", "1");
+        await page.getByTestId("map-filters").getByLabel("Things の種類").selectOption("");
+        // ローカル: 点を押す → ローカルで見る → 深さ 1〜3
         await tap(page, 2);
         await expect(page.getByTestId("map-selected")).toContainText("Qwen 3.5");
-        await page.getByTestId("map-expand").click();
-        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-nodes", "7");
-        await page.getByTestId("map-filters").getByLabel("期間").selectOption("90");
-        await expect(page.getByTestId("map-count")).toContainText("1 本を隠しています");
-        await page.getByTestId("map-filters").getByLabel("物の種類").selectOption("org");
-        await expect(page.getByTestId("map-count")).toContainText("点 7");
+        await page.getByTestId("map-local-open").click();
+        await expect(cv).toHaveAttribute("data-view", "local");
+        await expect(cv).toHaveAttribute("data-nodes", "4");
+        await page.getByTestId("map-depth").fill("2");
+        await expect(cv).toHaveAttribute("data-nodes", "7");
+        const depths = state.calls.filter((c) => c.path === "/graph/neighbors").map((c) => (c.body as { depth: number }).depth);
+        expect(depths).toEqual([1, 2]);
         await expectNoHorizontalOverflow(page);
-        await shot(page, `map-expanded-${vp.name}-${scheme}`);
+        await shot(page, `map-local-${vp.name}-${scheme}`);
+        await page.getByTestId("map-back").click();
+        await expect(cv).toHaveAttribute("data-view", "overview");
+        await expect(cv).toHaveAttribute("data-nodes", "7");
+        await tap(page, 2);
         await page.getByTestId("map-open-card").click();
         await expect(page).toHaveURL(/\/entities\/2$/);
         await expect(page.getByTestId("knowledge-card")).toBeVisible();
         expect(state.unhandled).toEqual([]);
-        const calls = state.calls.filter((c) => c.path === "/graph/neighbors");
-        expect(calls.length).toBe(2);      // 一度に全部ではなく、始めと広げるの 2 回だけ
-        expect((calls[1].body as { ids: number[] }).ids).toEqual([2]);
+      });
+
+      test("まとまりを押すと中を開く（その塊へ寄り、ほかは薄く）。主題の入口から地図へ", async ({ page }) => {
+        const state = newState();
+        await mockApi(page, state);
+        await page.goto("/map");
+        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-nodes", "7");
+        await page.getByTestId("map-group").first().click();
+        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-hits", "7");
+        expect(state.calls.some((c) => c.path === "/things/map/community/1")).toBe(true);
+        await page.goto("/map?community=1");
+        await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-hits", "7");
+        expect(state.unhandled).toEqual([]);
+      });
+
+      test("主題の入口（MOC）: 一覧・まとまり・チャンネル。主要な Things・最近の出来事・未解決の問い", async ({ page }) => {
+        const state = newState();
+        await mockApi(page, state);
+        await page.goto("/entities");
+        await page.getByTestId("things-moc-link").click();
+        await expect(page.getByTestId("moc-index")).toBeVisible();
+        await expect(page.getByTestId("moc-channel")).toHaveCount(2);
+        await expect(page.getByTestId("moc-community")).toHaveCount(2);
+        await expectNoHorizontalOverflow(page);
+        await shot(page, `moc-index-${vp.name}-${scheme}`);
+        await page.getByTestId("moc-community").first().click();
+        await expect(page.getByTestId("moc-title")).toContainText("llama.cpp のまとまり");
+        await expect(page.getByTestId("moc-things").locator("li")).toHaveCount(5);
+        await expect(page.getByTestId("moc-things")).toContainText("ローカルで LLM を動かす");
+        await expect(page.getByTestId("moc-events")).toContainText("b9000");
+        await expect(page.getByTestId("moc-questions")).toContainText("長い文脈で品質が劣化するか？");
+        await expectNoHorizontalOverflow(page);
+        await shot(page, `moc-community-${vp.name}-${scheme}`);
+        await page.getByTestId("moc-open-map").click();
+        await expect(page).toHaveURL(/\/map\?community=1$/);
+        await page.goto("/moc");
+        await page.getByTestId("moc-channel").first().click();
+        await expect(page.getByTestId("moc-title")).toContainText("チャンネル");
+        await expectNoHorizontalOverflow(page);
+        await shot(page, `moc-channel-${vp.name}-${scheme}`);
+        expect(state.unhandled).toEqual([]);
       });
 
       test("Obsidian の書き出し: 押したときだけ zip を受け取る。機密の区分は既定で含めない", async ({ page }) => {
@@ -132,3 +235,41 @@ for (const vp of SIZES) {
     });
   }
 }
+
+test.describe("全体の地図の重さ（1,500 点・3,500 本）", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+
+  test("開いて 3 秒以内に全体が出て、拡大・縮小・移動が滑らか（1 コマの平均 60ms 以下）。まとまりを押すと中を開く", async ({ page }, info) => {
+    const state = newState({ bigMap: true });
+    await mockApi(page, state);
+    const t0 = Date.now();
+    await page.goto("/map");
+    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-nodes", "1500", { timeout: 10_000 });
+    const ready = Date.now() - t0;
+    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-edges", "3500");
+    expect(ready).toBeLessThan(3000);
+    await shot(page, "map-big-overview");
+    const frame = await page.evaluate(async () => {
+      const cy = (document.querySelector("[data-testid=map-canvas]") as unknown as { __cy: { zoom(o: unknown): void; pan(p: unknown): void; width(): number; height(): number; zoom(): number } }).__cy;
+      const times: number[] = [];
+      const raf = () => new Promise<number>((r) => requestAnimationFrame(r));
+      let last = await raf();
+      for (let i = 0; i < 40; i += 1) {
+        cy.zoom({ level: cy.zoom() * (i < 20 ? 1.06 : 1 / 1.06), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+        cy.pan({ x: (i % 2 ? 6 : -6) + 0, y: 0 });
+        const now = await raf();
+        times.push(now - last);
+        last = now;
+      }
+      return { avg: times.reduce((a, b) => a + b, 0) / times.length, max: Math.max(...times) };
+    });
+    info.annotations.push({ type: "perf", description: `全体 1,500 点: 開くまで ${ready}ms・1 コマ 平均 ${frame.avg.toFixed(1)}ms・最大 ${frame.max.toFixed(1)}ms` });
+    console.log(`PERF 全体 1,500 点: 開くまで ${ready}ms・1 コマ 平均 ${frame.avg.toFixed(1)}ms・最大 ${frame.max.toFixed(1)}ms`);
+    expect(frame.avg).toBeLessThan(60);
+    await page.getByTestId("map-group").first().click();
+    await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-hits", "63");
+    await shot(page, "map-big-group");
+    expect(state.unhandled).toEqual([]);
+  });
+});
+
