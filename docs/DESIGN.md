@@ -471,3 +471,30 @@ ARCHITECTURE 6 章「重力の地図」の実装の詳細と、確かめたこ�
 - 重要度の既定の重み（記事 0.35・中心性 0.25・検索 0.25・カード 0.15）が利用者の感覚に合うか（導入直後は検索・カードの数がほぼ無く、記事と中心性だけで決まる）。使われ方がたまってから見直す。
 - 実機の指での sigma のタップ（ヘッドレスのタッチ指定で確かめたのみ）。破線を使わず色の薄さで「推測・集計」を区別しているので、色覚の違いでの読み取り。
 - API の点の上限は 3,000 のまま（配置は 5,000 点まで保存する。画面に 5,000 点を出す道は作っていない。E2E の 5,000 点は模擬で測っただけ）。
+
+## 20. 銀河の地図（Obsidian・Advanced Graph View の見せ方を調べて寄せた）で、確かめたことと確かめていないこと（2026-11-25・feat/galaxy-map）
+ARCHITECTURE 6 章「銀河の地図」の根拠と、確かめたこと。
+
+**調べたこと（公式 → 利用者の記事・フォーラム・プラグイン。2026-11-25 に読んだ範囲）**
+- Obsidian のグラフビューの設定（[公式ヘルプ](https://obsidian.md/help/plugins/graph)）: 絞り込み（Tags・Attachments・Existing files only・**Orphans＝孤立した点の表示の切り替え**）・Groups（検索語で色分け）・Display（Arrows・**Text fade threshold＝名前の透明度**・**Node size**・**Link thickness**・Animate）・Forces（**Center force＝小さいほどばらけ大きいほど丸くまとまる・Repel force・Link force・Link distance**）・**ホバーで、その点の接続を強調**。公式は各スライダーの**既定値・点の半径の式・線の太さの値を公開していない**。
+- 内部の実装: Obsidian は閉じたソースで公開 API も無い。フォーラム（[Graph view, physics, and force directed graphs](https://forum.obsidian.md/t/graph-view-physics-and-force-directed-graphs/72586)）の利用者の推定は、反発＝クーロン則（距離の 2 乗に反比例）・リンク＝フックの法則（目標の距離との差×リンクの力）・中心＝中心へのばね。もとは d3 を使い、いまは描画を Pixi（WebGL）に替えたという Discord の発言（未確認）。**d3-force の既定値は Obsidian の既定値の裏付けにならない**ので、数値は寄せたが一致は主張しない。
+- 点の半径とリンク数: [Allow to Configure How Node-Size is Calculated](https://forum.obsidian.md/t/allow-to-configure-how-node-size-is-calculated/4247)（被リンクと外向きのリンクの両方で大きさが決まる。式は示されない）。コミュニティプラグイン（[node factor](https://community.obsidian.md/plugins/node-factor)・[custom node size](https://community.obsidian.md/plugins/custom-node-size)）の説明では、既定の半径はおよそ 8〜30 程度の幅（粗い目安。式ではない）。**ここから「半径は連続して大小があり、最大は最小の数倍で頭打ち」と読み、2〜9（約 4.5 倍）にした**（利用者の指示の「ある程度の所を最大に」）。
+- よく見える設定の報告: 反発を弱くするとまとまりが見分けにくくなる・一度絡まると解けない（[Help with graph view settings](https://forum.obsidian.md/t/help-with-graph-view-settings/28977)・[move node clusters](https://forum.obsidian.md/t/graph-view-settings-to-move-node-clusters-into-better-positions/17809)）。名前・矢印のフェードは拡大しないと効かない（[Arrow Thickness and fading](https://forum.obsidian.md/t/arrow-thickness-and-arrow-fading-threshold-settings-for-graphs/19195)）。中心の力を 0 にしてから他を調整すると解きほぐしやすい。**数値の合意は見つからなかった**ので、実データで目で選んだ。
+- [Advanced Graph View](https://github.com/n23eos/advanced_graph_view)（Nebula の手本）: 大きさ・色・光に任意の指標（PageRank・開いた頻度・更新の新しさ・入出リンク・フォルダ・タグ・**クラスタ**）を割り当てられ、5,000〜50,000 件の保管庫で「毛玉」にならないことを目指す。Nebula は配色の名前。設定の見出しは VIEW PRESETS（型の保存）・APPEARANCE（Size・Color・Glow・Color scheme・Node size）・LABELS・LINKS（Thickness・Opacity）・3D・LAYERS・CLUSTERS・PHYSICS。手本の画像は線の透明度 0.06・太さ 2.55・色＝クラスタ・光＝出リンク。**README に光の描き方の内部は無く、実装は読めなかった**ので、光は自分で作った。ほかに [Galaxy View](https://community.obsidian.md/plugins/galaxy-view)（星雲の背景）・[Graph Styler](https://community.obsidian.md/plugins/graph-styler)（色と光のプリセット）がある。
+- ここから取り入れたもの: 点の色＝まとまり・光＝重要度・線は薄く細く（0.22 の灰青。手本の 0.06 はこの規模では見えなかった）・表示の型の保存・設定の枠（Display／Forces／Filters の見出し）・孤立した点は既定で隠す・触れた点の接続を強調。
+
+**作って分かったこと**
+- **sigma は線の rgba の透明度を無視して不透明に塗る**（赤・透明度 0.05 を指定しても真っ赤）。そのため、半透明の線は 2D canvas に自分で描く（背景に混ぜた不透明の色にすると、光の上で黒い筋になった）。
+- **弱い重力の ForceAtlas2 は、それでも中心に点が詰まる**（重力 0.05〜2.0 で試して、どれも中心の塊）。そこで配置の後に、中心の密度を円盤へ寄せる処理を足した。外れ値（2 点だけの小さな塊）が外へ飛ぶので、広がりの基準は 98% でなく 90% の点にし、画面の最初の範囲は 97% の点が入る範囲にした。
+- 実データ（評価のハブの DB のコピー・845 点・602 本）は**ばらばらの小さな塊が 264 個・最大の塊が 109 点・次数 1 の点が 666**。つまり「銀河」は中心の 1 つの大きな塊より、たくさんの星団（親と放射状の葉）が散らばる絵になる。まとまり（Louvain）に入る点は 487 点で、残りは同じ色の規則（つながる点のまとまりの色）で埋めた。この DB は、まとまりがまだ計算されていなかった（`communities` が空）ので、コピーの上で `compute_communities` を流して評価した。
+
+**確かめたこと**
+- 試験（`tests/test_mapgrav.py`・全体 474 件）: 半径の上限と比（2〜9・最大は最小の 4.5 倍以下・平方根・上位 5% で頭打ち・TS の式と一致）・葉が親の周りに放射状に並ぶ（等間隔の角度・丸も重ならない・距離が短い・輪を重ねても重ならない）・配置の式の版が違えば最初から作る。E2E（`knowledge.spec.ts`・全体 263 件）: 孤立した点が既定で出ない・線の既定の色が 1 色・点の大きさの比が 4.5 倍以下・光る点がある・色の分け方の切り替え・表示の型の保存と削除。
+- 実データのコピーの撮影（390×844 と 1280・ライト／ダーク。`hubshots/galaxy-*.png`）。手本（Obsidian・Nebula）と並べて、色（まとまりごと）・光・細い薄い線・放射状の葉・中心の詰まりの解消が出ていることを目で確かめた。
+- 1 コマの時間（ヘッドレス Chromium・ソフトウェア描画・実データ 845 点・602 本・光 85 点）: sigma の 1 コマ 約 2ms（最大 4ms）、そのうち線と光の canvas は 約 0.5ms（最大 1.6ms）。模擬 1,500 点で 平均 41ms・5,000 点で 121ms（前と同程度）。
+
+**確かめていないこと・まだ手本と違う所**
+- 手本の Nebula は 9,000 件規模で、1 つの親に数百の葉がつく**密な放射**と、点が小さく光が強い。このハブは疎（次数 1 が 8 割・塊が小さい）ので、放射状の枝は短く、絵は「星団がたくさん」になる。データが増えれば近づく見込み（未確認）。
+- 実機の iPhone・GPU のある端末での滑らかさ（ヘッドレスの数字だけ）。点が数千のとき線の canvas を毎コマ描く費用（5,000 点の模擬では測ったが、実データの線の数ではない）。
+- 「力」のスライダー（中心・反発・リンクの距離）は画面の ForceAtlas2（graphology）に写しているだけで、夜の Python の配置と値の意味が完全には同じでない（中心・反発の既定値を夜と同じにしてあるが、見た目は変わる。「夜の配置へ戻す」で戻る）。リンクの距離は ForceAtlas2 に無いので、線の重みの効き（edgeWeightInfluence）の逆数で代用。
+- 表示の型は端末ごと（ほかの端末へは行かない）。ライトの色（まとまりの濃い版）の見分けやすさは目で見ただけで、色覚の違いは確かめていない。

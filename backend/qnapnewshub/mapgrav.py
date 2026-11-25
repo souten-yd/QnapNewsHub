@@ -6,7 +6,9 @@
   設定（map.weights）の重みで混ぜる。最後に最大を 1 に合わせる。点の大きさ＝重要度（画面が決める）。
 - **配置**: ForceAtlas2（Jacomy ら 2014）を依存なしの Python で書く。反発は点の重さ（（次数＋1）×（0.5＋重要度））の積に比例、引力は線の重み（根拠の数×確かさ）の LinLog、
   重力で中心へ（全点同じ強さ。重さに比例させると重い点が中心に固まって離れない）、outbound attraction distribution（点ごとの引力を（重さ／平均）^0.5 で割る＝大きな点どうしは離れ、小さな点は重い点の周りに集まる）。反発は Barnes-Hut（四分木の葉ごとに遠い塊を 1 点に畳む）。
-- **丸が重ならない**: 点の半径は重要度から（radius。画面の radiusOf と同じ式で、座標と同じ単位＝拡大すると丸も大きくなる）。ForceAtlas2 のあと、重なっている組を離す（大きな点ほど動かさない）。
+- **銀河の形（2026-11-25）**: 重力は弱く・反発は強く・引力は線形（LinLog は切る）。中心に点が詰まるので、中心からの距離を円盤（どこでも同じ密度）へ寄せる（flatten_density）。次数 1 の葉は親の周りに放射状に並べ直す（radial_leaves）。
+- **丸の大きさ**: 半径は 2〜9（radius。重要度を上位 5% の値で割って平方根・頭打ち。画面の radiusOf と同じ式）。ForceAtlas2 と葉の並べ直しのあと、重なっている組を離す（大きな点ほど動かさない）。
+- **版**: 配置の値・式を変えたら LAYOUT_ALGO を上げる（news_meta の map_layout_algo と違えば、前回の座標を使わず作り直す）。
 - **形を毎回変えない**: 前回の座標から始めて（新しい点は、つながる最も重い点の近くから）、短く整えるだけ。座標の表（map_layout）と版（news_meta の map_layout_ver）に保存する。
 - 外へ通信しない。LLM を呼ばない。機密（confidential）の物は計算に入れない（public だけ）。
 """
@@ -34,7 +36,9 @@ USAGE_KEEP_DAYS = 120        # 日ごとの集計を残す日数
 COLD_ITER, WARM_ITER, WARM_SPEED = 300, 60, 0.1
 THETA = 1.2                  # Barnes-Hut の「遠い」の判定（葉の大きさ / 距離）
 LEAF = 6
-GRAVITY, SCALING, OUTBOUND, GMASS = 1.0, 0.3, 0.5, 0.0
+GRAVITY, SCALING, OUTBOUND, GMASS = 0.3, 4.0, 0.5, 0.0      # 銀河: 重力は弱く・反発は強く（Obsidian の「中心の力 弱・反発 強」に寄せる。2026-11-25）
+LINLOG = 0.0                 # 引力の LinLog の割合（0＝線形＝ばねのように長さに比例。1＝LinLog）。LinLog は点を 1 つの球に詰めるので切る
+LAYOUT_ALGO = 3              # 配置の値・式の版。変えたら上げる（前回の座標を使わず、最初から作り直す）
 DEFAULT_MAP = {"window_days": 30, "weights": {"search": 0.25, "card": 0.15, "recent": 0.35, "centrality": 0.25}}
 
 
@@ -152,12 +156,15 @@ def _jitter(i: int) -> tuple[float, float]:
 
 
 def forceatlas2(ids: list[int], adj: dict[int, dict[int, float]], mass: dict[int, float], init: dict[int, tuple[float, float]] | None = None, *, iterations: int | None = None,
-                gravity: float = GRAVITY, scaling: float = SCALING, theta: float = THETA, start_speed: float = 1.0, outbound: float = OUTBOUND, gmass: float = GMASS, rad: dict[int, float] | None = None) -> dict[int, tuple[float, float]]:
+                gravity: float | None = None, scaling: float | None = None, theta: float = THETA, start_speed: float = 1.0, outbound: float = OUTBOUND, gmass: float = GMASS, rad: dict[int, float] | None = None, linlog: float | None = None) -> dict[int, tuple[float, float]]:
     """ForceAtlas2。{点: (x, y)}。init が空でなければ（前回の座標）その続きから短く整える。同じ入力・同じ結果（乱数なし）。
     init に無い点は、つながる最も重い点（init にある）の近くから始める。"""
     n = len(ids)
     if n == 0:
         return {}
+    gravity = GRAVITY if gravity is None else gravity      # 呼ぶときに決める（試験・評価で差し替えられる）
+    scaling = SCALING if scaling is None else scaling
+    linlog = LINLOG if linlog is None else linlog
     idx = {i: k for k, i in enumerate(ids)}
     warm = bool(init) and any(i in init for i in ids)
     iters = iterations if iterations is not None else (WARM_ITER if warm else COLD_ITER)
@@ -198,7 +205,7 @@ def forceatlas2(ids: list[int], adj: dict[int, dict[int, float]], mass: dict[int
                 dx, dy = px[b] - xa, py[b] - ya
                 d = math.hypot(dx, dy)
                 if d > 1e-9:
-                    f = w * math.log1p(d) / d / comp      # LinLog + outbound attraction distribution
+                    f = w * (linlog * math.log1p(d) + (1.0 - linlog) * d) / d / comp      # 線形と LinLog の混ぜ + outbound attraction distribution
                     sx += dx * f
                     sy += dy * f
             fx[a] += sx
@@ -308,20 +315,91 @@ def _repulse(px: list[float], py: list[float], m: list[float], fx: list[float], 
 
 # ---- 丸が重ならない（半径は重要度から。画面と同じ式） ----
 
-R_MIN, R_SPAN, R_POW = 5.0, 55.0, 1.6      # 画面（mapLayout.ts の radiusOf）と同じ式。座標と同じ単位（ワールド）で、拡大すると丸も一緒に大きくなる
-OVERLAP_GAP = 2.0
+R_MIN, R_MAX, CAP_PCT = 2.0, 9.0, 0.95      # 丸の半径の幅（px 相当。最大は最小の約 4.5 倍）。画面（mapLayout.ts の radiusOf）と同じ式
+OVERLAP_GAP = 1.0
+EXTENT = 450.0              # 配置の広がり（中心から 90% の点まで。残りは外側に散らばる）。丸の半径 2〜9・葉の距離はこの単位
+FLATTEN = 0.65              # 中心の密度を下げる割合（flatten_density）
+LEAF_GAP = 5.0               # 葉と親の丸の縁の間（世界の単位）
 
 
-def radius(importance: float) -> float:
-    """点の半径（座標と同じ単位）。重要度の 1.6 乗で、少数の大きな点と多数の小さな点にする。"""
-    return R_MIN + R_SPAN * max(0.0, min(1.0, importance)) ** R_POW
+def flatten_density(pos: dict[int, tuple[float, float]], target: float = EXTENT, blend: float = FLATTEN) -> dict[int, tuple[float, float]]:
+    """中心の密度を下げる。中心からの距離を、順位から決めた「どこでも同じ密度の円盤」の距離と blend の割合で混ぜる（角度は変えない・順序は保つ）。
+    弱い重力でも ForceAtlas2 は中心に点が詰まるので、銀河の円盤のように全体へ広げる。target は円盤の半径。"""
+    n = len(pos)
+    if n < 3:
+        return pos
+    order = sorted(pos, key=lambda i: (math.hypot(*pos[i]), i))
+    ds = [math.hypot(*pos[i]) for i in order]
+    ext = ds[min(n - 1, int(n * 0.9))] or 1.0
+    out = {}
+    for rank, i in enumerate(order):
+        x, y = pos[i]
+        d = ds[rank]
+        if d < 1e-9:
+            out[i] = (x, y)
+            continue
+        lin = d / ext * target
+        uni = target * math.sqrt((rank + 0.5) / (n * 0.9))
+        r = (1.0 - blend) * lin + blend * uni
+        out[i] = (round(x / d * r, 2), round(y / d * r, 2))
+    return out
+
+
+def normalize_extent(pos: dict[int, tuple[float, float]], target: float = EXTENT) -> dict[int, tuple[float, float]]:
+    """全体の広がり（中心から 90% の点までの距離）を target に合わせて拡大・縮小する。丸の半径・葉の距離が世界の単位で決まるので、広がりを毎回そろえる。"""
+    if len(pos) < 2:
+        return pos
+    ds = sorted(math.hypot(x, y) for x, y in pos.values())
+    ext = ds[min(len(ds) - 1, int(len(ds) * 0.9))]
+    k = target / ext if ext > 1e-9 else 1.0
+    return {i: (round(x * k, 2), round(y * k, 2)) for i, (x, y) in pos.items()}
+
+
+def size_cap(imps) -> float:
+    """重要度の上位 5% の値（これ以上は同じ大きさ＝頭打ち）。値が無い・0 なら 1。"""
+    v = sorted(x for x in imps if x > 0)
+    return v[min(len(v) - 1, int(len(v) * CAP_PCT))] if v else 1.0
+
+
+def radius(importance: float, cap: float = 1.0) -> float:
+    """点の半径。重要度を cap で割って平方根で縮め（少数の大きな点が突出しない）、cap 以上は頭打ち。幅は R_MIN〜R_MAX。"""
+    t = math.sqrt(max(0.0, importance) / cap) if cap > 0 else 0.0
+    return R_MIN + (R_MAX - R_MIN) * min(1.0, t)
+
+
+def radial_leaves(adj: dict[int, dict[int, float]], pos: dict[int, tuple[float, float]], rad: dict[int, float], gap: float = LEAF_GAP) -> dict[int, tuple[float, float]]:
+    """次数 1 の点（葉）を、つながる点（親）の周りに放射状に並べ直す（配置の後処理）。親から見て外向き（原点の反対）を始めに、全周へ等しい角度で。
+    1 周に入らなければ外側へ輪を重ねる（輪ごとに半周の半分ずらす）。親の座標は変えない。親も次数 1（2 点だけの対）なら動かさない。決まった順で乱数なし。"""
+    groups: dict[int, list[int]] = {}
+    for i, nb in adj.items():
+        if len(nb) == 1 and i in pos:
+            (p,) = nb
+            if p in pos and len(adj.get(p, {})) > 1:
+                groups.setdefault(p, []).append(i)
+    out = dict(pos)
+    for p, leaves in groups.items():
+        leaves.sort()
+        px, py = pos[p]
+        base = math.atan2(py, px) if (px or py) else 0.0
+        rl = max(rad[i] for i in leaves)
+        left, ring = list(leaves), 0
+        while left:
+            d = rad[p] + gap + rl + ring * (2 * rl + gap)
+            cap = max(1, int(2 * math.pi * d / (2 * rl + 2.0)))
+            take, left = left[:cap], left[cap:]
+            step = 2 * math.pi / len(take)
+            a0 = base + (ring % 2) * step / 2
+            for k, i in enumerate(take):
+                out[i] = (round(px + d * math.cos(a0 + k * step), 2), round(py + d * math.sin(a0 + k * step), 2))
+            ring += 1
+    return out
 
 
 def remove_overlap(ids: list[int], pos: dict[int, tuple[float, float]], rad: dict[int, float], passes: int = 40, gap: float = OVERLAP_GAP) -> dict[int, tuple[float, float]]:
     """丸どうしが重ならないように、重なっている組を離す（面積の大きい点ほど動かさない）。格子で近い組だけ見る（大きな点は別に全体と見る）。決まった順で乱数なし。"""
     if not ids:
         return {}
-    big_cut = 20.0
+    big_cut = 9.0
     cell = 2 * big_cut + gap
     x = {i: pos[i][0] for i in ids}
     y = {i: pos[i][1] for i in ids}
@@ -404,7 +482,9 @@ def _read_inputs(now: datetime) -> dict:
                                  .where(NewsItem.published_at >= since_art).group_by(ArticleEntity.entity_id)):
             if eid in keep:
                 recent[eid] = float(n)
-        old = {int(e): (float(x), float(y)) for e, x, y in db.execute(select(MapLayout.entity_id, MapLayout.x, MapLayout.y))}
+        algo = db.get(NewsMeta, "map_layout_algo")
+        same = algo is not None and algo.value == str(LAYOUT_ALGO)      # 配置の式の版が違えば、前回の座標は使わず最初から作る
+        old = {int(e): (float(x), float(y)) for e, x, y in db.execute(select(MapLayout.entity_id, MapLayout.x, MapLayout.y))} if same else {}
         ver = db.get(NewsMeta, "map_layout_ver")
     adj: dict[int, dict[int, float]] = {i: {} for i in ids}
     for a, b, w in edges:
@@ -418,8 +498,12 @@ def compute(inputs: dict, *, iterations: int | None = None) -> dict:
     ids, adj = inputs["ids"], inputs["adj"]
     imp = importance(ids, adj, inputs["search"], inputs["card"], inputs["recent"], inputs["cfg"])
     mass = {i: (len(adj[i]) + 1) * (0.5 + imp[i]) for i in ids}
-    rad = {i: radius(imp[i]) for i in ids}
+    cap = size_cap(imp.values())
+    rad = {i: radius(imp[i], cap) for i in ids}
     pos = forceatlas2(ids, adj, mass, inputs["old"], iterations=iterations, rad=rad)
+    pos = normalize_extent(pos)
+    pos = flatten_density(pos)      # 中心に詰まらないよう円盤状に広げる
+    pos = radial_leaves(adj, pos, rad)      # 葉は親の周りに放射状に
     pos = remove_overlap(ids, pos, rad)      # 丸が重ならない（大きな点の中に小さな点が入らない）
     return {"pos": pos, "importance": imp, "mass": mass}
 
@@ -432,7 +516,7 @@ def save(result: dict, ver: int, seconds: float) -> None:
             db.execute(delete(MapLayout))
             if pos:
                 db.execute(insert(MapLayout), [{"entity_id": i, "x": x, "y": y, "importance": round(imp.get(i, 0.0), 4)} for i, (x, y) in pos.items()])
-            for key, value in (("map_layout_ver", str(ver)), ("map_layout_at", datetime.now(_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
+            for key, value in (("map_layout_ver", str(ver)), ("map_layout_algo", str(LAYOUT_ALGO)), ("map_layout_at", datetime.now(_UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
                                ("map_layout_stat", json.dumps({"nodes": len(pos), "seconds": round(seconds, 1)}))):
                 row = db.get(NewsMeta, key)
                 if row is None:

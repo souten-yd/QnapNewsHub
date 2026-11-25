@@ -42,6 +42,7 @@
 | 検索の改善（feat/retrieval-density） | 物差しの基準値の弱い所 3 点: ①文脈の密度（text の context は URL でなく「出どころ 日付 d<id>」・evidence に `label`・`compact`）②**主張を種に**（`claim_fts_*` の全文索引・`/retrieve/seeds` が `kind: claim`）③**周りの点数**（`/graph/neighbors` に `seed_scores`・`q` → 辺・物の `score`。必ず元の種より低い）。③ R@10 0.634→0.762・主張 R@20 0→0.85・⑤ 文脈 1068→752 トークン。下がった所（② 複数の文書など）と理由は評価の置き場。ARCHITECTURE 8 章の続き・DESIGN 17.1 |
 | 軽い翻訳（feat/translate） | **QuickMT 英→日（CTranslate2 int8）**（`translate.py`・`translate_flow.py`・`translate_router.py`・表 `news_translation`・`news_tr_cache`）: エンジンの枠・モデルを利用者の操作で取得（設定の「翻訳」・版と sha256 固定）・用語の保護（印 `ZQnZ`）と対訳表・訳の検査（落ちた文は原文のまま〔未訳〕）・文ごとのキャッシュ・全文検索の索引に訳を足す（「概要（日本語）」の列）・LLM が使えないときは題と本文だけ・重要な記事の本文は空き時間に 1 日の上限まで・開いたとき訳す API・`translate_hq` の仕事（実行は ControlDeck 側）・画面の「機械翻訳」の印と原文・診断の節。ARCHITECTURE 8.5・DESIGN 19。**物差しでは点数は変わらない**（飽和。評価の置き場の md）。依存は ctranslate2 4.6.2・sentencepiece 0.2.0（manylinux2014 の最後の版。上げない） |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
+| 銀河の地図（feat/galaxy-map） | 重力の地図の見た目を Obsidian・Nebula 風に作り直した（丸 2〜9・放射状の葉・色はまとまり・光・設定の枠・型の保存）。ARCHITECTURE 6 章の続き・DESIGN 20 |
 | 重力の地図（feat/gravity-map） | **丸の大きさ＝重要度（検索で当たった回数・カードを開いた回数・直近の記事・関係の中心性）・付随する点は大きな点の周りに**。夜に ForceAtlas2（依存なしの Python・Barnes-Hut）で配置して保存（`mapgrav.py`・`map_layout`・版）。数えはメモリ→まとめ書き（`entity_usage_daily`）。画面は sigma.js＋graphology（Cytoscape は外した）。保存が無いときは従来の塊（フォールバック）。計算 1,500 点 約 4 秒・5,000 点 約 13 秒（開発の PC）。**QNAP 実機の計算時間は未測定**。記録は ARCHITECTURE 6 章の続き・DESIGN 19 |
 | 発見の応答（feat/lan-discovery） | LAN に出しているときだけ UDP 8788 で ControlDeck の「探す」に答える（名前・版・URL の候補・公開鍵の指紋。秘密なし・1 秒あたりの上限つき）。設定の「待ち受け」で切／ポート変更・「つなぐ」の画面に LAN の URL を表示。DESIGN 3.5。落とし穴: QTS のファイアウォールが UDP を止めると見つからない（URL を手で入れれば従来どおり） |
 
@@ -68,6 +69,7 @@
 
 
 13. （済）重力の地図（feat/gravity-map・2026-11-25）。残り: **QNAP 実機で `./hub.sh map-layout` の時間を測る**・重要度の重みを使われ方がたまってから見直す（設定 `map.weights`）・実機の指での sigma の操作。
+14. （済）銀河の地図（feat/galaxy-map・2026-11-25）。丸 2〜9（平方根・上位 5% で頭打ち）・弱い重力/強い反発/線形引力＋円盤化・葉は親の周りに放射状・線は 1 色の灰青（背景の canvas に半透明。sigma は透明度を無視する）・色はまとまりごと（設定で種類ごと）・光・左上の設定の枠（型の保存）。記録は ARCHITECTURE 6 章の続き・DESIGN 20。残り: **実機の iPhone・GPU のある端末で滑らかさ**・データが増えたときの放射の見え方・まとまり（Louvain）が夜に計算されていること（評価の DB では空だった）・力のスライダーと夜の配置の値の対応。
 12. 軽い翻訳の続き: **QNAP 実機（AVX 無し）で QuickMT の速さ・メモリを測る**（見込みは実測ではない）・ControlDeck 側で `translate_hq`（高品質の訳）の係を作る・LLM の日本語の概要が無い記事から問いを作って翻訳の効果を点数で測る・題をまとめて訳して速くする。
 
 ## 5. 開発の仕方

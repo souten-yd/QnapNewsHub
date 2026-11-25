@@ -1,6 +1,7 @@
 /** Things の脳（2026-11-25）: カードの帯・関係の型ごと・未解決の問い・主な数値・つなぐ候補・全体の地図・検索の強調と絞り・ローカル・主題の入口（MOC）・Obsidian の書き出し。
  *  E2E の目的（v0.5 の分も含む）: ①カードに概要（AI の印）・関係（推測の印）・変化と矛盾・主張の根拠が出て、利用者のメモが打つだけで保存される ②地図が遅延読み込みで描かれ、始める物から段階的に広がり、型・確かさ・期間で絞れ、
  *  点を押すとカードへ行ける ③書き出しは押したときだけ zip を受け取り、機密の区分の既定は含めない。320px と 1280px・ライト／ダークではみ出さない。
+ *  銀河の見た目（2026-11-25）: 半径の幅の上限と比・孤立した点は既定で出ない・線の既定の色が 1 色・左上の設定の枠（色の分け方・型の保存）を確かめる。
  *  根拠: 利用者の指示 v0.5（知識カード・知識の地図・Obsidian の書き出し）・AGENTS.md「実画面（320px と PC の幅、ライト・ダーク）」。 */
 import { expect, test, type Page } from "@playwright/test";
 import { mockApi, newState } from "./mock";
@@ -9,7 +10,7 @@ import { SCHEMES, expectNoHorizontalOverflow, shot } from "./helpers";
 const SIZES = [{ name: "320", width: 320, height: 700 }, { name: "1280", width: 1280, height: 900 }] as const;
 const tap = (page: Page, id: number) => page.evaluate((i) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __tap(n: number): void }).__tap(i), id);
 /** 試験用の旗の数（hit 一致・dim 薄く・off 隠す・big いつも名前を出す点・sizeMax/sizeMin 点の大きさの幅）。 */
-const stat = (page: Page, key: "hit" | "dim" | "off" | "big" | "sizeMax" | "sizeMin") => page.evaluate((k) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __stat(): Record<string, number> }).__stat()[k], key);
+const stat = (page: Page, key: "hit" | "dim" | "off" | "big" | "sizeMax" | "sizeMin" | "edgeColors" | "isoShown" | "glowNodes") => page.evaluate((k) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __stat(): Record<string, number> }).__stat()[k], key);
 
 for (const vp of SIZES) {
   for (const scheme of SCHEMES) {
@@ -99,16 +100,36 @@ for (const vp of SIZES) {
         expect(state.calls.filter((c) => c.path === "/things/map/overview").length).toBe(1);
         expect(state.calls.some((c) => c.path === "/graph/neighbors")).toBe(false);      // 全体はサーバーの 1 回で出る
         await expect(page.getByTestId("map-group")).toHaveCount(1);
-        await page.getByTestId("map-filters-toggle").click();
+        await page.getByTestId("map-settings-toggle").click();
         await expect(page.getByTestId("map-node-legend")).toContainText("ソフト");
         await expectNoHorizontalOverflow(page);
         await shot(page, `map-overview-${vp.name}-${scheme}`);
-        // 点の大きさ＝重要度（重い点が大きく、軽い点が小さい）
-        expect(await stat(page, "sizeMax")).toBeGreaterThan((await stat(page, "sizeMin")) * 2.5);
+        // 点の大きさ＝重要度（重い点が大きく、軽い点が小さい）。ただし幅に上限がある（最大は最小の 4.5 倍以下）。孤立した点は既定で出ない。線の既定の色は 1 色（関係の型の色は触れた・選んだ点の線だけ）
+        const smax = await stat(page, "sizeMax"), smin = await stat(page, "sizeMin");
+        expect(smax).toBeGreaterThan(smin * 1.5);
+        expect(smax).toBeLessThanOrEqual(smin * 4.5 + 1e-6);
+        expect(await stat(page, "isoShown")).toBe(0);
+        expect(await stat(page, "edgeColors")).toBe(1);
+        expect(await stat(page, "glowNodes")).toBeGreaterThan(0);
         await page.getByTestId("map-iso").check();
         await expect(cv).toHaveAttribute("data-nodes", "8");      // 孤立した点の表示の切り替え
         await page.getByTestId("map-iso").uncheck();
         await expect(cv).toHaveAttribute("data-nodes", "7");
+        // 設定の枠: 色の分け方の切り替え（既定はまとまりごと）・表示の型の保存と削除（端末に保存）
+        await expect(page.getByTestId("map-color-cluster")).toHaveAttribute("aria-checked", "true");
+        await page.getByTestId("map-color-kind").click();
+        await expect(page.getByTestId("map-color-kind")).toHaveAttribute("aria-checked", "true");
+        await page.getByTestId("map-color-cluster").click();
+        await expect(page.getByTestId("map-preset").locator("option")).toHaveText(["型を選ぶ…", "銀河", "関係を読む"]);
+        await page.getByTestId("map-preset-name").fill("試しの型");
+        await page.getByTestId("map-preset-save").click();
+        await expect(page.getByTestId("map-preset").locator("option")).toHaveCount(4);
+        await page.getByTestId("map-preset").selectOption("関係を読む");
+        await expect(page.getByTestId("map-color-kind")).toHaveAttribute("aria-checked", "true");
+        await page.getByTestId("map-preset").selectOption("銀河");
+        await expect(page.getByTestId("map-color-cluster")).toHaveAttribute("aria-checked", "true");
+        await page.getByTestId("map-preset-delete").click();
+        await expect(page.getByTestId("map-preset").locator("option")).toHaveCount(3);
         // 検索: 強調（一致は明るく・ほかは薄く）
         await page.getByTestId("map-search").fill("qwen");
         await expect(page.getByTestId("map-hits")).toContainText("一致 1 件・一致を強調");
@@ -282,7 +303,7 @@ test.describe(`全体の地図の重さ（${N.toLocaleString()} 点）`, () => {
     await expect(page.getByTestId("map-canvas")).toHaveAttribute("data-edges", String(Math.round((N * 3500) / 1500)));
     expect(ready).toBeLessThan(N > 1500 ? 5000 : 3000);
     await shot(page, `map-big-overview-${N}`);
-    expect(await stat(page, "big")).toBe(24);      // 全体の地図で、縮小したまま名前を出すのは重要度の大きい 24 点だけ（残りは大きな点から順に、拡大するほど出す）
+    expect(await stat(page, "big")).toBe(8);      // 全体の地図で、縮小したまま名前を出すのは重要度の大きい 8 点だけ（名前の量の既定 0.5）（残りは大きな点から順に、拡大するほど出す）
     const frame = await page.evaluate(async () => {
       const sg = (document.querySelector("[data-testid=map-canvas]") as unknown as { __sigma: { getCamera(): { getState(): { x: number; y: number; ratio: number }; setState(s: { x?: number; y?: number; ratio?: number }): void } } }).__sigma;
       const cam = sg.getCamera();
