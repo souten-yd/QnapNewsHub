@@ -10,7 +10,7 @@ export interface ConnectorLast { at: string; ok: boolean; count: number; error: 
 export type SettingValue = string[] | number | boolean | string | { name: string; url: string }[];
 export interface Connector {
   id: string; kind: string; kind_label: string; label: string; desc: string; adapted: boolean; scheduled: boolean; enabled: boolean; interval_minutes: number;
-  daily_items: number; daily_mb: number; settings: Record<string, SettingValue>; has_key_option: boolean; has_key: boolean; terms_ack: boolean; needs_ack: boolean; terms: ConnectorTerms;
+  daily_items: number; daily_mb: number; settings: Record<string, SettingValue>; has_key_option: boolean; has_key: boolean; key_required: boolean; terms_ack: boolean; needs_ack: boolean; terms: ConnectorTerms;
   usage: { day: string; items: number; mb: number; requests: number }; budget_stop: { at: string; reason: string } | null; last: ConnectorLast | null; last_ok_at: string;
 }
 export interface ConnectorList {

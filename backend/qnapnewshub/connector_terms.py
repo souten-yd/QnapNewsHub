@@ -65,6 +65,52 @@ TERMS: dict[str, dict] = {
         "status": "per_site", "license": "取得先のサイトごと", "storage": "ページの hash・ETag・変化した時刻だけ（本文は保存しない）", "redistribution": "unknown",
         "rate": "サイトごと（条件付きの GET・1 ページ 15 分に 1 回まで）", "tos_url": "https://www.rfc-editor.org/rfc/rfc9309.html",
         "notes": "利用者が指定したページだけ。robots.txt に従い、各サイトの利用規約は利用者が確かめる。", "ai_use": "local_only"},
+    # ---- v0.8（2026-11-25 に公式の資料を読んだ範囲。読めなかった所は「未確認」と書く） ----
+    "boj": {
+        "status": "confirmed", "license": "日本銀行の「API 機能利用時の留意点」に従う（データそのものの二次利用の条項は、この留意点では読めていない）",
+        "storage": "指定した系列の数値（系列コード・日付・値・単位）だけ保存", "redistribution": "conditional",
+        "rate": "数値の上限は明記なし。短時間の高頻度のアクセスは禁止（遮断・停止される）。1 回の問いは 250 系列まで。gzip 対応", "tos_url": "https://www.stat-search.boj.or.jp/info/api_notice.pdf",
+        "notes": "サービスを公開するときは「このサービスは、日本銀行時系列統計データ検索サイトの API 機能を使用しています。サービスの内容は日本銀行によって保証されたものではありません。」を表示し、調査統計局へ知らせる（留意点 1・2）。予告なく停止・制限されうる。ニュースハブは個人用で公開しない。", "ai_use": "allowed"},
+    "kokkai": {
+        "status": "partial", "license": "データベースの著作権は国立国会図書館。国会議員など発言者の発言は各発言者の著作物（転載には原則として許可が要る）", "storage": "発言の冒頭（要旨）・話者・院・会議・日付・URL だけ保存。全文は保存しない",
+        "redistribution": "conditional", "rate": "登録不要・無料。数秒あけて直列に取る（並列は不可。多用するとブロックされうる）。1 回 1〜100 件・検索条件は 2,000 バイトまで", "tos_url": "https://kokkai.ndl.go.jp/api.html",
+        "notes": "API の仕様のページと NDL の転載のページを読んだ。国立国会図書館ウェブサイトの利用規約本文のうち会議録に特有の条項は読めていない。外へ再配布せず個人の研究の用途にとどめる。", "ai_use": "local_only"},
+    "egov_law": {
+        "status": "unconfirmed", "license": "未確認（e-Gov 法令検索の利用規約は項目の見出しだけ読めた。本文の条件を読めなかった）", "storage": "法令の版の履歴（法令 ID・版 ID・公布日・施行日・改正法令の名称）だけ保存。条文は保存しない",
+        "redistribution": "unknown", "rate": "未確認（アクセス頻度の制限が規約にあると見出しにある。控えめに 1 秒以上あける）", "tos_url": "https://laws.e-gov.go.jp/terms/",
+        "notes": "法令 API v2（/api/2/law_revisions）。利用規約の本文を読めなかったので既定は切。入れるには未確認と分かって入れる確認が要る。", "ai_use": "local_only"},
+    "estat": {
+        "status": "unconfirmed", "license": "未確認（API 機能の利用規約の本文を読めなかった。仕様書では appId〔利用登録で取得〕が全 API で必須と確認した）", "storage": "指定した統計表の数値（表 ID・時点・分類・値・単位）だけ保存",
+        "redistribution": "unknown", "rate": "未確認（1 回の件数は limit で指定。省略時は 10 万件）", "tos_url": "https://www.e-stat.go.jp/api/",
+        "notes": "鍵（appId）が要る。鍵が無いと動かない・既定は切。利用規約を読めていないため、入れるには未確認と分かって入れる確認も要る。", "ai_use": "local_only"},
+    "edinet": {
+        "status": "unconfirmed", "license": "未確認（API 仕様書・利用規約を読めなかった）", "storage": "提出書類の知らせ（書類 ID・提出者名・書類の種類・提出日時）だけ保存。書類の本体は取らない", "redistribution": "unknown",
+        "rate": "未確認（控えめに 1 秒以上あける）", "tos_url": "https://disclosure2.edinet-fsa.go.jp/",
+        "notes": "鍵（Subscription-Key）が要る。鍵が無いと動かない・既定は切。仕様書を読めなかったため、入れるには未確認と分かって入れる確認も要る。", "ai_use": "local_only"},
+    "defillama": {
+        "status": "partial", "license": "未確認（無料のホスト api.llama.fi・stablecoins.llama.fi は鍵を読まず、レート制限がある、とドキュメントにある。出典表示・再配布の条項は読めなかった）", "storage": "TVL・ステーブルコインの供給量などの公開の数値だけ",
+        "redistribution": "unknown", "rate": "無料のホストにはレート制限がある（数値は読めなかった）。1 日 1 回・同時 1 本で足りる量にとどめる", "tos_url": "https://api-docs.defillama.com/",
+        "notes": "無料の範囲だけ（Pro API は使わない）。出どころは DefiLlama と書く。RWA は protocols の category が RWA のもの（RWA トークン）。デジタル証券は別の種類で、この取得では作らない。", "ai_use": "local_only"},
+    "coingecko": {
+        "status": "partial", "license": "未確認（Demo API は無料で、エンドポイントとレートが限られる、とドキュメントにある。出典表示の条件・数値は読めなかった）", "storage": "価格（通貨・値・取得時刻）だけ",
+        "redistribution": "unknown", "rate": "未確認（Demo は少ない。1 日 1 回・少数の銘柄にとどめる）", "tos_url": "https://docs.coingecko.com/reference/introduction",
+        "notes": "無料の Demo の鍵があるときだけ動く・既定は切。鍵は x-cg-demo-api-key で送る。出どころは CoinGecko と書く。", "ai_use": "local_only"},
+    "gdelt": {
+        "status": "partial", "license": "公開データセットは学術・商用・政府を含め無料で無制限に使える。再配布・再公開もできるが、GDELT Project への引用と公式サイトへのリンクが要る（about ページ）", "storage": "記事の URL・題・ドメイン・言語・国・見た日時だけ（L0）。本文は取らない",
+        "redistribution": "allowed", "rate": "未確認（DOC API のレートは読めなかった。控えめに 6 秒に 1 回・1 問い 1 リクエスト）", "tos_url": "https://www.gdeltproject.org/about.html",
+        "notes": "語の検索だけ。結果は機械の抽出で、事実の確認はされていない（未確認の印をつけて L0 で保存）。出どころは GDELT Project と書く。", "ai_use": "allowed"},
+    "pypi": {
+        "status": "unconfirmed", "license": "未確認（JSON API のドキュメントにレート・利用条件の記載が無かった）", "storage": "監視するパッケージの版・公開日だけ", "redistribution": "unknown",
+        "rate": "未確認（1 パッケージ 1 リクエスト・1 日 1 回）", "tos_url": "https://docs.pypi.org/api/json/",
+        "notes": "/pypi/<名前>/json。大きい応答がありうるので通信量の予算で止める。", "ai_use": "local_only"},
+    "npm": {
+        "status": "unconfirmed", "license": "未確認（registry API の文書にレート・利用条件の記載が無かった）", "storage": "監視するパッケージの版（dist-tags）だけ", "redistribution": "unknown",
+        "rate": "未確認（1 パッケージ 1 リクエスト・1 日 1 回）", "tos_url": "https://github.com/npm/registry/blob/main/docs/REGISTRY-API.md",
+        "notes": "省略形のメタデータ（application/vnd.npm.install-v1+json）を使い、応答を小さくする。公開日時は取れない（版の印だけ）。", "ai_use": "local_only"},
+    "osv": {
+        "status": "partial", "license": "未確認（データのライセンスは読めなかった。取り込み元のデータベースごとに違うと考えられる）", "storage": "脆弱性の ID・要約・公開／更新日・別名・深刻度・修正済みの版だけ",
+        "redistribution": "unknown", "rate": "API に上限は無いとドキュメントにある（FAQ）。1 パッケージ 1 リクエスト・1 日 1 回", "tos_url": "https://google.github.io/osv.dev/faq/",
+        "notes": "POST /v1/query（パッケージ名＋エコシステム。大文字小文字を区別）。ページング（next_page_token）は 1 ページだけ読む。", "ai_use": "local_only"},
 }
 
 for _id, _t in TERMS.items():

@@ -465,6 +465,18 @@ RSS 1.0・2.0・Atom の自動判別 / CSV と OPML の取り込み・書き出�
 - **API**: `/connectors`（管理者）・`PUT /connectors/{id}`・`/connectors/{id}/key`・`/connectors/{id}/run`・`/connectors/promotion`・`/connectors/hn_search/query`、`/documents`（検索・一覧）・`/documents/{id}`・`POST /documents/{id}/promote`（管理者）・`/documents/metrics/series`。
 - **Crossref の polite プール・OpenAlex の mailto はメールアドレスが要る**ため使わない（公開のリポジトリ・利用者の情報を送らない）。Public プールのレートで 1 件ずつ。
 
+### 10 章の続き: v0.8 の収集の connector（日銀・e-Stat・国会会議録・e-Gov 法令・EDINET・DefiLlama・CoinGecko・GDELT・PyPI・npm・OSV・2026-11-25・feat/connectors-v08）
+`conn_v08.py`（取得と整形。枠組みは `connectors.py` のまま）。ControlDeck の PLAN-integrated-knowledge 8.2 の「採用（中）・（低）」のうち v0.8 の行。**既存の枠組み（Spec・予算・利用条件・鍵・まとめ書き・docstore）をそのまま使い、足したのは次だけ。**
+- **鍵が要る connector**（`Spec.key_required`）: e-Stat（appId）・EDINET（Subscription-Key）・CoinGecko（Demo の鍵）。**鍵が無いと入にできず（API は 422・「鍵が要ります」）、設定を直接書いて入にしても `gate` が止める**。既定は切。鍵は query（e-Stat・EDINET）かヘッダー（CoinGecko）で送り、応答・診断・エラーに出さない。
+- **種類に stats（数値〔統計〕）**を足した（日銀・e-Stat）。DefiLlama・CoinGecko は market。ほかは api・discovery・feed。
+- **文書の種類**（`kg.DOC_KINDS`）に record（国会の発言）・law（法令の版）・filing（提出書類の知らせ）・release（PyPI・npm の版）・advisory（OSV の脆弱性）を足した。GDELT は L0 の other。
+- **識別子 `ids.ref`**（`docstore.paper_idents`）: `kokkai:`・`egov:`・`edinet:`・`pypi:`・`npm:`・`osv:` の名前空間つき。URL が無い・変わるものも同じ物は 1 件になる（URL の識別子と併用）。
+- **Metric の subject の名前空間**（`docstore.SUBJECT_KINDS`）: repo・indicator（日銀）・stat（e-Stat）・chain・protocol・stablecoin・asset（CoinGecko）・**rwa_token（RWA トークン）と digital_security（デジタル証券）は別の種類**。DefiLlama の category が RWA のものは rwa_token。デジタル証券の取り込み元は無いので、名前空間だけ持つ（混ぜない）。数値は数値のまま（単位は pegged 通貨・年％など原文、時点は UTC の日付、条件〔系列名・期種・出どころ〕は cond）。欠損（null・NA・-）は点にしない（0 にしない）。
+- **法制度の段**: law の文書の meta.stage は proposed（提案）・enacted（成立・未施行）・in_force（施行）・repealed（廃止）。いまは e-Gov の版の状態と施行日から enacted／in_force／repealed を決める（proposed は取り込み元ができたとき。形だけ先に持つ）。版どうしは辺 `supersedes`（新しい版 → 古い版）。
+- **未確認の印**: GDELT の結果は meta.verification=unverified・reason に「（未確認）」。機械の抽出で事実の確認はされていない。
+- **利用条件**（`connector_terms.py`）: 日銀は留意点（PDF）を全文読んで confirmed（クレジット表示・公開時の連絡・高頻度アクセスの禁止）。国会・DefiLlama・CoinGecko・GDELT・OSV は一部だけ（partial）。e-Gov 法令・e-Stat・EDINET・PyPI・npm は規約の本文を読めず **unconfirmed（確認の明示がないと入れられない）**。読めなかった所は「未確認」と書いた。
+- **取得**: 日銀は系列ごとに 1 リクエスト（`getDataCode`・日次は全履歴が来るので 1 系列 約 0.4MB）。国会は語ごとに直近の日数（4 秒あける）。e-Gov は `/api/2/law_revisions/{法令番号か ID}`。DefiLlama は `/v2/chains`・stablecoins・`/protocols`（約 10MB。通信量の予算は 30MB）。OSV は POST（`net.post`・`Ctx.post_json`。egress の検査は GET と同じ）。npm は省略形のメタデータ（公開日時は取れない）。GDELT は 6 秒あけ、429 は失敗でなく注意（残りの語は次の回）。
+
 ## 11. 画面
 ホーム（今日読むべき 10 件・日次の要約）・ニュース（リーダー・検索・絞り込み・放送局ほか 5 デザイン）・イベント・ナレッジ（知識カード・技術の辞典）・グラフ（知識の地図）・トレンド（急上昇・ランキング）・タイムライン・ヒートマップ（分類 × 期間の情報の密度）・比較（モデル・GPU・価格・性能）・マトリクス（技術の関係・互換性）・調査・ウォッチリスト・メモ・生成物・管理（取得先・AI・保存と省電力・書き込みの診断）。すべての画面で、期間・分類・出どころ・言語・根拠の種類で絞り込める。大きなデータを一度に送らず、サーバーが必要な範囲だけ返す。未実装の機能を実装済みのように表示しない。
 

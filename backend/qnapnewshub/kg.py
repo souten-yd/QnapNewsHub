@@ -28,7 +28,7 @@ from qnapnewshub import extract
 from qnapnewshub.db import Claim, Document, Entity, Evidence, NewsDocument, NewsItem, NewsMeta, Relationship
 
 _UTC = timezone.utc
-DOC_KINDS = ("news", "paper", "repo", "model", "research", "note", "patent", "standard", "other")
+DOC_KINDS = ("news", "paper", "repo", "model", "research", "note", "patent", "standard", "other", "record", "law", "filing", "release", "advisory")      # 後ろ 5 つは v0.8（発言・法令の版・提出書類の知らせ・リリース・脆弱性）
 SENSITIVITY = ("public", "confidential")
 AI_USE = ("allowed", "local_only", "prohibited")
 REL_TYPES = ("uses", "supports", "replaces", "competes", "part_of", "implements", "cites", "contradicts", "made_by", "develops", "co_occurs", "other")

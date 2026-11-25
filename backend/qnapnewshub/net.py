@@ -91,6 +91,13 @@ async def get(url: str, *, params: dict | None = None, accept: str = "applicatio
     raise NetError("リダイレクトが多すぎます")
 
 
+async def post(url: str, *, payload: dict, accept: str = "application/json", headers: dict | None = None, timeout: float = 25, max_bytes: int = MAX_BYTES) -> tuple[int, dict, bytes]:
+    """JSON の POST 1 回（https だけ・リダイレクトは追わない。接続は egress の検査を通る）。"""
+    _check_url(url, https_only=True)
+    async with egress.guarded_client(timeout=timeout, headers={"User-Agent": UA, "Accept": accept}) as client:
+        return await _read(client, "POST", url, json=payload, headers=headers, **({} if max_bytes == MAX_BYTES else {"max_bytes": max_bytes}))
+
+
 async def get_json(url: str, **kwargs):
     status, _, body = await get(url, **kwargs)
     if status >= 400:

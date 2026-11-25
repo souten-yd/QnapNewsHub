@@ -15,7 +15,9 @@ const SETTING_LABEL: Record<string, string> = {
   topics: "トピック", window_days: "直近の日数", min_stars: "最低のスター数", per_topic: "トピックごとの件数", watch_stars: "監視のリポジトリのスター数も取る",
   authors: "作者", tags: "タグ", pipelines: "pipeline", watch_models: "監視のモデル", limit: "件数", relations: "派生の種類", filter: "フィルタ", search: "検索語", days: "直近の日数",
   per_page: "1 回の件数", batch: "1 回に解決する DOI", depth: "引用をたどる段（1〜2）", seeds: "1 回にたどる論文", per_paper: "1 論文あたりの件数", second_level: "2 段目にたどる数",
-  per_query: "1 回の問いの件数", sites: "サイト（名前 | URL を 1 行ずつ）", max_urls: "1 サイトの URL の数", pages: "ページ（名前 | URL を 1 行ずつ）",
+  per_query: "1 回の問いの件数", series: "系列（DB:系列コード）", last_points: "取り込む点の数", tables: "統計表 ID", terms: "検索語", house: "院（空なら全部）", per_term: "1 語の件数",
+  laws: "法令（法令 ID か法令番号）", max_revisions: "取り込む版の数", sec_codes: "証券コード（空なら上場会社すべて）", chains: "チェーン", protocols: "プロトコル（slug）", stablecoins_top: "ステーブルコインの上位",
+  rwa_top: "RWA の上位", coins: "銘柄の id", vs: "通貨", queries: "検索語", timespan: "期間（例 1d）", max_records: "1 問いの件数", packages: "パッケージ", per_package: "1 パッケージの件数", sites: "サイト（名前 | URL を 1 行ずつ）", max_urls: "1 サイトの URL の数", pages: "ページ（名前 | URL を 1 行ずつ）",
 };
 const when = (iso: string) => (iso ? new Date(iso).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 const pct = (a: number, b: number) => (b > 0 ? Math.min(100, Math.round((a * 100) / b)) : 100);
@@ -61,6 +63,7 @@ function ConnectorCard({ c }: { c: Connector }) {
   const err = (e: unknown) => toast(e instanceof Error ? e.message : "できませんでした", "error");
   const st = STATUS[c.terms.status] ?? STATUS.unconfirmed;
   const busy = m.patch.isPending;
+  const keyMissing = c.key_required && !c.has_key;
   const saveBudget = () => m.patch.mutate({ id: c.id, body: { daily_items: Number(items), daily_mb: Number(mb), interval_minutes: Number(every) } }, { onSuccess: () => toast("保存しました", "success"), onError: err });
   const saveSettings = () => {
     const settings: Record<string, SettingValue> = {};
@@ -77,12 +80,14 @@ function ConnectorCard({ c }: { c: Connector }) {
             <span className="rounded bg-zinc-100 px-1.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c.kind_label}</span>
             {c.adapted && <span className="rounded border border-zinc-300 px-1.5 text-[10px] text-zinc-600 dark:border-zinc-600 dark:text-zinc-300">既存の取得</span>}
             <span className={`rounded border px-1.5 text-[10px] ${st.cls}`} data-testid="connector-terms-status">利用条件: {st.label}</span>
+            {c.key_required && <span className={`rounded border px-1.5 text-[10px] ${keyMissing ? "border-amber-500/60 text-amber-800 dark:text-amber-300" : "border-emerald-500/60 text-emerald-800 dark:text-emerald-300"}`} data-testid="connector-key-badge">{keyMissing ? "鍵が要る" : "鍵あり"}</span>}
           </div>
           <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">{c.desc}</p>
         </div>
         <label className="flex min-h-9 items-center gap-1 text-[11px]">
-          <input type="checkbox" role="switch" checked={c.enabled} disabled={busy || (!c.enabled && c.needs_ack && !ack)} aria-label={`${c.label} を入れる`} data-testid="connector-enabled" onChange={(e) => toggle(e.target.checked)} />{c.enabled ? "入" : "切"}</label>
+          <input type="checkbox" role="switch" checked={c.enabled} disabled={busy || (!c.enabled && (keyMissing || (c.needs_ack && !ack)))} aria-label={`${c.label} を入れる`} data-testid="connector-enabled" onChange={(e) => toggle(e.target.checked)} />{c.enabled ? "入" : "切"}</label>
       </div>
+      {keyMissing && <p role="note" data-testid="connector-key-needed" className="mt-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-900 dark:text-amber-300">鍵が要ります。詳細を開いて鍵を入れると、入にできます。</p>}
       {c.needs_ack && !c.enabled && (
         <label className="mt-2 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/5 p-2 text-[11px]" data-testid="connector-ack">
           <input type="checkbox" className="mt-0.5" checked={ack} onChange={(e) => setAck(e.target.checked)} />
@@ -128,7 +133,7 @@ function ConnectorCard({ c }: { c: Connector }) {
           )}
           {c.has_key_option && (
             <div className="flex flex-wrap items-center gap-2 text-[11px]" data-testid="connector-key">
-              <span className="text-zinc-500">鍵（任意）: {c.has_key ? "入っています" : "なし（低いレートで取ります）"}</span>
+              <span className="text-zinc-500">{c.key_required ? "鍵（必須）" : "鍵（任意）"}: {c.has_key ? "入っています" : c.key_required ? "なし（鍵が入るまで動きません）" : "なし（低いレートで取ります）"}</span>
               <input type="password" autoComplete="off" aria-label={`${c.label} の鍵`} className={`${input} w-48`} value={key} onChange={(e) => setKey(e.target.value)} placeholder="鍵を入れる" />
               <button type="button" className={btn} disabled={!key || m.setKey.isPending} onClick={() => m.setKey.mutate({ id: c.id, value: key }, { onSuccess: () => { setKey(""); toast("暗号化して保存しました", "success"); }, onError: err })}>保存</button>
               {c.has_key && <button type="button" className={btn} onClick={() => m.delKey.mutate(c.id, { onError: err })}>消す</button>}

@@ -80,6 +80,8 @@ async def put_connector(cid: str, body: ConnectorIn, user: User = Depends(requir
         for k, v in body.model_dump().items():
             if v is not None and k != "enabled":
                 row[k] = v
+        if body.enabled and connectors.SPECS[cid].key_required and not connectors.has_key(cid):
+            raise connectors.ConnectorError(connectors.KEY_NEEDED)
         if body.enabled and connectors.needs_ack(cid) and not (row.get("terms_ack") or body.terms_ack):
             raise connectors.ConnectorError("利用条件が未確認の connector です。確かめたうえで、未確認と分かって入れる場合は確認のチェックを入れてください")
         if body.enabled is not None:

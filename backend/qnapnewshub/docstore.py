@@ -32,6 +32,10 @@ MIGRATION_KEY = "tier_mig_v1"
 META_MAX = 4000
 ABSTRACT_MAX = 6000
 _ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.I)
+_REF = re.compile(r"[a-z0-9_]{1,20}:\S{1,300}")
+# Metric の subject の名前空間（物の種類。v0.8）。RWA トークン（rwa_token）とデジタル証券（digital_security）は別の種類として持つ（混ぜない）。
+SUBJECT_KINDS = {"repo": "GitHub のリポジトリ", "indicator": "指標（日銀の系列など）", "stat": "政府統計の統計表", "chain": "チェーン", "protocol": "プロトコル", "stablecoin": "ステーブルコイン",
+                 "rwa_token": "RWA トークン（トークン化された現実資産）", "digital_security": "デジタル証券（有価証券としてのトークン。RWA トークンとは別）", "asset": "暗号資産（価格）"}
 _ARXIV_ID = re.compile(r"^(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[a-z]{2})?/\d{7})(v\d+)?$", re.I)
 
 
@@ -76,6 +80,9 @@ def paper_idents(ids: dict) -> list[str]:
     s2 = str(ids.get("s2", "") or "").strip().lower()
     if re.fullmatch(r"[0-9a-f]{40}", s2):
         out.append(f"s2:{s2}")
+    ref = str(ids.get("ref", "") or "").strip()
+    if _REF.fullmatch(ref):      # 名前空間つきの識別子（v0.8: kokkai:・egov:・edinet:・pypi:・npm:・osv:）。同じ物は 1 件
+        out.append("ref:" + ref)
     url = str(ids.get("url", "") or "").strip()
     if url.startswith(("http://", "https://")):
         out.append("url:" + _url_key(url))

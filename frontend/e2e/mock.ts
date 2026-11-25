@@ -255,7 +255,7 @@ const MOC_COMMUNITY = { kind: "community", id: 1, title: "llama.cpp のまとま
 const TERMS = (status: string, over: Record<string, string> = {}) => ({ id: "x", status, license: "メタデータは CC0（本体は著作権の対象）", storage: "メタデータだけ保存（本体は保存しない）", redistribution: "allowed", rate: "3 秒に 1 回以下・同時 1 接続",
   tos_url: "https://example.test/terms/api", notes: "見本の注意。公式を装わない。", checked_at: "2026-11-25", ai_use: "allowed", ...over });
 const CONN = (id: string, label: string, kind: string, kind_label: string, over: Record<string, unknown> = {}) => ({ id, kind, kind_label, label, desc: `${label}の見本の説明。新しいものを見つけて、書誌だけ保存します。`, adapted: false, scheduled: true, enabled: false, interval_minutes: 1440,
-  daily_items: 300, daily_mb: 10, settings: {}, has_key_option: false, has_key: false, terms_ack: false, needs_ack: false, terms: TERMS("confirmed"), usage: { day: "2026-11-25", items: 0, mb: 0, requests: 0 },
+  daily_items: 300, daily_mb: 10, settings: {}, has_key_option: false, has_key: false, key_required: false, terms_ack: false, needs_ack: false, terms: TERMS("confirmed"), usage: { day: "2026-11-25", items: 0, mb: 0, requests: 0 },
   budget_stop: null, last: null, last_ok_at: "", ...over });
 export const CONNECTORS = [
   CONN("github", "GitHub の Release", "feed", "フィード", { adapted: true, enabled: true, daily_items: 2000, daily_mb: 50, has_key_option: true, terms: TERMS("confirmed", { license: "各リポジトリのライセンス", redistribution: "conditional", rate: "認証なし 60 回/時・トークンあり 5,000 回/時" }), usage: { day: "2026-11-25", items: 41, mb: 3.2, requests: 12 } }),
@@ -267,6 +267,10 @@ export const CONNECTORS = [
     terms: TERMS("confirmed", { license: "すべての記録は CC0", rate: "鍵なし 10 回/秒・無料の鍵は 1 日 $1 の予算" }), last: { at: new Date(NOW - 7200_000).toISOString(), ok: true, count: 25, error: "", skipped: "", ms: 900 } }),
   CONN("semanticscholar", "Semantic Scholar（引用・関連）", "discovery", "発見", { has_key_option: true, settings: { depth: 1, seeds: 3, per_paper: 15, second_level: 3 }, terms: TERMS("partial", { license: "付随のライセンス（CC BY-NC など）", redistribution: "conditional", rate: "鍵なし: 全利用者で共有・混むと絞られる" }) }),
   CONN("sitemap", "Sitemap（記事の URL）", "historical", "過去・一覧", { settings: { sites: [{ name: "見本のサイト", url: "https://news.example.test/sitemap.xml" }], max_urls: 200 }, terms: TERMS("per_site", { license: "取得先のサイトごと", redistribution: "unknown" }) }),
+  CONN("boj", "日本銀行の時系列統計", "stats", "数値（統計）", { settings: { series: ["IR01:MADR1Z@D", "FM01:STRDCLUCON"], last_points: 24 }, terms: TERMS("confirmed", { license: "日本銀行の留意点に従う（クレジット表示）", rate: "短時間の高頻度のアクセスは禁止" }) }),
+  CONN("estat", "e-Stat（政府統計の統計表）", "stats", "数値（統計）", { has_key_option: true, key_required: true, needs_ack: true, settings: { tables: [], limit: 200 }, terms: TERMS("unconfirmed", { license: "未確認", rate: "未確認", redistribution: "unknown" }) }),
+  CONN("edinet", "EDINET（提出書類の知らせ）", "api", "API", { has_key_option: true, key_required: true, needs_ack: true, settings: { days: 1, sec_codes: [], limit: 100 }, terms: TERMS("unconfirmed", { license: "未確認", rate: "未確認", redistribution: "unknown" }) }),
+  CONN("coingecko", "CoinGecko（価格）", "market", "数値（市場）", { has_key_option: true, key_required: true, settings: { coins: ["bitcoin", "ethereum"], vs: ["usd", "jpy"] }, terms: TERMS("partial", { license: "未確認（Demo は無料でレートが限られる）", redistribution: "unknown" }) }),
   CONN("hn_search", "HN Algolia の検索（道具）", "api", "API", { scheduled: false, needs_ack: true, terms: TERMS("unconfirmed", { license: "未確認", storage: "未確認", redistribution: "unknown", rate: "未確認" }) }),
 ];
 
@@ -526,6 +530,7 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
       const row = state.connectors.find((c) => c.id === id);
       if (!row) return json(route, { detail: "知らない connector です" }, 404);
       const b = body as { enabled?: boolean; terms_ack?: boolean; daily_items?: number; daily_mb?: number; interval_minutes?: number };
+      if (b.enabled && row.key_required && !row.has_key) return json(route, { detail: "鍵が要ります" }, 422);
       if (b.enabled && row.needs_ack && !(b.terms_ack || row.terms_ack)) return json(route, { detail: "利用条件が未確認の connector です" }, 422);
       Object.assign(row, Object.fromEntries(Object.entries(b).filter(([, v]) => v !== undefined)));
       return json(route, row);
