@@ -329,3 +329,36 @@ test.describe(`全体の地図の重さ（${N.toLocaleString()} 点）`, () => {
   });
 });
 }
+
+/** 丸の重なり（2026-11-25）。目的: 丸の大きさは画面のピクセル基準で、拡大しても画面の大きさはほぼ同じ（間隔だけが広がる）。全体を出したとき、近い点との画面上の距離から大きさの倍率が自動で決まり、
+ *  重なる点の割合が 1% 未満（スマホ 390px でも）。2 倍・4 倍・8 倍に拡大すると 0%。拡大で丸が画面を覆わない（半径 px の最大が拡大 8 倍でも 40px 以下）。撮影は overlap を名前に含める。
+ *  根拠: 利用者の iPhone の撮影（2026-11-25「丸同士がかぶっている」・拡大すると丸が巨大になって画面を覆う）・Obsidian は拡大しても丸の画面の大きさがほぼ同じ。
+ *  配置は、夜の配置が守る性質（丸の縁の最小の間隔）をそのまま持つ合成のひまわり配置（実データの撮影は評価で別に行う）。 */
+for (const vp of [{ name: "390", width: 390, height: 844 }, { name: "1280", width: 1280, height: 900 }] as const) {
+  test(`丸の重なり（${vp.name}px）: 全体で 1% 未満・拡大 2・4・8 倍で 0・拡大しても丸は画面を覆わない`, async ({ page }) => {
+    await page.setViewportSize({ width: vp.width, height: vp.height });
+    const state = newState();
+    await mockApi(page, state);
+    const N = 700, ga = 2.399963229728653;
+    const nodes = Array.from({ length: N }, (_, i) => ({ id: 3000 + i, name: `Things ${i}`, type: "tech", article_count: 1, degree: 1, recent: 0, community: (i % 9) + 1,
+      x: 24 * Math.sqrt(i + 0.5) * Math.cos(i * ga), y: 24 * Math.sqrt(i + 0.5) * Math.sin(i * ga), importance: Math.min(1, 1 / (1 + i / 12) ** 0.8) }));
+    const body = { nodes, edges: [], isolated: [], communities: Array.from({ length: 9 }, (_, c) => ({ id: c + 1, name: `まとまり${c}`, size: 70, rep_id: 3000 + c, shown: 70, top: [] })), truncated: false, limit: 1500,
+      layout: { version: 9, at: "2026-11-25T03:10:00Z", placed: N }, totals: { with_relations: N, edges: 0, shown_nodes: N, shown_edges: 0 } };
+    await page.route("**/api/v1/things/map/overview**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) }));
+    await page.goto("/map");
+    const cv = page.getByTestId("map-canvas");
+    await expect(cv).toHaveAttribute("data-ready", "true");
+    await expect(cv).toHaveAttribute("data-nodes", String(N), { timeout: 10_000 });
+    await cv.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    for (const z of [1, 2, 4, 8]) {
+      await page.evaluate((zz) => (document.querySelector("[data-testid=map-canvas]") as unknown as { __sigma: { getCamera(): { setState(s: { ratio: number }): void } } }).__sigma.getCamera().setState({ ratio: 1 / zz }), z);
+      await page.waitForTimeout(350);
+      const st = await page.evaluate(() => (document.querySelector("[data-testid=map-canvas]") as unknown as { __stat(): Record<string, number> }).__stat());
+      await shot(page, `map-overlap-${vp.name}-x${z}`);
+      if (z === 1) expect(st.overlap, `全体の重なり ${st.overlap}`).toBeLessThan(0.01);
+      else expect(st.overlap, `${z} 倍の重なり ${st.overlap}`).toBe(0);
+      expect(st.sizeMax * Math.sqrt(z)).toBeLessThan(40);      // 拡大でゆっくり（sqrt）大きくなるだけ
+    }
+  });
+}

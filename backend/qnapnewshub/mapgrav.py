@@ -38,7 +38,7 @@ THETA = 1.2                  # Barnes-Hut の「遠い」の判定（葉の大�
 LEAF = 6
 GRAVITY, SCALING, OUTBOUND, GMASS = 0.3, 4.0, 0.5, 0.0      # 銀河: 重力は弱く・反発は強く（Obsidian の「中心の力 弱・反発 強」に寄せる。2026-11-25）
 LINLOG = 0.0                 # 引力の LinLog の割合（0＝線形＝ばねのように長さに比例。1＝LinLog）。LinLog は点を 1 つの球に詰めるので切る
-LAYOUT_ALGO = 3              # 配置の値・式の版。変えたら上げる（前回の座標を使わず、最初から作り直す）
+LAYOUT_ALGO = 4              # 配置の値・式の版。変えたら上げる（前回の座標を使わず、最初から作り直す）
 DEFAULT_MAP = {"window_days": 30, "weights": {"search": 0.25, "card": 0.15, "recent": 0.35, "centrality": 0.25}}
 
 
@@ -316,7 +316,7 @@ def _repulse(px: list[float], py: list[float], m: list[float], fx: list[float], 
 # ---- 丸が重ならない（半径は重要度から。画面と同じ式） ----
 
 R_MIN, R_MAX, CAP_PCT = 2.0, 9.0, 0.95      # 丸の半径の幅（px 相当。最大は最小の約 4.5 倍）。画面（mapLayout.ts の radiusOf）と同じ式
-OVERLAP_GAP = 1.0
+OVERLAP_GAP = 3.0      # 丸の縁の最小の間隔（世界の単位。2026-11-25 に 1.0 から広げた＝スマホで丸がかぶる不具合）
 EXTENT = 450.0              # 配置の広がり（中心から 90% の点まで。残りは外側に散らばる）。丸の半径 2〜9・葉の距離はこの単位
 FLATTEN = 0.65              # 中心の密度を下げる割合（flatten_density）
 LEAF_GAP = 5.0               # 葉と親の丸の縁の間（世界の単位）
