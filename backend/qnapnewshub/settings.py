@@ -50,7 +50,7 @@ DEFAULTS: dict = {
     "llm": {"digest_model": DEFAULT_MODEL, "gist_enabled": False, "gist_model": DEFAULT_MODEL, "digest_focus": "", "prep_enabled": True,
             "prep_model": DEFAULT_MODEL, "prep_max_per_run": 100, "daily_limit": DEFAULT_DAILY_LIMIT, "minute_limit": DEFAULT_MINUTE_LIMIT,
             # 要素の取り出し（下ごしらえと同じ 1 回の呼び出しで）・次のモデル（1 番目は prep_model。空でよい）・用途ごとの割り当て・夜の後回しの仕事
-            "resolve_enabled": True, "extract_enabled": True, "fallback_models": [], "quota": dict(DEFAULT_QUOTA), "night_from": DEFAULT_NIGHT_FROM, "backfill_enabled": True,
+            "resolve_enabled": True, "extract_enabled": True, "numeric_enabled": True, "fallback_models": [], "quota": dict(DEFAULT_QUOTA), "night_from": DEFAULT_NIGHT_FROM, "backfill_enabled": True,
             "gateway": dict(DEFAULT_GATEWAY)},
 }
 _CLOCK = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -312,7 +312,7 @@ def normalize(raw: object) -> dict:
                   "prep_max_per_run": _int(llm.get("prep_max_per_run", 100), "下ごしらえの 1 回の件数", 1, 200),
                   "daily_limit": _int(llm.get("daily_limit", DEFAULT_DAILY_LIMIT), "1 日の回数の上限", 1, 5000),
                   "minute_limit": _int(llm.get("minute_limit", DEFAULT_MINUTE_LIMIT), "1 分の回数の上限", 1, 100),
-                  "extract_enabled": _bool(llm, "extract_enabled", True), "fallback_models": _models(llm.get("fallback_models", [])),
+                  "extract_enabled": _bool(llm, "extract_enabled", True), "numeric_enabled": _bool(llm, "numeric_enabled", True), "fallback_models": _models(llm.get("fallback_models", [])),
                   "quota": _quota(llm.get("quota"), _int(llm.get("daily_limit", DEFAULT_DAILY_LIMIT), "1 日の回数の上限", 1, 5000)),
                   "night_from": _int(llm.get("night_from", DEFAULT_NIGHT_FROM), "夜の始まりの時", 0, 23), "backfill_enabled": _bool(llm, "backfill_enabled", True),
                   "gateway": _gateway(llm.get("gateway"))}

@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-26（ウォッチリストと変化・条件つきの数値の比較・変化点〔feat/watch-changes〕の後。その前は 名寄せの自動化〔feat/auto-resolve〕の後。その前は 取得元の名前の漏れ・物差しの作り直し〔fix/source-leak-yardstick〕の後。その前は 2026-11-25 の Things の取り出しの精度〔feat/extract-quality〕の後。その前は LAN での発見の応答〔feat/lan-discovery〕・軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
+最終更新: 2026-11-26（数値パス〔feat/numeric-pass〕の後。その前は ウォッチリストと変化・条件つきの数値の比較・変化点〔feat/watch-changes〕の後。その前は 名寄せの自動化〔feat/auto-resolve〕の後。その前は 取得元の名前の漏れ・物差しの作り直し〔fix/source-leak-yardstick〕の後。その前は 2026-11-25 の Things の取り出しの精度〔feat/extract-quality〕の後。その前は LAN での発見の応答〔feat/lan-discovery〕・軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -45,6 +45,7 @@
 | 検索の改善（feat/retrieval-density） | 物差しの基準値の弱い所 3 点: ①文脈の密度（text の context は URL でなく「出どころ 日付 d<id>」・evidence に `label`・`compact`）②**主張を種に**（`claim_fts_*` の全文索引・`/retrieve/seeds` が `kind: claim`）③**周りの点数**（`/graph/neighbors` に `seed_scores`・`q` → 辺・物の `score`。必ず元の種より低い）。③ R@10 0.634→0.762・主張 R@20 0→0.85・⑤ 文脈 1068→752 トークン。下がった所（② 複数の文書など）と理由は評価の置き場。ARCHITECTURE 8 章の続き・DESIGN 17.1 |
 | 接続の深さ・会合・カードの形（feat/depth-cards） | **既定の深さは 1・つなぐ問いだけ最大 5**（`retrieval.expand_meet`・`depth_plan`・`POST /graph/expand`・会合の加点 +0.3・最初の会合の段 +1 で止める）・地図のローカルの深さ 1〜5・カードの固定の形（context text／画面）・カードの夜の仕事の診断（通信の失敗は数えず再試行）。橋渡し R@10 0.323→0.446・普通の問いは下がった問い 0。物差しに橋渡しの問い（`--build-bridge`）と道 ③'。比較は nDCG が下がる。ARCHITECTURE 6・8 章の続き・DESIGN 21 |
 | 名寄せの自動化（feat/auto-resolve） | **利用者の操作なしで寄せる**（`auto_resolve.py`・`wikidata.py`）: 段 1 規則（従来）→ **段 2 Wikidata**（名前を日英で `wbsearchentities`・説明が種類に合う 1 件だけ QID・同じ QID を自動で寄せる・QID と説明を `entity_wikidata` に保存・1 晩 500 回・2 秒おき・429 は待って続ける・結果は `wikidata_cache`）→ **段 3 LLM**（決まらない組を 20 組ずつ・用途 `resolve`・same で確かさ 0.85 以上だけ・different は二度と聞かない）。機密・allowed 以外は外へ送らない。記録は `entity_merges`（段 `mode`・根拠 `basis`）・戻せる。画面は「最近自動で寄せたもの」と「戻す」だけ。診断に段ごとの数。ARCHITECTURE 6 章の続き・DESIGN 25。**1 晩ぶんの実走・有料モデルでの質は未確認** |
+| 数値パス（feat/numeric-pass） | `numeric.py`: 本文全体から規則で「数字＋単位」の文を選び（前後 1 文・見出し・表の行つき）、候補のある記事だけ 5 件ずつ 1 回、数値ごとの平らな固定の欄（quote 先・条件 6 欄は null 可）を構造化出力で聞く → 渡した文に照らす検査 → 規則と合流して claims.cond へ。夜の埋め戻し・1 日の上限つき・設定 `llm.numeric_enabled`（既定 入）。**本物の LLM での歩留まりは未測定**（`./hub.sh numeric-try`・DESIGN 26.3） |
 | ウォッチと変化（feat/watch-changes） | **ウォッチリスト**（`watch.py`・表 `watch_items`・画面 `/watch`。既定は空）と **「前回から何が変わったか」**（`GET /watch/changes`。LLM なし・読むだけでは起点は進まない）・**条件つきの数値の比較**（`bench.py`・`claims.cond`・`GET /metrics/compare`。条件の違うものを平均しない・条件は文からの規則）・**変化点**（`changepoint.py`・カードの context にも）。物差しに変化・比較の問いと道 ⑥ を足した（変化 R@10 0.636→0.819・比較 0.316→0.437。限界は DESIGN 26）。意見の違い・トピックの分類は設計のメモだけ（ARCHITECTURE 12.1） |
 | 軽い翻訳（feat/translate） | **QuickMT 英→日（CTranslate2 int8）**（`translate.py`・`translate_flow.py`・`translate_router.py`・表 `news_translation`・`news_tr_cache`）: エンジンの枠・モデルを利用者の操作で取得（設定の「翻訳」・版と sha256 固定）・用語の保護（印 `ZQnZ`）と対訳表・訳の検査（落ちた文は原文のまま〔未訳〕）・文ごとのキャッシュ・全文検索の索引に訳を足す（「概要（日本語）」の列）・LLM が使えないときは題と本文だけ・重要な記事の本文は空き時間に 1 日の上限まで・開いたとき訳す API・`translate_hq` の仕事（実行は ControlDeck 側）・画面の「機械翻訳」の印と原文・診断の節。ARCHITECTURE 8.5・DESIGN 19。**物差しでは点数は変わらない**（飽和。評価の置き場の md）。依存は ctranslate2 4.6.2・sentencepiece 0.2.0（manylinux2014 の最後の版。上げない） |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
@@ -61,6 +62,7 @@
 ## 4. 次にやること（順番）
 **利用者の決定（2026-11-24）: QNAP の QPKG への変換は、計画したもの（v1.0 まで）をすべて Linux で完成させてから。それまで Linux（この PC の systemd のユーザーのサービス）で評価する。**
 
+0. 数値パスの本物の LLM での歩留まりを測る（評価の DB のコピーを `NEWSHUB_DATA` に指して `./hub.sh numeric-try ...`）。通った数値・条件の欄の埋まり方が低ければ、候補の選び方（`numeric.candidate_windows`）か 1 回の件数（`NUMERIC_BATCH`）を見直す。表のベンチマークは本文の取り出しが表を落とすので拾えない（`bodies.extract_text` の `include_tables` を試す余地）。
 1. 開発の PC で動かす（利用者「24 時間も待たなくて良い」〔2026-11-24〕。長時間の運転は並行して、結果を待たずに次へ進む）（`./hub.sh install-service` か `./hub.sh run`、目録から 50〜100 件を有効に）。取得の実績・失敗・書き込みの量・メモリを診断の画面で見る。
 2. QPKG を利用者の QNAP に入れてもらう（`./hub.sh qpkg` の .qpkg を渡す。手順は docs/QPKG.md。型番と CPU も QTS の画面で確認してもらう）。動いたら v0.1 を Release（.qpkg を Release の添付に）。
 3. （済）分析の第 1 版（集計の表・API・画面）。続き: 実データを 1 週間ためてホットトピックの上位が一般語にならないか見る（ストップワードの調整）・集計の表の作り直しが長い（100 万件で約 34 秒）ので、必要なら分割する。
