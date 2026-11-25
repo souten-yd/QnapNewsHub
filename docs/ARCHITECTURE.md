@@ -509,6 +509,8 @@ RSS 1.0・2.0・Atom の自動判別 / CSV と OPML の取り込み・書き出�
 - **ウォッチリストと変化**: 監視のテーマ（ローカル LLM・推論エンジン・AMD GPU・音声 AI・ゲーム・日本株・ONDO・セキュリティトークン など）ごとに、「前回から何が変わったか」を出す。
 - **意見の違い**: 政治・経済・株式・暗号資産では、公式の発表・報道・専門家の分析・企業の見解・コミュニティの反応・未確認の情報を分け、確かめた事実と並べる。
 
+**測定の記録（Cond 2.0）**: 12.1 の条件つきの数値（claims.cond の 6 欄）は、数値を中心にした測定の記録（measurements・measurement_conds）へ移す。計画と詳細設計は `docs/MEASUREMENT.md`（2026-11-26）。claims.cond と `/metrics/compare` の答えの形は互換のまま残す。
+
 ### 12.1 実装した所と設計のメモ（v0.7 の続き・feat/watch-changes・2026-11-26）
 - **ウォッチリスト**（実装）: 表 `watch_items`（監視する Things と「前回見た」時刻 seen_at）・`watch.py`・`watch_router.py`。既定は空で、画面 `/watch` か API（`POST /watch`・管理者）で足す。
   `GET /watch/changes?since=&thing=&format=text|json` が「前回から何が変わったか」を**機械的に**集める（LLM は呼ばない。解説は用途 trend の枠で後から足せるが、この版では呼ばない）:
