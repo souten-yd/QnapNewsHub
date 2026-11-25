@@ -5,6 +5,7 @@ import { DEFAULT_PREFS, LEGACY_DESIGNS, useNewsChannels, useNewsPrefs, useSaveCh
 import { useToasts } from "../../stores";
 import { NewsSourcesSettings } from "./NewsSourcesSettings";
 import { LinkCard } from "./LinkCard";
+import { TranslateCard } from "./TranslateCard";
 import { UpdateCard } from "./UpdateCard";
 import { NewsRuntimeCards } from "./NewsRuntimeSettings";
 import { Card, field, ghost, primary } from "./settingsUi";
@@ -268,6 +269,7 @@ export function NewsSettings() {
       <ChannelsCard />
       <NewsSourcesSettings />
       <NewsRuntimeCards />
+      <TranslateCard />
       <PrefsCards />
       <ArchiveCard />
       <HubCard />

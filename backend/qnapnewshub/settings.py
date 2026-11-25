@@ -37,6 +37,10 @@ DEFAULTS: dict = {
     "storage": {"flush_minutes": 30, "max_items": 1000, "max_mb": 128, "log_file": False, "access_log": False, "compress_years": 1},
     # 本文の取り出し（bodies.py）: 重要度の高い記事から、1 日 per_day 件・1 分 per_minute 件まで
     "body": {"enabled": True, "per_day": 200, "per_minute": 6},
+    # 軽い翻訳（translate.py）。engine は quickmt（英→日・CTranslate2・int8）か off。モデルは利用者の操作で取得する（設定の「翻訳」の節）。
+    # body_per_day は空いている時間にまとめて訳す本文の 1 日の件数の上限（残りは記事を開いたときに要求する）。glossary は対訳表（英語→日本語）、keep は訳さずそのまま残す語
+    "translate": {"engine": "quickmt", "threads": 2, "batch": 32, "beam": 2, "cpu_isa": "", "body_enabled": True, "body_per_day": 100, "body_max_chars": 20000,
+                  "ondemand": True, "hq_jobs": True, "llm_wait_hours": 6, "glossary": {}, "keep": [], "max_en_ratio": 0.5},
     # ControlDeck とのつなぎ（link.py）。allow_confidential は **つなぐとき** に読む: true でつなぐと、そのトークンは機密（confidential）の区分も読める
     # （要求のたびに confidential=true を付けたときだけ）。既定は false＝公開（public）だけ。つないだあとに変えても、つないだ相手は変わらない（つなぎ直す）
     "link": {"allow_confidential": False},
@@ -174,6 +178,72 @@ def _focus(value: object) -> str:
     return text
 
 
+TRANSLATE_ENGINES = ("quickmt", "off")
+CPU_ISAS = ("", "GENERIC", "SSE4_2", "AVX", "AVX2", "AVX512", "NEON")
+_TERM = re.compile(r"^[^\x00-\x1f]{1,60}$")
+
+
+def _terms(value: object, label: str, limit: int = 200) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError(f"{label}は一覧です")
+    out: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            if not _TERM.match(text):
+                raise ConfigError(f"{label}の語の形が違います")
+            if text not in out:
+                out.append(text)
+    if len(out) > limit:
+        raise ConfigError(f"{label}は {limit} 語までです")
+    return out
+
+
+def _glossary(value: object) -> dict[str, str]:
+    """対訳表（英語 → 日本語）。キーは英語の語・句（大文字小文字を区別しない）、値は日本語。最大 300 組。"""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError("対訳表は表です")
+    out: dict[str, str] = {}
+    for key, val in value.items():
+        k, v = str(key or "").strip(), str(val or "").strip()
+        if not k and not v:
+            continue
+        if not _TERM.match(k) or not _TERM.match(v) or not k.isascii():
+            raise ConfigError("対訳表の語の形が違います（左は英語、右は日本語。60 文字まで）")
+        out[k.lower()] = v
+    if len(out) > 300:
+        raise ConfigError("対訳表は 300 組までです")
+    return out
+
+
+def _translate(tr: dict) -> dict:
+    d = DEFAULTS["translate"]
+    engine = str(tr.get("engine", d["engine"]))
+    if engine not in TRANSLATE_ENGINES:
+        raise ConfigError("翻訳のエンジンは quickmt か off です")
+    isa = str(tr.get("cpu_isa", "") or "").upper()
+    if isa not in CPU_ISAS:
+        raise ConfigError("CPU の命令の指定が正しくありません（空・GENERIC・SSE4_2・AVX・AVX2・AVX512・NEON）")
+    ratio = tr.get("max_en_ratio", d["max_en_ratio"])
+    try:
+        ratio = float(ratio)
+    except (TypeError, ValueError):
+        raise ConfigError("英語のまま残る割合の上限は数です") from None
+    if not 0.1 <= ratio <= 1.0:
+        raise ConfigError("英語のまま残る割合の上限は 0.1〜1.0 です")
+    return {"engine": engine, "threads": _int(tr.get("threads", d["threads"]), "翻訳のスレッド数", 1, 16), "batch": _int(tr.get("batch", d["batch"]), "翻訳のバッチ", 1, 128),
+            "beam": _int(tr.get("beam", d["beam"]), "翻訳の beam", 1, 8), "cpu_isa": isa, "body_enabled": _bool(tr, "body_enabled", True),
+            "body_per_day": _int(tr.get("body_per_day", d["body_per_day"]), "本文の翻訳の 1 日の件数", 0, 5000),
+            "body_max_chars": _int(tr.get("body_max_chars", d["body_max_chars"]), "本文の翻訳の最大の文字数", 1000, 60000),
+            "ondemand": _bool(tr, "ondemand", True), "hq_jobs": _bool(tr, "hq_jobs", True),
+            "llm_wait_hours": _int(tr.get("llm_wait_hours", d["llm_wait_hours"]), "LLM を待つ時間", 1, 168),
+            "glossary": _glossary(tr.get("glossary")), "keep": _terms(tr.get("keep"), "そのまま残す語"), "max_en_ratio": ratio}
+
+
 def normalize(raw: object) -> dict:
     if not isinstance(raw, dict):
         raise ConfigError("設定の形が違います")
@@ -214,6 +284,7 @@ def normalize(raw: object) -> dict:
     body = _table(raw, "body")
     out["body"] = {"enabled": _bool(body, "enabled", True), "per_day": _int(body.get("per_day", 200), "本文の取り出しの 1 日の件数", 0, 5000),
                    "per_minute": _int(body.get("per_minute", 6), "本文の取り出しの 1 分の件数", 1, 60)}
+    out["translate"] = _translate(_table(raw, "translate"))
     lk = _table(raw, "link")
     out["link"] = {"allow_confidential": _bool(lk, "allow_confidential", False)}
     llm = _table(raw, "llm")

@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import func, select, text
 
-from qnapnewshub import bodies as bodies_mod, searchindex, channels, entities as entities_mod, events as events_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, updater, writer
+from qnapnewshub import bodies as bodies_mod, searchindex, channels, entities as entities_mod, events as events_mod, fetchlog, llm, llm_models, logbuf, metrics, polling, prep, rest, service, settings, sourcemgr, sources, store, translate as translate_mod, translate_flow, updater, writer
 from qnapnewshub import db as news_db
 from qnapnewshub.config import data_dir
 from qnapnewshub.db import NewsFetchLog, NewsItem
@@ -159,6 +159,17 @@ def llm_section(db) -> dict:
             "knowledge": entities_mod.summary(db), "extract_waiting": int(extract_waiting), "events": events_mod.diag(db)}
 
 
+def translate_section(db) -> dict:
+    """軽い翻訳（translate.py）: エンジン・モデルの有無・保存した件数・今日の件数・時間・キャッシュの当たり・検査で落ちた率・落ちた理由。読むだけ。"""
+    cfg = settings.load()["translate"]
+    st = translate_mod.stats()
+    return {"engine": cfg["engine"], "installed": translate_mod.installed(), "loaded": translate_mod.engine_loaded(), "threads": cfg["threads"], "batch": cfg["batch"], "beam": cfg["beam"],
+            "cpu_isa": cfg["cpu_isa"], "counts": translate_mod.counts(db), "llm_state": translate_flow.llm_state(db, cfg), "body_per_day": cfg["body_per_day"],
+            "run": {k: st[k] for k in ("units", "cache_hits", "cache_hit_pct", "checked", "failed", "fail_pct", "reasons", "chars", "seconds", "chars_per_sec", "items", "ondemand",
+                                       "load_ms", "load_error", "last_at", "recent")},
+            "download": translate_mod.download_state()}
+
+
 def storage_section() -> dict:
     coord = writer.get()
     io = metrics.read_io()
@@ -235,6 +246,11 @@ def problems(section: dict) -> list[dict]:
             out.append({"area": "llm", "level": "warn", "text": f"有料のモデル（{mod['model']}）を使っています。OpenRouter の残高が減ります"})
         if mod["success_pct"] is not None and mod["ok"] + mod["fail"] >= 5 and mod["success_pct"] < 50:
             out.append({"area": "llm", "level": "warn", "text": f"{mod['model']} の成功率が {mod['success_pct']}% です。別のモデルへの切り替えを検討してください"})
+    tr = section.get("translate") or {}
+    if tr.get("run", {}).get("load_error"):
+        out.append({"area": "translate", "level": "warn", "text": f"翻訳のモデルを読み込めません（{tr['run']['load_error']}）"})
+    if (tr.get("run", {}).get("checked") or 0) >= 50 and (tr["run"].get("fail_pct") or 0) > 30:
+        out.append({"area": "translate", "level": "warn", "text": f"翻訳の検査で落ちる文が {tr['run']['fail_pct']}% あります（落ちた文は原文のまま残しています）"})
     if s["rest_app_writes"]:
         out.append({"area": "storage", "level": "error", "text": f"お休み中にアプリが原因の書き込みがありました（{s['rest_app_writes']} 回）"})
     if s["disk"]["free"] < MIN_FREE_BYTES:
@@ -268,7 +284,7 @@ def problems(section: dict) -> list[dict]:
 
 
 def build(db) -> dict:
-    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary(), "search": search_section(db), "link": link_section(db), "connectors": connector_section(db)}
+    section = {"generated_at": _iso(datetime.now(_UTC)), "fetch": fetch_section(db), "llm": llm_section(db), "storage": storage_section(), "machine": metrics.machine(), "update": updater.summary(), "search": search_section(db), "link": link_section(db), "connectors": connector_section(db), "translate": translate_section(db)}
     section["problems"] = problems(section)
     return section
 

@@ -35,8 +35,17 @@ export interface Diagnostics {
   };
   /** つないだ ControlDeck（v0.3）。古いサーバーには無い */
   link?: { peers: { id: number; name: string; last_seen_at: string }[]; last_seen_at: string; jobs: LinkJobs; secrets: { name: string; received_at: string }[]; change_seq: number; artifacts: number; research: number };
+  translate?: DiagTranslate;
   problems: { area: string; level: "error" | "warn"; text: string }[];
 }
+export interface DiagTranslate {
+  engine: string; installed: boolean; loaded: boolean; threads: number; batch: number; beam: number; cpu_isa: string; llm_state: string; body_per_day: number;
+  counts: { rows: Record<string, number>; titles: number; bodies: number; today: number; units: number; fails: number; fail_pct: number | null; engines: Record<string, number>; cache: number };
+  run: { units: number; cache_hits: number; cache_hit_pct: number | null; checked: number; failed: number; fail_pct: number | null; reasons: Record<string, number>; chars: number; seconds: number; chars_per_sec: number;
+    items: number; ondemand: number; load_ms: number; load_error: string; last_at: string; recent: { at: string; units: number; chars: number; ms: number }[] };
+  download: TranslateDownload;
+}
+export interface TranslateDownload { phase: "idle" | "downloading" | "done" | "error"; message: string; done: number; total: number; file: string; error: string }
 export interface SelfCheck { at: string; ok: boolean; checks: { name: string; ok: boolean; detail: string; fix: string }[] }
 export interface DiagNotice { message: string | null; level: "error" | "warn" | null; count: number }
 

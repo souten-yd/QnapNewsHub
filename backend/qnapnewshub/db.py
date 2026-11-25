@@ -103,6 +103,36 @@ class NewsCold(Base):
     raw_len: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class NewsTr(Base):
+    """記事の機械翻訳（translate.py。原文の列は触らず、別の表に持つ。エンジン・版・時刻つき＝良いエンジンで訳し直せる）。1 記事 1 行。
+    kind: mt（軽いエンジン＝QuickMT）・hq（ControlDeck の高品質の訳。軽いエンジンで上書きしない）・ja（日本語の記事。訳さない印だけ）。
+    summary_state: ''（概要は訳さない・不要）・wait（LLM の下ごしらえを待っている）・done。body_ja は検査に落ちた文が原文のまま入る（先頭に「〔未訳〕」）。
+    全文検索の索引（searchindex）は、この表の題・概要・本文を日本語の問いで引くために入れる（トリガーで追う）。"""
+
+    __tablename__ = "news_translation"
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(4), default="mt")
+    engine: Mapped[str] = mapped_column(String(80), default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    title_ja: Mapped[str] = mapped_column(Text, default="")
+    summary_ja: Mapped[str] = mapped_column(Text, default="")
+    summary_src: Mapped[str] = mapped_column(String(8), default="")
+    summary_state: Mapped[str] = mapped_column(String(6), default="")
+    body_ja: Mapped[str] = mapped_column(Text, default="")
+    n_units: Mapped[int] = mapped_column(Integer, default=0)
+    n_fail: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class NewsTrCache(Base):
+    """訳した文の覚え（文ごとのキャッシュ）。h = エンジンの版＋印に置き換えた原文の hash。ja は印のまま（戻す前）の訳。同じ文（配信記事・重複）は訳さない。"""
+
+    __tablename__ = "news_tr_cache"
+    __table_args__ = {"sqlite_with_rowid": False}
+    h: Mapped[str] = mapped_column(String(24), primary_key=True)
+    ja: Mapped[str] = mapped_column(Text, default="")
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class NewsMeta(Base):
     """検索の索引の状態などの小さな値（search_v・search_cursor・search_hi）。"""
 

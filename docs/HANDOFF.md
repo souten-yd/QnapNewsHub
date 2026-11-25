@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-25（つながりの精度〔feat/link-precision〕の後。その前は検索の評価の物差し〔feat/retrieval-eval〕）
+最終更新: 2026-11-25（軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -41,6 +41,7 @@
 | つながりの精度（feat/link-precision） | **つなぐ候補の雑音を減らした**（一般語・長い名前の一部・大文字小文字・媒体名・種類／短い語。実データ 1,089 → 193 件・無作為 30 件の誤り 14 → 4）・**名寄せ**（規則で確かな組は夜に自動、迷う組は候補で管理者が確定。記事・主張・関係・別名・集計を付け替え、`entity_merges` の記録で完全に戻せる）・**まとまりの名前**（番号でなく「代表・特徴の語」）・**全体の地図の名前の出し方**（上位 24 点だけ・拡大するほど出す）。`entity_merge.py`・`things.py`・`pages/Entities.tsx`。試験 9 件。ARCHITECTURE 6 章の続き・DESIGN 18 |
 | 検索の評価の物差し（feat/retrieval-eval） | **統合の段 I0 の前倒し**（`backend/tools/eval_retrieval/`・`./hub.sh eval-retrieval --data <評価用 DB のコピー> --questions <json> --out <md> [--build]`）: 評価のハブの DB から**規則と雛形だけで**（LLM なし）問いを作る（事実・比較・変化・複数の文書・関係・日本語の問い→英語の記事の 6 種類。各問いに文書・物・主張・関係・イベントの正解）。5 つの道（①全文 ②種 ③種＋周り ④種＋局所 PPR ⑤物の文脈）を既存 API で流し、Recall@5/10/20・MRR・nDCG@10・**文脈の密度**（1,000 トークンあたりの正解の根拠）・時間 P50/P95 を種類ごとに出す。**問いと結果は実データ由来なのでリポジトリに入れない**（非公開の評価の置き場）。DESIGN 17 章 |
 | 検索の改善（feat/retrieval-density） | 物差しの基準値の弱い所 3 点: ①文脈の密度（text の context は URL でなく「出どころ 日付 d<id>」・evidence に `label`・`compact`）②**主張を種に**（`claim_fts_*` の全文索引・`/retrieve/seeds` が `kind: claim`）③**周りの点数**（`/graph/neighbors` に `seed_scores`・`q` → 辺・物の `score`。必ず元の種より低い）。③ R@10 0.634→0.762・主張 R@20 0→0.85・⑤ 文脈 1068→752 トークン。下がった所（② 複数の文書など）と理由は評価の置き場。ARCHITECTURE 8 章の続き・DESIGN 17.1 |
+| 軽い翻訳（feat/translate） | **QuickMT 英→日（CTranslate2 int8）**（`translate.py`・`translate_flow.py`・`translate_router.py`・表 `news_translation`・`news_tr_cache`）: エンジンの枠・モデルを利用者の操作で取得（設定の「翻訳」・版と sha256 固定）・用語の保護（印 `ZQnZ`）と対訳表・訳の検査（落ちた文は原文のまま〔未訳〕）・文ごとのキャッシュ・全文検索の索引に訳を足す（「概要（日本語）」の列）・LLM が使えないときは題と本文だけ・重要な記事の本文は空き時間に 1 日の上限まで・開いたとき訳す API・`translate_hq` の仕事（実行は ControlDeck 側）・画面の「機械翻訳」の印と原文・診断の節。ARCHITECTURE 8.5・DESIGN 19。**物差しでは点数は変わらない**（飽和。評価の置き場の md）。依存は ctranslate2 4.6.2・sentencepiece 0.2.0（manylinux2014 の最後の版。上げない） |
 | #8 | v0.1: 取得のエンジン（ETag/Last-Modified・Adaptive Polling とバックオフ・URL の正規化と SimHash の近い重複・CSV/OPML・出どころの種類）。実走で 5 件中 4 件が 2 回目に 304 |
 
 - 試験: backend 376 件（v0.7 前半の時点）・E2E 223 件（v0.5 で 211 件・v0.7 前半で `connectors.spec.ts` 12 件を足した）。QPKG は `packaging/qpkg/test/run-sim.sh` で合格。
@@ -64,6 +65,8 @@
 10. v0.4・v0.6 以降は PLAN.md の順。**検索を変えるとき（MPKR・翻訳・名寄せ・意味の検索）は、前後で `./hub.sh eval-retrieval` を同じ問いで流して点数を比べる**（問いの JSON は `--build` で作り直さず、基準値と同じものを使う。DESIGN 18 章）。
 11. （済）Things の脳（feat/things-brain・2026-11-25）。残り: **本物の LLM でカードの定義・状態・問い・反対の見方を夜に回し、検査の落ちる率と質を見る**／（済: つなぐ候補の雑音・名寄せ・まとまりの名前〔feat/link-precision〕。残り: 日英の名寄せの確かさ・本物の LLM で候補の質を見る）／スマホでの全体の地図の操作／**ControlDeck の MPKR・MCP が `/things/{id}/context`・`/things/lookup` を呼ぶ**（トークンは `Authorization: Bearer`。区分は既存の範囲）。
 
+
+12. 軽い翻訳の続き: **QNAP 実機（AVX 無し）で QuickMT の速さ・メモリを測る**（見込みは実測ではない）・ControlDeck 側で `translate_hq`（高品質の訳）の係を作る・LLM の日本語の概要が無い記事から問いを作って翻訳の効果を点数で測る・題をまとめて訳して速くする。
 
 ## 5. 開発の仕方
 ```
@@ -116,6 +119,9 @@
   - つなぐ番号はメモリだけ（`link._pairing`）。試験は `link.reset_for_tests()`。ECIES の形は `link.py` の docstring が正。ControlDeck 側は `link.seal()` と同じ手順で実装する。
   - 画像は `artifacts.inspect_image` が唯一の関門。PNG の試験データは zlib で組み立てる（試験の `png()`・`jpeg()`・`webp()`）。差し替えは保存してから返す。
   - 仕事の列に対象が無い（記事・イベントが消えた）仕事は、claim のとき done で閉じる。イベントは作り直しで id が変わることがある。
+
+- **機械翻訳の訳を索引の「題」の列に入れない**。重みが大きく、誤訳が上位を奪って日本語の問いが下がった（概要の列に入れる。`searchindex._row`）。ctranslate2・sentencepiece を上げるときは manylinux2014 の wheel があるか確かめる（4.7・0.2.1 以降は無い）。
+- 翻訳の本文は、題・概要の行が**まとめ書きで保存されてから**背景で訳す（保存前は候補に出ない。最大 30 分遅れる）。
 
 ## 7. 守ること（要点。全文は AGENTS.md）
 - **公開のリポジトリ**: 鍵・パスワード・トークン・利用者の名前・メール・ホスト名・私的な IP・手元の絶対パスを入れない。push の前に差分を grep で確かめる。試験の見本の値は実行時に組み立てる。

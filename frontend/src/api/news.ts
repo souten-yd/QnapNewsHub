@@ -14,6 +14,8 @@ export interface NewsItem {
   channel?: string | null;
   /** 英語の抜粋を日本語に訳したもの（summary がその訳になり、元の抜粋は summary_original） */
   translated?: boolean; summary_original?: string; has_body?: boolean;
+  /** 機械翻訳（QuickMT など。translate.py）。題・概要の訳と、エンジン・高品質の訳か・訳せなかった文があるか */
+  mt?: MachineTranslation; mt_summary?: boolean;
   /** 同じ記事の別の出どころの数（代表の記事だけ。一覧では 1 件にまとめて出す）と、その出どころの名前 */
   also?: number; also_sources?: string[];
   /** 同じ出来事（イベント）の記事を 1 つにまとめたとき: イベントの id・ほかの記事の数・出どころの数・一次情報の有無 */
@@ -21,6 +23,7 @@ export interface NewsItem {
   /** 要素の取り出し（AI）で取れたThingsの札（記事の数が多い順に最大 4）。押すとThingsのページ */
   entities?: EntityTag[];
 }
+export interface MachineTranslation { title: string; summary: string; engine: string; hq: boolean; at: string; body: boolean; partial: boolean }
 export interface EntityTag { id: number; name: string; type: EntityType }
 export interface NewsPage { items: NewsItem[]; next: string | null }
 export interface NewsQuery { view: NewsView; kinds: string; q: string; date: string; topic: string; source: string; channel?: string }
@@ -112,6 +115,11 @@ export interface NewsSources {
   config: NewsConfig; kinds: Record<string, string>; reddit_key: boolean; limit: number;
   sources: SourceStatus[]; last: { finished: string | null; new: number }; running: boolean;
 }
+/** 軽い翻訳の設定（backend/qnapnewshub/settings.py の translate）。glossary は対訳表（英語→日本語）、keep はそのまま残す語 */
+export interface TranslateSettings {
+  engine: "quickmt" | "off"; threads: number; batch: number; beam: number; cpu_isa: string; body_enabled: boolean; body_per_day: number; body_max_chars: number;
+  ondemand: boolean; hq_jobs: boolean; llm_wait_hours: number; glossary: Record<string, string>; keep: string[]; max_en_ratio: number;
+}
 /** 更新・LLM の設定（backend/qnapnewshub/settings.py）。 */
 export interface NewsRuntimeSettings {
   feed_refresh_minutes: number;
@@ -121,6 +129,7 @@ export interface NewsRuntimeSettings {
   rest: { enabled: boolean; start: string; end: string; mode: "keep_memory" | "stop_all" | "flush_at_limit" };
   storage: { flush_minutes: number; max_items: number; max_mb: number; log_file: boolean; access_log: boolean; compress_years: number };
   body: { enabled: boolean; per_day: number; per_minute: number };
+  translate: TranslateSettings;
   llm: { digest_model: string; gist_enabled: boolean; gist_model: string; digest_focus: string; prep_enabled: boolean; prep_model: string; prep_max_per_run: number; daily_limit: number; minute_limit: number;
     extract_enabled: boolean; fallback_models: string[]; quota: Record<string, number>; night_from: number; backfill_enabled: boolean; gateway: GatewaySettings };
 }

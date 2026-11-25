@@ -3,6 +3,7 @@
 - `news_fts_tri`（trigram）: 日本語・記号まじりの語の部分一致。3 文字以上の語だけ（短い語は LIKE）。
 - `news_fts_word`（porter unicode61）: 英語の語（語幹で一致。`run` → `running`）。ASCII の語はこちら。ASCII の語がここで 1 件も無ければ trigram の部分一致に落とす。
 - どちらも **中身を持たない表**（content=''・contentless_delete=1）。列は 題・概要（日本語）・物の名前・抜粋・出どころ。本文（Trafilatura）は索引に入れない。
+  **機械翻訳（translate.py）の題・概要・本文は「概要（日本語）」の列に足して入れる**（日本語の問いで英語の記事を引くため。news_translation のトリガーで追う）。
   1 年より古い記事は抜粋を圧縮して索引からも外す（題・概要・物・出どころだけ）。
 - 索引は news_items のトリガーで追う（書くのはまとめ書き＝Write Coordinator の 1 トランザクションの中だけ。ここで別に書かない）。物の名前は entities.apply_extractions が reindex_ids を呼ぶ。
 - 古い DB（3 列の外部コンテンツの索引）は、開くときに新しい表・トリガーだけ先に作り（以後の書き込みは索引に載る）、既存の行は「作り直し」の仕事（backfill_batch）が
@@ -33,8 +34,15 @@ def _ents(alias: str) -> str:
     return _ENTS.format(a=alias)
 
 
+def _tr(alias: str, col: str) -> str:
+    """機械翻訳（news_translation。translate.py）の題・概要・本文。日本語の問いで英語の記事を引くため、題の列・概要（日本語）の列に足して入れる。"""
+    return f"COALESCE((SELECT t.{col} FROM news_translation t WHERE t.item_id = {alias}.id), '')"
+
+
 def _row(alias: str) -> str:
-    return f"{alias}.title, {alias}.summary_ja, {_ents(alias)}, {alias}.summary, {alias}.source"
+    title = f"{alias}.title"
+    summary_ja = f"COALESCE({alias}.summary_ja, '') || ' ' || {_tr(alias, 'title_ja')} || ' ' || {_tr(alias, 'summary_ja')} || ' ' || {_tr(alias, 'body_ja')}"
+    return f"{title}, {summary_ja}, {_ents(alias)}, {alias}.summary, {alias}.source"
 
 
 def has_index(conn) -> bool:
@@ -106,12 +114,26 @@ def _create_tables(conn) -> None:
         conn.execute(text(f"CREATE VIRTUAL TABLE IF NOT EXISTS {name} USING fts5({COLUMNS}, content='', contentless_delete=1, tokenize='{tok}')"))
 
 
+TRIGGER_V = "4"      # 3: 機械翻訳（news_translation）の題・概要・本文を索引に入れる（トリガーの中身が変わったので、古いトリガーは作り直す）
+
+
 def _create_triggers(conn) -> None:
-    both_ins = " ".join(f"INSERT INTO {t}(rowid, {COLUMNS}) VALUES (new.id, new.title, new.summary_ja, {_ents('new')}, new.summary, new.source);" for t in (TRI, WORD))
+    if _meta(conn, "search_trg_v") != TRIGGER_V:      # 古い中身のトリガーを捨てて作り直す（索引の行は変えない。新しい書き込みから翻訳が載る）
+        for name in ("news_items_ai", "news_items_ad", "news_items_au", "news_tr_ai", "news_tr_au", "news_tr_ad"):
+            conn.execute(text(f"DROP TRIGGER IF EXISTS {name}"))
+        _set_meta(conn, "search_trg_v", TRIGGER_V)
+    both_ins = " ".join(f"INSERT INTO {t}(rowid, {COLUMNS}) VALUES (new.id, {_row('new')});" for t in (TRI, WORD))
     both_del = " ".join(f"DELETE FROM {t} WHERE rowid = old.id;" for t in (TRI, WORD))
     conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS news_items_ai AFTER INSERT ON news_items BEGIN {both_ins} END"))
     conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS news_items_ad AFTER DELETE ON news_items BEGIN {both_del} END"))
     conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS news_items_au AFTER UPDATE OF title, summary, summary_ja, source ON news_items BEGIN {both_del} {both_ins} END"))
+
+    def redo(ref: str) -> str:
+        return " ".join(f"DELETE FROM {t} WHERE rowid = {ref}.item_id; INSERT INTO {t}(rowid, {COLUMNS}) SELECT n.id, {_row('n')} FROM news_items n WHERE n.id = {ref}.item_id;"
+                        for t in (TRI, WORD))
+    conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS news_tr_ai AFTER INSERT ON news_translation BEGIN {redo('new')} END"))
+    conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS news_tr_au AFTER UPDATE ON news_translation BEGIN {redo('new')} END"))
+    conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS news_tr_ad AFTER DELETE ON news_translation BEGIN {redo('old')} END"))
 
 
 def _drop_legacy(conn) -> bool:

@@ -55,13 +55,15 @@ class _Buf:
         self.trend_notes: list[dict] = []              # 「今日の傾向」の解説（trend.save_note が書く）
         self.bodies: dict[int, dict] = {}              # 記事の id -> 本文の取り出しの結果（bodies.apply が書く。state 1 は圧縮した本文・2 は取れない理由）
         self.connectors: list[dict] = []               # connector の結果（文書・辺・Metric。docstore.apply が書く）
+        self.translations: dict[int, dict] = {}        # 記事の id -> 機械翻訳（題・概要・本文。translate.apply が書く）
+        self.trcache: dict[str, str] = {}              # 文の hash -> 訳（印のまま。translate.apply が書く）
         self.bytes = 0
 
     def empty(self) -> bool:
-        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes or self.bodies or self.connectors)
+        return not (self.new or self.updates or self.patches or self.fetchlog or self.states or self.token_used or self.extractions or self.event_summaries or self.trend_notes or self.bodies or self.connectors or self.translations or self.trcache)
 
     def count(self) -> int:
-        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes or self.bodies) + len(self.connectors)
+        return len(self.new) + len(self.updates) + len(self.patches) + len(self.fetchlog) + len(self.states) + len(self.token_used) + len(self.extractions) + len(self.event_summaries) + len(self.trend_notes or self.bodies) + len(self.connectors) + len(self.translations) + len(self.trcache)
 
 
 def merge_patch(old: dict | None, new: dict) -> dict:
@@ -320,6 +322,36 @@ class Coordinator:
         with self.lock:
             return sum(1 for b in (self.inflight, self.buf) for r in b.bodies.values() if r["at"] >= since)
 
+    def stage_translation(self, item_id: int, rec: dict, cache: dict[str, str] | None = None) -> None:
+        """機械翻訳の結果（{"kind", "engine", "title_ja", "summary_ja", "summary_src", "summary_state", "body_ja", "n_units", "n_fail", "at"}）と、訳した文の覚えを積む。
+        同じ記事は、あとから来た項目だけを上書きする（題・概要を先に、本文をあとで足す）。高品質（hq）の訳は軽いエンジンで上書きしない。"""
+        with self.lock:
+            old = self.buf.translations.get(item_id) or {}
+            if old.get("kind") == "hq" and rec.get("kind") != "hq":
+                keep = old
+            else:
+                keep = {**old, **{k: v for k, v in rec.items() if v is not None}}
+                for k in ("add_units", "add_fail"):
+                    keep[k] = int(old.get(k, 0)) + int(rec.get(k, 0))
+            self.buf.translations[item_id] = keep
+            if cache:
+                self.buf.trcache.update(cache)
+        self._touch(300 + len(rec.get("body_ja") or "") * 3 + len(rec.get("summary_ja") or "") * 3 + sum(len(v) * 3 + 60 for v in (cache or {}).values()))
+
+    def pending_translation(self, item_id: int) -> dict | None:
+        with self.lock:
+            return self.buf.translations.get(item_id) or self.inflight.translations.get(item_id)
+
+    def pending_trcache(self, keys: list[str]) -> dict[str, str]:
+        """まだ書いていない文の覚え（読みはバッファの分も見る）。"""
+        with self.lock:
+            return {k: v for k in keys if (v := self.buf.trcache.get(k, self.inflight.trcache.get(k))) is not None}
+
+    def translations_today(self, since: datetime) -> int:
+        """まだ書いていない本文の翻訳のうち、since 以降の数（1 日の上限の数え）。"""
+        with self.lock:
+            return sum(1 for b in (self.inflight, self.buf) for r in b.translations.values() if r.get("body_ja") and r.get("body_at") and r["body_at"] >= since)
+
     def stage_connector(self, batch: dict) -> None:
         """connector の結果（{connector, docs, links, metrics}）を積む。まとめ書きの 1 トランザクションで文書・辺・Metric になる（docstore.apply）。"""
         with self.lock:
@@ -406,7 +438,7 @@ class Coordinator:
         with self.lock:
             b = self.buf
             return {"items": len(b.new), "updates": len(b.updates), "patches": len(b.patches), "fetchlog": len(b.fetchlog),
-                    "states": len(b.states), "extractions": len(b.extractions), "bodies": len(b.bodies), "connectors": len(b.connectors), "total": b.count(), "bytes": b.bytes, "inflight": self.inflight.count()}
+                    "states": len(b.states), "extractions": len(b.extractions), "bodies": len(b.bodies), "connectors": len(b.connectors), "translations": len(b.translations), "total": b.count(), "bytes": b.bytes, "inflight": self.inflight.count()}
 
     def unsaved_total(self) -> int:
         with self.lock:
@@ -463,6 +495,10 @@ class Coordinator:
                         from qnapnewshub import bodies
 
                         bodies.apply(db, snap.bodies)
+                    if snap.translations or snap.trcache:
+                        from qnapnewshub import translate
+
+                        translate.apply(db, snap.translations, snap.trcache)
                     if snap.fetchlog:
                         fetchlog.record(db, snap.fetchlog, commit=False)
                     from qnapnewshub import docstore
@@ -554,6 +590,14 @@ class Coordinator:
         into.connectors[:0] = older.connectors
         for k, v in older.bodies.items():
             into.bodies.setdefault(k, v)
+        for k, v in older.translations.items():
+            merged = {**v, **into.translations[k]} if k in into.translations else v
+            if k in into.translations:
+                for f in ("add_units", "add_fail"):
+                    merged[f] = int(v.get(f, 0)) + int(into.translations[k].get(f, 0))
+            into.translations[k] = merged
+        for k, v in older.trcache.items():
+            into.trcache.setdefault(k, v)
         for k, v in older.token_used.items():
             into.token_used.setdefault(k, v)
         into.bytes += older.bytes
