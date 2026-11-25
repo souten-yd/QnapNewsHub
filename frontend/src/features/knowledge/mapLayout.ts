@@ -52,20 +52,35 @@ export function placeNear(id: number, neighbors: number[], pos: Map<number, Pos>
   return { x: base.x + rad * Math.cos(ang), y: base.y + rad * Math.sin(ang) };
 }
 
-/** 孤立した点は、全体の外側の輪に並べる。 */
-export function ringPositions(ids: number[], radius: number): Map<number, Pos> {
+/** 孤立した点（表示を選んだときだけ出る）は、全体の外側へ散らす（円には並べない。Obsidian の孤立ノードのように、周りにばらまく）。決まった式（同じ入力は同じ位置）。 */
+export function scatterOutside(ids: number[], reach: number): Map<number, Pos> {
   const out = new Map<number, Pos>();
-  ids.forEach((id, i) => { const a = (i / Math.max(1, ids.length)) * Math.PI * 2; out.set(id, { x: radius * Math.cos(a), y: radius * Math.sin(a) }); });
+  ids.forEach((id) => {
+    const h = Math.imul(id, 2654435761) >>> 0;
+    const ang = ((h % 3600) / 3600) * Math.PI * 2;
+    const u = ((Math.imul(id, 40503) >>> 0) % 1000) / 1000;
+    const r = reach * (1.08 + 0.45 * u * u);
+    out.set(id, { x: r * Math.cos(ang), y: r * Math.sin(ang) });
+  });
   return out;
 }
 
-/** 点の大きさ（画面の px。sigma の size）。重要度（0〜1。検索・カードを開いた回数・直近の記事・関係の中心性を混ぜて log で縮めたもの）の 1.6 乗で、
- *  少数の大きな点と多数の小さな点にする（重力のように、重いものほど大きい）。 */
-export const sizeOf = (importance: number) => 3 + 26 * Math.pow(Math.max(0, Math.min(1, importance)), 1.6);
+/** 点の半径（世界の単位。夜の配置の座標と同じ単位）。幅は 2〜9（最大は最小の約 4.5 倍）。重要度を cap（上位 5% の値）で割って平方根で縮め、cap 以上は頭打ち。
+ *  backend/qnapnewshub/mapgrav.py の radius と同じ式（式を変えたら両方を直す。試験が文字列で確かめる）。 */
+export const RADIUS_MIN = 2;
+export const RADIUS_MAX = 9;
+export const radiusOf = (importance: number, cap = 1) => RADIUS_MIN + (RADIUS_MAX - RADIUS_MIN) * Math.min(1, cap > 0 ? Math.sqrt(Math.max(0, importance) / cap) : 0);
+
+/** 重要度の上位 5% の値（頭打ちの基準）。 */
+export const sizeCap = (imps: number[]) => {
+  const v = imps.filter((x) => x > 0).sort((a, b) => a - b);
+  return v.length ? v[Math.min(v.length - 1, Math.floor(v.length * 0.95))] : 1;
+};
 
 /** 重要度が保存されていない点（夜の計算の前・あとから足した点）の代わり: 関係の数を log で縮めた 0〜0.6。 */
 export const fallbackImportance = (degree: number, maxDegree: number) => (maxDegree > 0 ? (0.6 * Math.log1p(Math.max(0, degree))) / Math.log1p(maxDegree) : 0);
 
-/** 保存した配置（ワールドの座標）のときの丸の半径。座標と同じ単位なので、拡大すると丸も一緒に大きくなり、夜の配置が「丸が重ならない」ように離した距離がそのまま見える。
- *  backend/qnapnewshub/mapgrav.py の radius と同じ式（R_MIN 5・R_SPAN 55・重要度の 1.6 乗）。 */
-export const radiusOf = (importance: number) => 5 + 55 * Math.pow(Math.max(0, Math.min(1, importance)), 1.6);
+/** 色の分け方（まとまり／種類）。まとまりの色は、大きいまとまりから順にパレットを割り当てる。Advanced Graph View の Nebula のような青・紫・桃・金・水色。 */
+export const CLUSTER_DARK = ["#6ea8ff", "#a78bfa", "#f472b6", "#fbbf24", "#22d3ee", "#fb7185", "#34d399", "#c4b5fd"];
+export const CLUSTER_LIGHT = ["#2563eb", "#7c3aed", "#db2777", "#d97706", "#0891b2", "#e11d48", "#059669", "#6d28d9"];
+export const NO_CLUSTER = { dark: "#8a8fb0", light: "#7c819b" };

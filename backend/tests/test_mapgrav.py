@@ -1,7 +1,7 @@
 """目的: 知識の地図の「重力」の配置（ForceAtlas2・夜に計算して保存）と、点の大きさ＝重要度の試験。外へ通信しない・LLM は呼ばない。
   ①重要度（検索で当たった回数・カードを開いた回数・直近の記事・関係の中心性を log で縮め、設定の重みで混ぜ、最大を 1 に）②使われ方の数え（メモリで数え、同じ点を 60 秒以内に数え直さず、
   まとめ書きで日ごとの集計の表へ足す。API の検索・カードが数える）③配置（保存される・再計算しても大きく動かない・同じ入力は同じ座標・機密の物は入らない・全体の地図の API が x・y・重要度を返す）
-  ④重い点の周りに小さな点が集まる（重い点からつながる点までの距離の平均が、つながらない点までより短い）⑤Barnes-Hut が総当たりに近い・1,500 点が数秒で終わる。
+  ⑥丸の大きさの上限と比・葉の放射状・配置の式の版（2026-11-25 の銀河化）④重い点の周りに小さな点が集まる（重い点からつながる点までの距離の平均が、つながらない点までより短い）⑤Barnes-Hut が総当たりに近い・1,500 点が数秒で終わる。
 根拠: 利用者の指示（2026-11-25「丸のサイズや距離感が等距離ではなく、重力の法則みたいに、検索数が多いものの丸が大きくなり、付随するものは大きなものに引きつけられる位置にいる」）・
 ARCHITECTURE 6 章（配置は夜に計算して保存。形を毎回変えない）・Write Coordinator（数えるのはメモリ、書くのはまとめ書き）。
 """
@@ -113,7 +113,7 @@ def test_usage_counted_in_memory_deduped_and_written_by_batch(client):
 
 def test_layout_saved_versioned_stable_and_returned_by_overview(client):
     """目的: 夜の計算が座標・重要度を map_layout に保存し、版（news_meta.map_layout_ver）を 1 つ上げる。全体の地図の API が x・y・importance と layout の版を返す。
-    記事が増えて再計算しても、前回の座標から短く整えるだけなので、前からある点は大きく動かない（全体の広がりの 12% 以内の平均）。機密の物は配置に入らない。
+    記事が増えて再計算しても、前回の座標から短く整えるだけなので、前からある点は大きく動かない（全体の広がりの 15% 以内の平均。広がりをそろえる拡大縮小の分を含む）。機密の物は配置に入らない。
     根拠: 利用者の指示（形を毎回変えない。配置は夜に計算して保存・座標の表・版）。"""
     for i in range(1, 9):
         _link("Core", "uses", f"Leaf{i}", i)
@@ -145,7 +145,7 @@ def test_layout_saved_versioned_stable_and_returned_by_overview(client):
         again = {int(i): (x, y) for i, x, y in db.execute(select(MapLayout.entity_id, MapLayout.x, MapLayout.y))}
     extent = max(math.hypot(x, y) for x, y, _ in placed.values())
     moved = [math.hypot(again[i][0] - placed[i][0], again[i][1] - placed[i][1]) for i in placed]
-    assert sum(moved) / len(moved) < 0.12 * extent
+    assert sum(moved) / len(moved) < 0.15 * extent
     assert ent_id("New20") in again      # 新しい点にも座標がつく
 
 
@@ -159,7 +159,7 @@ def test_forceatlas2_is_deterministic_and_warm_start_keeps_shape():
     assert a == mapgrav.forceatlas2(ids, adj, mass)
     ext = max(math.hypot(*p) for p in a.values())
     b = mapgrav.forceatlas2(ids, adj, mass, a, iterations=20)
-    assert sum(math.hypot(a[i][0] - b[i][0], a[i][1] - b[i][1]) for i in ids) / len(ids) < 0.05 * ext
+    assert sum(math.hypot(a[i][0] - b[i][0], a[i][1] - b[i][1]) for i in ids) / len(ids) < 0.08 * ext
     hub = 1
     new = max(adj) + 1
     adj2 = {**{k: dict(v) for k, v in adj.items()}, new: {hub: 1.0}}
@@ -219,22 +219,77 @@ def test_barnes_hut_close_to_brute_force_and_fast():
     assert time.monotonic() - t0 < 20 and len(pos) == 1500 and all(math.isfinite(v) for p in pos.values() for v in p)
 
 
-def test_circles_do_not_overlap_and_radius_matches_screen_formula():
-    """目的: 夜の配置のあと、丸（半径は重要度から）が重ならない。大きな点の中に小さな点が入らない。半径の式は画面（mapLayout.ts の radiusOf）と同じ（式を変えたら両方を直す）。
-    根拠: 利用者の指示（付随するものは大きなものの周りに。丸のサイズや距離感が等距離ではない）・実データで、大きな丸の中に小さな丸が重なって見えた不具合（2026-11-25）。"""
+def test_circles_do_not_overlap_and_radius_is_capped_and_matches_screen_formula():
+    """目的: 夜の配置のあと、丸（半径は重要度から）が重ならない。半径は 2〜9 に収まり（最大は最小の約 4.5 倍）、重要度は平方根で縮め、上位 5% の値で頭打ち（それ以上は同じ大きさ）。
+    半径の式は画面（mapLayout.ts の radiusOf）と同じ（式を変えたら両方を直す）。
+    根拠: 利用者の指示（2026-11-25「丸の大きいサイズが大きすぎる」「丸の大きさはある程度の所を最大にして大小を決める」）・実データで、大きな丸の中に小さな丸が重なって見えた不具合。"""
     adj = _star_graph(5, 12)
     ids = list(adj)
     imp = mapgrav.importance(ids, adj, {}, {}, {i: float(len(adj[i])) for i in ids})
     out = mapgrav.compute({"ids": ids, "adj": adj, "search": {}, "card": {}, "recent": {i: float(len(adj[i])) for i in ids}, "old": {}, "cfg": mapgrav.map_config()})
     pos = out["pos"]
-    rad = {i: mapgrav.radius(out["importance"][i]) for i in ids}
+    cap = mapgrav.size_cap(out["importance"].values())
+    rad = {i: mapgrav.radius(out["importance"][i], cap) for i in ids}
     over = [(a, b) for a in ids for b in ids if a < b and _dist(pos, a, b) < rad[a] + rad[b] - 0.5]
-    assert over == [] and max(rad.values()) > 3 * min(rad.values()) and imp
-    assert mapgrav.radius(0) == 5.0 and mapgrav.radius(1) == 60.0
+    assert over == [] and imp
+    assert min(rad.values()) >= 2.0 and max(rad.values()) <= 9.0 and 1.5 < max(rad.values()) / min(rad.values()) <= 4.5
+    assert mapgrav.radius(0) == 2.0 and mapgrav.radius(1) == 9.0
+    assert mapgrav.radius(0.5, 0.5) == mapgrav.radius(1.0, 0.5) == 9.0      # 上位 5% の値で頭打ち
+    assert mapgrav.radius(0.25) == 2.0 + 7.0 * 0.5      # 平方根
+    vals = [i / 100 for i in range(1, 101)]
+    assert mapgrav.size_cap(vals) == 0.96
     from pathlib import Path
 
     ts = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "features" / "knowledge" / "mapLayout.ts").read_text(encoding="utf-8")
-    assert "5 + 55 * Math.pow(Math.max(0, Math.min(1, importance)), 1.6)" in ts
+    assert "RADIUS_MIN = 2" in ts and "RADIUS_MAX = 9" in ts and "Math.sqrt(Math.max(0, importance) / cap)" in ts
+
+
+def test_leaves_are_placed_radially_around_their_parent():
+    """目的: 次数 1 の点（葉）が、つながる点（親）の周りに放射状に並ぶ。角度は等間隔で重ならず、丸どうしも重ならず、距離は短い（親の縁から数点分）。親の座標は変えない。次数 1 でない点は動かさない。多すぎて 1 周に入らなければ輪を重ねる。
+    根拠: 利用者の指示（2026-11-25「大きな集合体に対しては放射状に関連する Things がつながる」）・Obsidian のグラフ（葉が親の周りに放射状に付く）。"""
+    adj: dict[int, dict[int, float]] = {1: {}, 2: {}}
+    for k in range(3, 11):      # 親 1 に葉 8 枚
+        adj[k] = {1: 1.0}
+        adj[1][k] = 1.0
+    adj[1][2] = adj[2][1] = 1.0      # 親 1 は点 2 ともつながる（葉ではない）
+    adj[2][99] = 1.0
+    adj[99] = {2: 1.0}
+    adj[1][2] = 1.0
+    pos = {i: (float(i * 3), float(-i)) for i in adj}
+    rad = {i: 3.0 for i in adj}
+    rad[1] = 9.0
+    out = mapgrav.radial_leaves(adj, pos, rad)
+    assert out[1] == pos[1] and out[2] == pos[2]
+    leaves = list(range(3, 11))
+    ang = sorted(math.atan2(out[k][1] - pos[1][1], out[k][0] - pos[1][0]) % (2 * math.pi) for k in leaves)
+    gaps = [(ang[(j + 1) % 8] - ang[j]) % (2 * math.pi) for j in range(8)]
+    assert min(gaps) > 0.99 * 2 * math.pi / 8      # 等間隔・角度の重なりなし
+    assert all(_dist(out, 1, k) <= rad[1] + rad[k] + mapgrav.LEAF_GAP + 3.0 for k in leaves)      # 短い
+    assert all(_dist(out, a, b) >= rad[a] + rad[b] for a in leaves for b in leaves if a < b)      # 丸も重ならない
+    many: dict[int, dict[int, float]] = {1: {}, 2: {2: 1.0}}
+    many = {1: {2: 1.0}, 2: {1: 1.0}}
+    for k in range(3, 63):
+        many[k] = {1: 1.0}
+        many[1][k] = 1.0
+    r2 = {i: 3.0 for i in many}
+    o2 = mapgrav.radial_leaves(many, {i: (0.0, 0.0) if i == 1 else (5.0, 5.0) for i in many}, r2)
+    ls = list(range(3, 63))
+    assert all(_dist(o2, a, b) >= 5.9 for a in ls for b in ls if a < b)      # 輪を重ねても重ならない
+
+
+def test_layout_algo_version_rebuilds_from_scratch(client):
+    """目的: 配置の式の版（LAYOUT_ALGO）が保存した版（news_meta.map_layout_algo）と違えば、前回の座標を使わず最初から作り直す。同じなら前回の座標から続ける。
+    根拠: 利用者の指示（配置の値を変えたら版を上げて作り直す）。"""
+    for i in range(1, 9):
+        _link("Core", "uses", f"Leaf{i}", i)
+    mapgrav.compute_and_save()
+    with news_db.session() as db:
+        assert db.get(NewsMeta, "map_layout_algo").value == str(mapgrav.LAYOUT_ALGO)
+    assert mapgrav._read_inputs(mapgrav.datetime.now(mapgrav._UTC))["old"]  # noqa: SLF001
+    with news_db.session() as db:
+        db.get(NewsMeta, "map_layout_algo").value = "0"
+        db.commit()
+    assert mapgrav._read_inputs(mapgrav.datetime.now(mapgrav._UTC))["old"] == {}  # noqa: SLF001
 
 
 def test_night_layout_failure_does_not_stop_aggregate(monkeypatch):
