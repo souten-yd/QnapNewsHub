@@ -177,11 +177,11 @@ def test_context_text_has_fixed_order_and_omits_empty_sections(client):
 
 
 def test_card_api_sorts_claims_by_evidence_strength(client):
-    """目的: カード API の主張は、強い根拠（原文に照合できたもの）が先。根拠の段階 stage の列があれば（数の小さいほど強い）それで並べ、無ければ grounded だけ。"""
+    """目的: カード API の主張は、強い根拠（原文に照合できたもの）が先。根拠の段階 tier（exact＞paraphrase＞none）があればそれで並べ、無ければ grounded だけ。"""
     from qnapnewshub import kg_view
 
     assert kg_view.evidence_rank([{"grounded": True}]) == 0 and kg_view.evidence_rank([{"grounded": False}]) == 1 and kg_view.evidence_rank([]) == 2
-    assert kg_view.evidence_rank([{"grounded": True, "stage": 2}, {"grounded": False, "stage": 1}]) == 1
+    assert kg_view.evidence_rank([{"grounded": False, "tier": "paraphrase"}, {"grounded": False, "tier": "none"}]) == 1 and kg_view.evidence_rank([{"grounded": False, "tier": "none"}]) == 2
     bid = _card_entity()
     res = client.get(f"/api/v1/kg/entities/{bid}/card")
     assert res.status_code == 200

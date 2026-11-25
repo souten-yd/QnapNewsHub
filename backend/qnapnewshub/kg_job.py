@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, or_, select
 
 from qnapnewshub import db as news_db
-from qnapnewshub import entity_merge, event_llm, extract, kg, llm, llm_models, llm_task, mapgrav, rest, settings, things, writer
+from qnapnewshub import entity_merge, event_llm, extract, kg, llm, llm_models, llm_task, mapgrav, rest, settings, thing_filter, things, writer
 from qnapnewshub import logbuf
 from qnapnewshub.db import Claim, Entity, EntityCard, NewsItem, NewsMeta, Relationship, ArticleEntity
 
@@ -45,12 +45,14 @@ def aggregate() -> dict:
     def do() -> dict:
         with news_db.session() as db:
             mapped = kg.sync_documents(db, full=True)
+            retired = thing_filter.retire_sweep(db)      # 取得元・一般語・断片の物を外す（名寄せの前。外した物は寄せの相手にならない）
+            dropped = kg.sweep_relations(db)      # 型の定義域・値域に合わない関係・空疎な関係を捨てる
             out = kg.rebuild_cooccur(db)
             merged = entity_merge.compute_merges(db)      # 名寄せ（確かなものは自動・迷うものは候補）。関係が変わるので、まとまりの前
             comm = things.compute_communities(db)      # 主題のまとまり（関係が変わった後）
             ment = things.compute_mentions(db)      # リンクされていない言及（つなぐ候補）
             db.commit()
-            return {"mapped": mapped, **out, "merged": merged["merged"], "merge_candidates": merged["candidates"], "communities": comm["communities"], "mention_candidates": ment["candidates"]}
+            return {"mapped": mapped, "retired": retired["retired"], "relations_dropped": dropped["dropped"], **out, "merged": merged["merged"], "merge_candidates": merged["candidates"], "communities": comm["communities"], "mention_candidates": ment["candidates"]}
 
     return writer.run("news.kg_aggregate", do, user=False)
 

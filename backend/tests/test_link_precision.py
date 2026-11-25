@@ -71,12 +71,12 @@ def test_mentions_skip_generic_words_short_names_and_unsuitable_types(client):
 def test_mentions_skip_source_name_and_title_tail(client):
     """目的: 取得元の名前（記事を出した媒体）と題の末尾の「 | 出どころ」は、記事の中身の言及ではないので候補にしない。根拠: 実データ（Phoronix・9to5Mac・GamingOnLinux など媒体名の候補）。"""
     for i in range(3):
-        art(i + 1, [("Gizmodo", "org")])
-    own = art(5, [("Other", "tech")], title="Big news today at Gizmodo about phones", source="Gizmodo")
-    tail = art(6, [("Other", "tech")], title="Some report on chips - Gizmodo Blog")
-    real = art(7, [("Other", "tech")], title="Gizmodo is acquired by a new owner", source="elsewhere")
+        art(i + 1, [("Fooblog", "org")])
+    own = art(5, [("Other", "tech")], title="Big news today at Fooblog about phones", source="Fooblog")
+    tail = art(6, [("Other", "tech")], title="Some report on chips - Fooblog Blog")
+    real = art(7, [("Other", "tech")], title="Fooblog is acquired by a new owner", source="elsewhere")
     assert own and tail
-    assert _mentions("Gizmodo") == [real]
+    assert _mentions("Fooblog") == [real]
 
 
 # ---- ② 名寄せ ----
@@ -99,7 +99,7 @@ def _setup_pair() -> tuple[int, int, int]:
     for i in range(3):
         art(i + 1, [("Sony", "org"), ("PS5", "product")], relations=[_rel("Sony", "uses", "PS5")] if i == 0 else [], facts=[{"about": "Sony", "kind": "claim", "text": "Sony announces a console", "value": ""}] if i == 1 else [])
     for i in range(2):
-        art(10 + i, [("Sony Corporation", "org"), ("PS5", "product"), ("Bravia", "product")], relations=[_rel("Sony Corporation", "uses", "PS5"), _rel("Sony Corporation", "supports", "Bravia")] if i == 0 else [],
+        art(10 + i, [("Sony Corporation", "org"), ("PS5", "product"), ("Bravia", "product")], relations=[_rel("Sony Corporation", "uses", "PS5"), _rel("Sony Corporation", "develops", "Bravia")] if i == 0 else [],
             facts=[{"about": "Sony Corporation", "kind": "claim", "text": "Corporation reports earnings", "value": ""}] if i == 1 else [])
     return ent_id("Sony"), ent_id("Sony Corporation"), ent_id("PS5")
 
@@ -127,7 +127,7 @@ def test_auto_merge_moves_everything_is_idempotent_and_undoable(client):
         assert set(db.scalars(select(Claim.entity_id).where(Claim.entity_id.in_([sony, corp])))) == {sony}
         rels = db.execute(select(Relationship.subject_id, Relationship.object_id, Relationship.type, Relationship.evidence_count)).all()
         assert (sony, ps5, "uses", 2) in rels and len([r for r in rels if r[2] == "uses"]) == 1      # 同じ関係は 1 本・根拠は 2 つ
-        assert any(r[0] == sony and r[2] == "supports" for r in rels)
+        assert any(r[0] == sony and r[2] == "develops" for r in rels)
         rec = db.scalar(select(EntityMerge))
         assert rec.mode == "auto" and rec.loser_id == corp and rec.undone_at is None
         assert entity_merge.compute_merges(db)["merged"] == 0      # 冪等
@@ -165,11 +165,11 @@ def test_extraction_after_merge_goes_to_the_winner(client):
 
 
 def test_uncertain_pairs_are_candidates_and_admin_decides(client):
-    """目的: 種類が違う（VRChat と VRChat Inc.）・括弧を除くと同じ（Qwen3.8 と Qwen3.8 (2.4T)）組は自動で寄せず候補にする。確定は管理者だけ（トークンは不可）、却下は作り直しても戻らない、
+    """目的: 種類が違う（VRChat と VRChat Inc.）・括弧を除くと同じ（Qwen3.8 と Qwen3.8 (preview)）組は自動で寄せず候補にする。確定は管理者だけ（トークンは不可）、却下は作り直しても戻らない、
     確定すると寄せた記録が残って画面から元に戻せる。根拠: 利用者の指示（迷うものは候補として画面に。管理者が確定）。"""
     for i in range(3):
         art(i + 1, [("VRChat", "software"), ("Qwen3.8", "model")])
-    art(10, [("VRChat Inc.", "org"), ("Qwen3.8 (2.4T)", "model")])
+    art(10, [("VRChat Inc.", "org"), ("Qwen3.8 (preview)", "model")])
     with news_db.session() as db:
         out = entity_merge.compute_merges(db)
         db.commit()
@@ -178,7 +178,7 @@ def test_uncertain_pairs_are_candidates_and_admin_decides(client):
     assert client.get("/api/v1/things/merge-candidates", headers=tok).status_code in (401, 403)
     got = client.get("/api/v1/things/merge-candidates").json()
     by = {(c["keep"]["name"], c["drop"]["name"]): c for c in got["items"]}
-    v, q = by[("VRChat", "VRChat Inc.")], by[("Qwen3.8", "Qwen3.8 (2.4T)")]
+    v, q = by[("VRChat", "VRChat Inc.")], by[("Qwen3.8", "Qwen3.8 (preview)")]
     assert v["reason"] == "rule_type" and q["reason"] == "rule_paren" and got["total"] == 2
     assert client.post(f"/api/v1/things/merge-candidates/{v['id']}/confirm", headers=tok).status_code in (401, 403)
     done = client.post(f"/api/v1/things/merge-candidates/{v['id']}/confirm", headers=H).json()

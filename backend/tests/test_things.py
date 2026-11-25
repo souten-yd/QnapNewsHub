@@ -59,14 +59,14 @@ def test_brief_confidence_depends_only_on_document_count(client):
 def test_relation_groups_split_by_type_and_direction(client):
     """目的: 関係を ExcaliBrain のように、上位（part_of の先）・下位（part_of の元）・仲間（competes・co_occurs）・使う／使われる（uses・implements の向き）・置き換える／置き換えられる・矛盾に分ける。
     向きはその物から見る。根拠: 利用者の指示（関係を型ごとに・上位下位仲間）。"""
-    for other, t, flip in [("Parent", "part_of", False), ("Child", "part_of", True), ("Rival", "competes", False), ("Lib", "uses", False), ("User", "uses", True),
+    for other, t, flip in [("Parent", "part_of", False), ("Child", "part_of", True), ("Rival", "competes", False), ("Lib", "uses", False), ("Userland", "uses", True),
                            ("Old", "replaces", False), ("New", "replaces", True), ("Foe", "contradicts", False), ("Spec", "implements", False)]:
         a, b = ("Hub", other) if not flip else (other, "Hub")
         for i in range(2):
             art(i + 1, [(a, "tech"), (b, "tech")], relations=[_rel(a, t, b)])
     groups = {g["key"]: [r["other"]["name"] for r in g["items"]] for g in client.get(f"/api/v1/things/{ent_id('Hub')}/card").json()["groups"]}
     assert groups["upper"] == ["Parent"] and groups["lower"] == ["Child"] and groups["peers"] == ["Rival"]
-    assert sorted(groups["uses"]) == ["Lib", "Spec"] and groups["used_by"] == ["User"]
+    assert sorted(groups["uses"]) == ["Lib", "Spec"] and groups["used_by"] == ["Userland"]
     assert groups["replaces"] == ["Old"] and groups["replaced_by"] == ["New"] and groups["contradicts"] == ["Foe"]
     assert [g["key"] for g in client.get(f"/api/v1/things/{ent_id('Hub')}/card").json()["groups"]][:3] == ["upper", "lower", "peers"]      # 節の並びは固定
 
@@ -78,7 +78,7 @@ def test_card_llm_definition_state_questions_are_grounded(client, monkeypatch, k
     状態は決まった 4 つ以外は「不明」・古い文字列だけの返事も概要として受ける。根拠: 利用者の指示（根拠が無いことは問いとして書く・材料に無い事実を書かない検査）。"""
     _night()
     for i in range(3):
-        art(24 * i + 1, [("Zorblax", "model"), ("Qorp", "org")], facts=[{"about": "Zorblax", "kind": "release", "text": f"Zorblax {2 + i} を公開", "value": str(2 + i)}],
+        art(24 * i + 1, [("Zorblax", "model"), ("Qorp", "tech")], facts=[{"about": "Zorblax", "kind": "release", "text": f"Zorblax {2 + i} を公開", "value": str(2 + i)}],
             relations=[_rel("Zorblax", "part_of", "Qorp")])
     good = {"definition": "Qorp の一部として公開されているモデル。", "state": "official", "summary": "Zorblax は Qorp の一部として公開が続いているモデルです。",
             "questions": ["Zorblax の性能は他と比べてどうか？", "Hallucinated の名前を含む問いか？", "公開は 99999 回目か？", "断定してしまった文です。"],

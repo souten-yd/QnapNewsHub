@@ -3,16 +3,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "./client";
 import type { EntityType } from "./news";
 
-export const REL_TYPES = ["uses", "supports", "replaces", "competes", "part_of", "implements", "cites", "contradicts", "co_occurs", "other"] as const;
+export const REL_TYPES = ["uses", "supports", "replaces", "competes", "part_of", "implements", "cites", "contradicts", "made_by", "develops", "co_occurs", "other"] as const;
 export type RelType = (typeof REL_TYPES)[number];
 export const REL_LABEL: Record<RelType, string> = {
   uses: "使う", supports: "対応する", replaces: "置き換える", competes: "競う", part_of: "一部", implements: "実装する", cites: "引用する",
-  contradicts: "矛盾する", co_occurs: "一緒に出る", other: "その他の関係",
+  contradicts: "矛盾する", made_by: "作った組織", develops: "開発する", co_occurs: "一緒に出る", other: "その他の関係",
 };
 /** 型ごとの色（ライト・ダークの両方で背景と 3:1 以上。線は色だけに頼らず、推測・集計は破線にする）。 */
 export const REL_COLOR: Record<RelType, string> = {
   uses: "#2563eb", supports: "#0d9488", replaces: "#d97706", competes: "#dc2626", part_of: "#7c3aed", implements: "#0891b2", cites: "#65a30d",
-  contradicts: "#be185d", co_occurs: "#71717a", other: "#a1a1aa",
+  contradicts: "#be185d", made_by: "#b45309", develops: "#4d7c0f", co_occurs: "#71717a", other: "#a1a1aa",
 };
 export type RelStatus = "extracted" | "inferred" | "statistical" | "confirmed";
 export const STATUS_LABEL: Record<RelStatus, string> = { extracted: "AI の取り出し", inferred: "推測", statistical: "集計", confirmed: "確認済み" };

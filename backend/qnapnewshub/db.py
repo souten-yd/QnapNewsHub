@@ -228,6 +228,8 @@ class Claim(Base):
     prompt_version: Mapped[str] = mapped_column(String(16), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ai_extracted: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # 主張が述べる日付の既定は記事の公開日（取り出しのとき入れる。古い行は NULL＝出どころの文書の日付を使う）
+    stated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 出どころの文書（documents）と、そこから引き継いだ機密の区分（kg.inherit）。根拠は evidences を複数持てる
     document_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     sensitivity: Mapped[str] = mapped_column(String(12), default="public", server_default="public")
@@ -340,6 +342,8 @@ class Evidence(Base):
     quote_hash: Mapped[str] = mapped_column(String(64), default="")
     grounded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     confidence: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    # 根拠の段階（extract.quote_tier）: exact（原文の引用に一致）・paraphrase（言い換え）・none（無し）。古い行は ""（grounded で読み替える）
+    tier: Mapped[str] = mapped_column(String(10), default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -497,6 +501,22 @@ class MergeCandidate(Base):
     score: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String(10), default="candidate")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EntityRetirement(Base):
+    """機械の除外（thing_filter）で外した物の記録（名前・種類・理由・記事・主張・関係の数）。外した物は戻さない（規則をゆるめて取り出し直す）。診断で数を見る。"""
+
+    __tablename__ = "entity_retirements"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    key: Mapped[str] = mapped_column(String(200), default="", index=True)
+    type: Mapped[str] = mapped_column(String(16), default="other")
+    reason: Mapped[str] = mapped_column(String(20), default="")
+    article_count: Mapped[int] = mapped_column(Integer, default=0)
+    claim_count: Mapped[int] = mapped_column(Integer, default=0)
+    relation_count: Mapped[int] = mapped_column(Integer, default=0)
+    retired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class NewsFetchLog(Base):
@@ -752,7 +772,8 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("documents", "meta", "TEXT NOT NULL DEFAULT ''"), ("documents", "connector", "VARCHAR(40) NOT NULL DEFAULT ''"),
                                         ("research_records", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"),
                                         ("entity_cards", "definition", "TEXT NOT NULL DEFAULT ''"), ("entity_cards", "state", "VARCHAR(12) NOT NULL DEFAULT ''"),
-                                        ("entity_cards", "questions", "TEXT NOT NULL DEFAULT '[]'"), ("entity_cards", "opposing", "TEXT NOT NULL DEFAULT '[]'")]
+                                        ("entity_cards", "questions", "TEXT NOT NULL DEFAULT '[]'"), ("entity_cards", "opposing", "TEXT NOT NULL DEFAULT '[]'"),
+                                        ("claims", "stated_at", "DATETIME"), ("evidences", "tier", "VARCHAR(10) NOT NULL DEFAULT ''")]
 # 後から足した索引（既にあるファイルにも足す）
 _LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id"), ("documents", "tier"), ("research_records", "theme")]
 # 複数の列の索引で、あとから足したもの（既にあるファイルにも足す）

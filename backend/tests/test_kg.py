@@ -215,7 +215,7 @@ def test_relations_grounded_vs_inferred(client):
     source = "OpenAI released GPT-6.2 which replaces GPT-6.1 in the API."
     raw = {"entities": [{"name": "OpenAI", "type": "org"}, {"name": "GPT-6.2", "type": "model"}, {"name": "GPT-6.1", "type": "model"}],
            "relations": [{"subject": "GPT-6.2", "type": "replaces", "object": "GPT-6.1", "quote": "replaces GPT-6.1"},
-                         {"subject": "GPT-6.2", "type": "uses", "object": "OpenAI", "quote": "powered by moon rocks"},
+                         {"subject": "GPT-6.2", "type": "uses", "object": "GPT-6.1", "quote": "powered by moon rocks"},
                          {"subject": "OpenAI", "type": "bogus", "object": "GPT-6.2", "quote": "released GPT-6.2"},
                          {"subject": "OpenAI", "type": "supports", "object": "OpenAI", "quote": ""},
                          {"subject": "OpenAI", "type": "co_occurs", "object": "GPT-6.2", "quote": "OpenAI released"}]}
@@ -406,7 +406,7 @@ def test_export_zip_contents_and_scopes(client):
 def _card_fixture():
     f = lambda n: [{"about": "Zorblax", "kind": "release", "text": f"Zorblax {n} を公開", "value": str(n)}]  # noqa: E731
     for i in range(3):
-        art(24 * i + 1, [("Zorblax", "model"), ("Qorp", "org")], facts=f(2 + i), relations=[{"subject": "Zorblax", "type": "part_of", "object": "Qorp", "quote": "", "grounded": False}])
+        art(24 * i + 1, [("Zorblax", "model"), ("Qorp", "tech")], facts=f(2 + i), relations=[{"subject": "Zorblax", "type": "part_of", "object": "Qorp", "quote": "", "grounded": False}])
 
 
 def _night(monkeypatch=None):
@@ -441,7 +441,7 @@ def test_card_llm_only_public_allowed_changed_and_validated(client, monkeypatch,
         card = db.get(EntityCard, ent_id("Zorblax"))
         assert card.summary.startswith("Zorblax は") and card.model and db.get(EntityCard, ent_id("Hidden")) is None
     assert run(kg_job.run_cards())["calls"] == 0      # 変化が無ければ呼ばない
-    art(0.5, [("Zorblax", "model"), ("Qorp", "org")], facts=[{"about": "Zorblax", "kind": "price", "text": "価格", "value": "5"}])      # 主張が増えた＝変化
+    art(0.5, [("Zorblax", "model"), ("Qorp", "tech")], facts=[{"about": "Zorblax", "kind": "price", "text": "価格", "value": "5"}])      # 主張が増えた＝変化
     assert "Zorblax" in [t["name"] for t in kg_job.targets()]
     bad = Srv(lambda m, n: chat(json.dumps({"1": "出荷台数は 123456 台に達した"}, ensure_ascii=False)))
     monkeypatch.setattr(llm, "_post", bad)

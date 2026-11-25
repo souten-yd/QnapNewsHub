@@ -322,25 +322,37 @@ def _topics_of(db: Session, entity_id: int) -> list[str]:
 
 
 def evidence_rank(evs: list[dict]) -> int:
-    """主張の根拠の強さ（小さいほど強い）。根拠の段階 stage（数。小さいほど強い）の列があればその最小、無ければ原文に照合できた根拠（grounded）が 1 つでもあれば 0・根拠があるが照合できなければ 1・根拠なしは 2。
+    """主張の根拠の強さ（小さいほど強い）。根拠の段階 tier（exact 0・paraphrase 1・none 2）の列があればその最強、無ければ原文に照合できた根拠（grounded）が 1 つでもあれば 0・根拠があるが照合できなければ 1・根拠なしは 2。
     カードの「主張と根拠」・context の facts の並べ替えに使う（強い根拠が先）。"""
-    stages = [e["stage"] for e in evs if isinstance(e.get("stage"), int)]
-    if stages:
-        return min(stages)
-    return 0 if any(e.get("grounded") for e in evs) else (1 if evs else 2)
+    if any(e.get("grounded") for e in evs):
+        return 0
+    tiers = [e["tier"] for e in evs if e.get("tier") in kg.TIER_RANK]
+    if tiers:
+        return 2 - max(kg.TIER_RANK[t] for t in tiers)
+    return 1 if evs else 2
 
 
 def _claims_with_evidence(db: Session, entity_id: int, scopes: list[str], limit: int = 50) -> list[dict]:
-    claims = db.scalars(select(Claim).where(Claim.entity_id == entity_id, Claim.sensitivity.in_(scopes)).order_by(Claim.id.desc()).limit(limit)).all()
+    """主張と根拠。並びは根拠の段階（一致＞言い換え＞無し）→新しい順（2026-11-25）。各主張に tier・stated_at（日付の既定は記事の公開日）を付ける。"""
+    claims = db.scalars(select(Claim).where(Claim.entity_id == entity_id, Claim.sensitivity.in_(scopes)).order_by(Claim.id.desc()).limit(limit * 3)).all()
     evs: dict[int, list] = {}
     if claims:
         for ev, d in db.execute(select(Evidence, Document).join(Document, Document.id == Evidence.document_id).where(Evidence.claim_id.in_([c.id for c in claims]))):
             if d.sensitivity in scopes:
                 evs.setdefault(ev.claim_id, []).append({"document": {"id": d.id, "kind": d.kind, "title": d.title, "url": d.url, "source": d.source, "published_at": kg.iso(d.published_at)}, "quote": ev.quote, "start": ev.start, "end": ev.end,
-                                                         "page": ev.page, "quote_hash": ev.quote_hash, "grounded": bool(ev.grounded),
-                                                         **({"stage": getattr(ev, "stage")} if getattr(ev, "stage", None) is not None else {})})      # stage は根拠の段階の列があるときだけ（無ければ grounded だけで並べる）
-    return [{"id": c.id, "kind": c.kind, "text": c.text, "value": c.value, "ai_extracted": bool(c.ai_extracted), "model": c.model, "sensitivity": c.sensitivity,
-             "evidences": evs.get(c.id, [])} for c in claims]
+                                                         "page": ev.page, "quote_hash": ev.quote_hash, "grounded": bool(ev.grounded), **({"tier": ev.tier} if ev.tier else {})})      # tier は段階の列に値があるときだけ（古い行は grounded だけで並べる）
+
+    def tier(c: Claim) -> str:
+        best = max((kg.TIER_RANK[kg.tier_of(bool(e["grounded"]), e.get("tier", ""))] for e in evs.get(c.id, [])), default=0)
+        return {2: "exact", 1: "paraphrase", 0: "none"}[best]
+
+    rows = sorted(claims, key=lambda c: (-kg.TIER_RANK[tier(c)], -c.id))[:limit]
+    out = []
+    for c in rows:
+        docs = evs.get(c.id, [])
+        out.append({"id": c.id, "kind": c.kind, "text": c.text, "value": c.value, "ai_extracted": bool(c.ai_extracted), "model": c.model, "sensitivity": c.sensitivity,
+                    "tier": tier(c), "stated_at": kg.iso(c.stated_at) or (docs[0]["document"]["published_at"] if docs else ""), "evidences": docs})
+    return out
 
 
 def relations_of(db: Session, entity_id: int, scopes: list[str], limit: int = 60) -> list[dict]:
@@ -402,7 +414,7 @@ def save_note(db: Session, entity_id: int, body: str, user_id: int) -> dict | No
 
 _BAD = re.compile(r'[\\/:*?"<>|#^\[\]\x00-\x1f]+')
 REL_LABEL = {"uses": "使う", "supports": "対応する", "replaces": "置き換える", "competes": "競う", "part_of": "一部", "implements": "実装する", "cites": "引用する",
-             "contradicts": "矛盾する", "co_occurs": "一緒に出る", "other": "関係"}
+             "contradicts": "矛盾する", "made_by": "作った組織", "develops": "開発する", "co_occurs": "一緒に出る", "other": "関係"}
 
 
 def safe_name(name: str) -> str:
