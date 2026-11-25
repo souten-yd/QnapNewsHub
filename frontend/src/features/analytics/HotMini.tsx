@@ -12,7 +12,7 @@ export function HotMini() {
         <Link to="/analytics#sec-hot" className="nw-kicker" style={{ minHeight: 32, display: "inline-flex", alignItems: "center" }}>ホットトピック</Link>
         {top.length === 0 ? <span className="nw-muted" style={{ fontSize: ".75rem" }}>{h.data.enough_history ? "いまは目立って増えた語はありません" : "履歴をためています（3 日分で点数が出ます）"}</span>
           : top.map((t, i) => (
-            <Link key={t.term} to="/analytics#sec-hot" data-testid="hot-mini-item" className="nw-btn" style={{ minHeight: 32, fontSize: ".75rem" }} title={`点数 ${t.score?.toFixed(1)} · ${t.count} 件`}>{i + 1}. {t.label}{t.kind === "entity" ? "（物）" : ""}</Link>
+            <Link key={t.term} to="/analytics#sec-hot" data-testid="hot-mini-item" className="nw-btn" style={{ minHeight: 32, fontSize: ".75rem" }} title={`点数 ${t.score?.toFixed(1)} · ${t.count} 件`}>{i + 1}. {t.label}{t.kind === "entity" ? "（Things）" : ""}</Link>
           ))}
       </div>
     </div>

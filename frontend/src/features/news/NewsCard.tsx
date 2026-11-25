@@ -61,7 +61,7 @@ export function NewsCard({ item, channel, label, hideRemoves = false, dimRead = 
           </ul>
         )}
         {!!item.entities?.length && (
-          <ul className="card-ents" aria-label="物（AI の取り出し）" data-testid="card-entities">
+          <ul className="card-ents" aria-label="Things（AI の取り出し）" data-testid="card-entities">
             {item.entities.map((e) => <li key={e.id}><Link to={`/entities/${e.id}`} title={`${ENTITY_TYPE_LABEL[e.type] ?? e.type}（AI の取り出し）`}>{e.name}</Link></li>)}
           </ul>
         )}

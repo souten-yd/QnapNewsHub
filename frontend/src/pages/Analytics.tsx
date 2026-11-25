@@ -106,9 +106,9 @@ function TopicRow({ t, rank, showScore = true }: { t: HotTopic; rank: number; sh
   return (
     <li data-testid="hot-row" className="flex min-w-0 items-center gap-2 border-b border-zinc-100 py-2 last:border-0 dark:border-zinc-800">
       <span className="num w-5 shrink-0 text-right text-xs text-zinc-500">{rank}</span>
-      <Link to={t.kind === "entity" && t.entity_id ? `/entities/${t.entity_id}` : `/?q=${encodeURIComponent(t.label)}`} data-testid="hot-link" className="flex min-h-11 min-w-0 flex-1 items-center gap-2" aria-label={t.kind === "entity" ? `${t.label}（物）のページを見る` : `${t.label} の記事を見る`}>
+      <Link to={t.kind === "entity" && t.entity_id ? `/entities/${t.entity_id}` : `/?q=${encodeURIComponent(t.label)}`} data-testid="hot-link" className="flex min-h-11 min-w-0 flex-1 items-center gap-2" aria-label={t.kind === "entity" ? `${t.label}（Things）のページを見る` : `${t.label} の記事を見る`}>
         <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-1.5"><span className="truncate text-sm font-semibold">{t.label}</span>{t.kind === "entity" && <span data-testid="hot-entity-mark" className="shrink-0 rounded-md bg-accent-600/10 px-1 py-0.5 text-[10px] font-medium text-accent-700 dark:text-accent-300">物</span>}</span>
+          <span className="flex min-w-0 items-center gap-1.5"><span className="truncate text-sm font-semibold">{t.label}</span>{t.kind === "entity" && <span data-testid="hot-entity-mark" className="shrink-0 rounded-md bg-accent-600/10 px-1 py-0.5 text-[10px] font-medium text-accent-700 dark:text-accent-300">Things</span>}</span>
           <span className="num block break-words text-[11px] leading-snug text-zinc-500">{showScore && t.score != null ? `点数 ${t.score.toFixed(1)} · ` : ""}{t.growth_pct != null && showScore ? `平均より +${num(t.growth_pct)}% · ` : ""}{t.count} 件 · 出どころ {t.sources}</span>
         </span>
         <span className="w-16 shrink-0 text-accent-600 sm:w-24" aria-hidden><Sparkline values={t.spark} max={Math.max(1, ...t.spark)} fill heightClass="h-6" /></span>
@@ -181,7 +181,7 @@ function Arrivals() {
                     {d.note.lines.map((ln, i) => (
                       <li key={i} className="min-w-0 break-words text-sm leading-relaxed" data-testid="trend-note-line">{ln.text}
                         <span className="ml-1.5 inline-flex flex-wrap gap-1 align-middle">
-                          {ln.refs.map((r) => r.to ? <Link key={r.key} to={r.to} title={r.label} className="rounded-md border border-zinc-300 px-1.5 py-0.5 text-[10px] text-accent-700 dark:border-zinc-700 dark:text-accent-300">{r.kind === "event" ? "イベント" : "物"} {r.key}</Link>
+                          {ln.refs.map((r) => r.to ? <Link key={r.key} to={r.to} title={r.label} className="rounded-md border border-zinc-300 px-1.5 py-0.5 text-[10px] text-accent-700 dark:border-zinc-700 dark:text-accent-300">{r.kind === "event" ? "イベント" : "Things"} {r.key}</Link>
                             : <span key={r.key} title={r.label} className="rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">数字 {r.key}</span>)}
                         </span>
                       </li>
@@ -202,13 +202,13 @@ function Arrivals() {
             </div>
             <div className="min-w-0 space-y-3">
               <div>
-                <h3 className="text-sm font-semibold">新しく出た物</h3>
+                <h3 className="text-sm font-semibold">新しく出たThings</h3>
                 {d.new_entities.length === 0 ? <p className="py-1 text-xs text-zinc-500" data-testid="arrivals-new-empty">ありません。</p> : (
                   <ul className="mt-1 flex flex-wrap gap-1.5" data-testid="arrivals-new">{d.new_entities.map((e) => <li key={e.id}><Link to={`/entities/${e.id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700">{e.name}<span className="num text-zinc-500">{e.count}</span></Link></li>)}</ul>
                 )}
               </div>
               <div>
-                <h3 className="text-sm font-semibold">急に増えた物</h3>
+                <h3 className="text-sm font-semibold">急に増えたThings</h3>
                 {d.surging_entities.length === 0 ? <p className="py-1 text-xs text-zinc-500">ありません。</p> : (
                   <ul className="mt-1 flex flex-wrap gap-1.5" data-testid="arrivals-surging">{d.surging_entities.map((e) => <li key={e.entity_id}><Link to={`/entities/${e.entity_id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700">{e.label}<span className="num text-zinc-500">{e.count} 件</span></Link></li>)}</ul>
                 )}
@@ -349,11 +349,11 @@ export default function AnalyticsPage() {
       <div className="grid gap-2 md:grid-cols-2">
         <Link to="/map" data-testid="map-link" className="block min-w-0 rounded-2xl border border-zinc-200 p-3 hover:border-accent-600 dark:border-zinc-800">
           <h2 className="text-sm font-bold">知識の地図 →</h2>
-          <p className="mt-1 text-xs text-zinc-500">物（モデル・会社・技術）のつながりを地図で見る。点を選ぶとカード、周りから段階的に広げる</p>
+          <p className="mt-1 text-xs text-zinc-500">Things（モデル・会社・技術）のつながりを地図で見る。点を選ぶとカード、周りから段階的に広げる</p>
         </Link>
         <Link to="/entities" data-testid="entities-link" className="block min-w-0 rounded-2xl border border-zinc-200 p-3 hover:border-accent-600 dark:border-zinc-800">
-          <h2 className="text-sm font-bold">物 →</h2>
-          <p className="mt-1 text-xs text-zinc-500">記事から AI が取り出した物（モデル・会社・技術）の一覧と、物ごとの年表・facts を見る</p>
+          <h2 className="text-sm font-bold">Things →</h2>
+          <p className="mt-1 text-xs text-zinc-500">記事から AI が取り出したThings（モデル・会社・技術）の一覧と、Thingsごとの年表・facts を見る</p>
         </Link>
       </div>
     </div>

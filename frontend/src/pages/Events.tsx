@@ -4,7 +4,7 @@ import { hoursSince, sinceLabel, useEvent, useEvents, type EventRow, type EventS
 import { ENTITY_TYPE_LABEL } from "../api/news";
 import { Card } from "../features/news/settingsUi";
 
-/** イベント（/events）: 同じ出来事を報じる記事のまとまり（SimHash・題の語・取り出した物の重なりで、言語をまたいで粗くまとめる）。
+/** イベント（/events）: 同じ出来事を報じる記事のまとまり（SimHash・題の語・取り出したThingsの重なりで、言語をまたいで粗くまとめる）。
  *  イベントのページ（/events/:id）は関わる記事を時刻順に・出どころの種類ごとに。要約は AI（無料の LLM）で、記事が 3 件以上・出どころ 2 以上のときだけ。 */
 const SORTS: [EventSort, string][] = [["recent", "動きの新しい順"], ["size", "記事の多い順"], ["first", "初報の新しい順"]];
 const DAYS: [number, string][] = [[1, "1 日"], [2, "2 日"], [7, "7 日"], [30, "30 日"]];
@@ -37,7 +37,7 @@ function Row({ e }: { e: EventRow }) {
       </p>
       {e.summary && <p className="mt-1.5 break-words text-xs leading-relaxed text-zinc-700 dark:text-zinc-300" data-testid="event-summary"><span className="mr-1 font-semibold text-amber-700 dark:text-amber-400">{AI_SUMMARY}</span>{e.summary}</p>}
       {e.entities.length > 0 && (
-        <ul className="mt-2 flex flex-wrap gap-1" aria-label="物" data-testid="event-entities">
+        <ul className="mt-2 flex flex-wrap gap-1" aria-label="Things" data-testid="event-entities">
           {e.entities.map((t) => <li key={t.id}><Link to={`/entities/${t.id}`} title={ENTITY_TYPE_LABEL[t.type] ?? t.type} className="inline-flex min-h-7 items-center rounded-md bg-zinc-100 px-2 text-[11px] hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700">{t.name}</Link></li>)}
         </ul>
       )}
@@ -53,7 +53,7 @@ export default function EventsPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-3 p-3 md:p-6" data-testid="events-page">
       <h1 className="text-xl font-semibold tracking-tight">イベント</h1>
-      <p className="text-xs leading-relaxed text-zinc-500">同じ出来事を報じる記事のまとまりです（言語をまたいで、題の近さ・取り出した物の重なりで粗くまとめます。別の出来事が混ざることも、同じ出来事が分かれることもあります）。</p>
+      <p className="text-xs leading-relaxed text-zinc-500">同じ出来事を報じる記事のまとまりです（言語をまたいで、題の近さ・取り出したThingsの重なりで粗くまとめます。別の出来事が混ざることも、同じ出来事が分かれることもあります）。</p>
       <div className="flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
         <Seg label="並び" value={sort} onChange={setSort} items={SORTS} testId="event-sort" />
         <Seg label="期間" value={days} onChange={setDays} items={DAYS} testId="event-days" />
@@ -97,7 +97,7 @@ export function EventPage() {
         </Card>
       )}
       {d.entities.length > 0 && (
-        <ul className="flex flex-wrap gap-1.5" aria-label="物" data-testid="event-entities">
+        <ul className="flex flex-wrap gap-1.5" aria-label="Things" data-testid="event-entities">
           {d.entities.map((t) => <li key={t.id}><Link to={`/entities/${t.id}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs hover:border-accent-600 dark:border-zinc-700">{t.name}<span className="num text-zinc-500">{t.n}</span></Link></li>)}
         </ul>
       )}

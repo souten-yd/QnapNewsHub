@@ -212,6 +212,37 @@ const KG_HISTORY = { changes: 1, contradictions: 2, series: [{ kind: "price", en
   { claim_id: 3, t: ago(24 * 2), value: "1500", text: "価格", title: "A 社の報道", url: "https://news.example.test/a/3", mark: "contradiction", ai_extracted: true },
   { claim_id: 4, t: ago(24 * 2 - 5), value: "1300", text: "価格", title: "B 社の報道", url: "https://news.example.test/a/4", mark: "contradiction", ai_extracted: true }] }] };
 
+const DEGREE = (id: number) => KG_EDGES.filter((e) => e.source === id || e.target === id).length;
+const GROUP_OF = (type: string, dir: string) => type === "part_of" ? (dir === "out" ? "upper" : dir === "in" ? "lower" : "peers") : type === "competes" || type === "co_occurs" ? "peers"
+  : ["uses", "implements", "supports"].includes(type) ? (dir === "in" ? "used_by" : "uses") : type === "replaces" ? (dir === "in" ? "replaced_by" : "replaces") : type === "contradicts" ? "contradicts" : "other";
+const GROUP_LABELS: [string, string][] = [["upper", "上位"], ["lower", "下位"], ["peers", "仲間"], ["uses", "使う"], ["used_by", "使われる"], ["replaces", "置き換える"], ["replaced_by", "置き換えられる"], ["contradicts", "矛盾"], ["other", "その他"]];
+const DEFS: Record<number, string> = { 1: "ローカルで LLM を動かす C/C++ の推論エンジン。", 2: "Alibaba が公開する汎用の大規模言語モデル。", 3: "中国の IT 企業。", 5: "モデルの重みを小さい数値で表して軽くする技術。" };
+
+/** 全体の地図の見本。小さい版は KG_NODES・KG_EDGES、bigMap は 1,500 点・3,500 本・24 のまとまり（決まった乱数なので毎回同じ）。 */
+export function overviewMock(big: boolean) {
+  if (!big) {
+    const nodes = KG_NODES.map((n) => ({ id: n.id, name: n.name, type: n.type, article_count: n.article_count, degree: DEGREE(n.id), recent: 1, community: 1 }));
+    return { nodes, edges: KG_EDGES.map(({ first_at, sensitivity, ...e }) => e), isolated: [{ id: 4, name: "Radeon AI PRO R9700", type: "product", article_count: 6, degree: 0, recent: 0, community: 0 }],
+      communities: [{ id: 1, name: "llama.cpp", size: 7, rep_id: 1, shown: 7, top: [{ id: 1, name: "llama.cpp" }, { id: 2, name: "Qwen 3.5" }] }], truncated: false, limit: 1500,
+      totals: { with_relations: 7, edges: 7, shown_nodes: 7, shown_edges: 7 } };
+  }
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  const types = ["model", "software", "org", "person", "tech", "product", "game", "policy", "place", "other"];
+  const nodes = Array.from({ length: 1500 }, (_, i) => ({ id: 1000 + i, name: `Things ${i + 1}`, type: types[i % types.length], article_count: Math.max(1, Math.floor(200 / (i + 1) ** 0.7)), degree: Math.max(1, Math.floor(80 / (i + 1) ** 0.6)), recent: 0, community: (i % 24) + 1 }));
+  nodes[0].name = "Qwen 3.5"; nodes[1].name = "llama.cpp";
+  const rels = ["uses", "supports", "part_of", "co_occurs", "competes", "implements"];
+  const edges = Array.from({ length: 3500 }, (_, i) => { const a = Math.floor(rnd() ** 2 * 1500), c = a % 24; const b = (Math.floor(rnd() * 62) * 24 + c) % 1500;
+    return { id: 5000 + i, source: 1000 + a, target: 1000 + (b === a ? (b + 24) % 1500 : b), type: rels[i % rels.length], directed: i % 2 === 0, confidence: 0.3 + (i % 7) / 10, status: i % 5 === 0 ? "inferred" : "extracted", evidence_count: 1 + (i % 9), last_at: ago(24 * (i % 90)) }; });
+  const communities = Array.from({ length: 24 }, (_, c) => ({ id: c + 1, name: nodes[c].name, size: 62, rep_id: nodes[c].id, shown: 62, top: [{ id: nodes[c].id, name: nodes[c].name }] }));
+  return { nodes, edges, isolated: [], communities, truncated: true, limit: 1500, totals: { with_relations: 4604, edges: 23821, shown_nodes: 1500, shown_edges: 3500 } };
+}
+
+const MOC_COMMUNITY = { kind: "community", id: 1, title: "llama.cpp のまとまり", size: 7,
+  things: KG_NODES.slice(0, 5).map((n) => ({ id: n.id, name: n.name, type: n.type, article_count: n.article_count, last_seen: ago(3), definition: DEFS[n.id] ?? "" })),
+  events: [{ id: 2, title: "llama.cpp b9000 の量子化の更新", n_articles: 3, last_at: ago(9), summary: "", things: ["llama.cpp"] }],
+  questions: [{ entity_id: 2, entity: "Qwen 3.5", question: "長い文脈で品質が劣化するか？" }, { entity_id: 1, entity: "llama.cpp", question: "AMD GPU での速度は十分か？" }] };
+
 /** connector の見本（backend の connectors.describe の形）。数字は見本で、実データではない。 */
 const TERMS = (status: string, over: Record<string, string> = {}) => ({ id: "x", status, license: "メタデータは CC0（本体は著作権の対象）", storage: "メタデータだけ保存（本体は保存しない）", redistribution: "allowed", rate: "3 秒に 1 回以下・同時 1 接続",
   tos_url: "https://example.test/terms/api", notes: "見本の注意。公式を装わない。", checked_at: "2026-11-25", ai_use: "allowed", ...over });
@@ -242,11 +273,15 @@ export interface MockState {
   connectors: typeof CONNECTORS;
   /** 知識カードの利用者のメモ（PUT で更新される） */
   kgNote?: string;
+  /** 全体の地図を 1,500 点の大きい見本にする（性能の確認） */
+  bigMap?: boolean;
+  /** 確定・却下したつなぐ候補の記事 id */
+  decidedMentions: number[];
 }
 
 export function newState(over: Partial<MockState> = {}): MockState {
   return { authenticated: true, setupNeeded: false, username: "admin", keySet: false, prefs: structuredClone(PREFS), settings: structuredClone(SETTINGS),
-    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, update: structuredClone(UPDATE_BASE), gatewayKeySet: false, gatewayDown: false, link: structuredClone(LINK_BASE), connectors: structuredClone(CONNECTORS), ...over };
+    hidden: new Set(), calls: [], unhandled: [], items: ITEMS, restActive: false, diagProblems: false, update: structuredClone(UPDATE_BASE), gatewayKeySet: false, gatewayDown: false, link: structuredClone(LINK_BASE), connectors: structuredClone(CONNECTORS), decidedMentions: [], ...over };
 }
 
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -265,7 +300,7 @@ const diagnostics = (state: MockState) => ({
     quota: state.settings.llm.quota, spare_used: 4, leftover: 730, night_from: 21, extract_enabled: true, extract_waiting: 33,
     chain: { gateway_down_in_seconds: 420, chain: ["example/free-model:free", "example/second-model:free"], current: "example/second-model:free", index: 1, return_in_seconds: 1500, events: [{ at: ago(0.4), kind: "switch", model: "example/second-model:free", reason: "example/free-model:free が直近 5 回で 3 回失敗（429）" }] },
     gateway: { enabled: true, base_set: true, key_set: true, calls: 6, model: "auto", batch: 10 },
-    knowledge: { entities: 128, claims: 340, extracted_articles: 410 },
+    knowledge: { entities: 128, claims: 340, extracted_articles: 410, cards: 36, communities: 12, mention_candidates: 58 },
     events: { events: 41, summarized: 9, summary_waiting: 2, summary_gave_up: 1, trend_note_day: new Date(NOW).toLocaleDateString("en-CA"), trend_note_slot: 0 } },
   storage: {
     io: { rchar: 9_000_000, wchar: 350_000, read_bytes: 4_000_000, write_bytes: 1_048_576, syscw: 900 },
@@ -381,15 +416,24 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
       return json(route, { items, total: items.length, types: ["model", "software", "org", "person", "tech", "product", "game", "policy", "place", "other"] });
     }
     if (is("GET", /^\/entities\/\d+$/)) return json(route, { ...ENTITY_DETAIL, id: Number(path.split("/")[2]) });
-    if (is("GET", /^\/kg\/entities\/\d+\/card$/)) {
-      const id = Number(path.split("/")[3]);
+    if (is("GET", /^\/(kg\/entities|things)\/\d+\/card$/)) {
+      const id = Number(path.split("/")[path.startsWith("/things") ? 2 : 3]);
       const me = KG_NODES.find((n) => n.id === id) ?? KG_NODES[1];
       const rels = KG_EDGES.filter((e) => e.source === id || e.target === id).map((e) => {
         const other = KG_NODES.find((n) => n.id === (e.source === id ? e.target : e.source))!;
         return { ...e, direction: !e.directed ? "both" : e.source === id ? "out" : "in", other: { id: other.id, name: other.name, type: other.type }, status_label: e.status };
       });
+      const groups = GROUP_LABELS.map(([key, label]) => ({ key, label, items: rels.filter((r) => GROUP_OF(r.type, r.direction) === key).map((r) => ({ ...r, other: { ...r.other, definition: DEFS[r.other.id] ?? "" } })) }))
+        .filter((g) => g.items.length).map((g) => ({ ...g, count: g.items.length, more: 0 }));
+      const rich = id === 2;
       return json(route, { id: me.id, name: me.name, type: me.type, sensitivity: "public", ai_use: "allowed",
-        overview: id === 2 ? { text: "Qwen 3.5 は Alibaba の公開モデルで、llama.cpp などの実行環境が対応を進めています。", model: "example/free-model:free", at: ago(10), ai: true } : null,
+        brief: { definition: rich ? DEFS[2] : "", type: me.type, state: rich ? { key: "official", label: "正式公開" } : { key: "unknown", label: "不明" }, confidence: me.article_count > 10 ? 0.97 : 0.75, confidence_label: me.article_count > 10 ? "高" : "中",
+          aliases: rich ? ["Qwen3.5", "通義千問 3.5"] : [], evidence_count: me.article_count, latest_evidence_at: ago(3), checked_at: rich ? ago(10) : "" },
+        groups, questions: rich ? ["長い文脈で品質が劣化するか？", "AMD GPU での量子化の精度差はどれくらいか？"] : [], opposing: rich ? ["Alibaba の別モデルのほうが日本語に強いとの見方もある。"] : [],
+        metrics: rich ? [{ source: "claim", kind: "benchmark", label: "R9700 で Q4_K_M の生成速度", value: "25 tok/s", unit: "", at: "", url: "https://news.example.test/a/1" }, { source: "metric", kind: "stars", label: "stars（daily）", value: "1200", unit: "count", at: ago(24), url: "" }] : [],
+        mentions: rich ? [{ article_id: 3, title: "Qwen 3.5 の量子化を試した記録", url: "https://news.example.test/a/3", source: "forum-a", matched: "Qwen 3.5", published_at: ago(30) },
+                          { article_id: 4, title: "Qwen 3.5 vs Gemma の比較", url: "https://news.example.test/a/4", source: "forum-a", matched: "Qwen 3.5", published_at: ago(50) }].filter((m) => !state.decidedMentions.includes(m.article_id)) : [],
+        overview: rich ? { text: "Qwen 3.5 は Alibaba の公開モデルで、llama.cpp などの実行環境が対応を進めています。", model: "example/free-model:free", at: ago(10), ai: true } : null,
         elements: { aliases: ["Qwen3.5"], first_seen: ago(300), last_seen: ago(3), article_count: me.article_count, topics: ["量子化", "GGUF"] },
         timeline: [], relations: rels, history: id === 2 ? KG_HISTORY : { changes: 0, contradictions: 0, series: [] },
         claims: [{ id: 1, kind: "release", text: "Qwen 3.5 が公開された", value: "3.5", ai_extracted: true, model: "example/free-model:free", sensitivity: "public",
@@ -397,15 +441,32 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
                                { document: { id: 2, kind: "paper", title: "論文の見本", url: "https://arxiv.example.test/abs/2401.00001" }, quote: "", start: 10, end: 40, page: 3, quote_hash: "", grounded: false }] }],
         note: { body: state.kgNote ?? "", updated_at: state.kgNote ? ago(0) : "" } });
     }
+    if (is("POST", /^\/things\/\d+\/mentions\/\d+\/(confirm|dismiss)$/)) { state.decidedMentions.push(Number(path.split("/")[4])); return json(route, { status: path.endsWith("confirm") ? "confirmed" : "dismissed" }); }
+    if (is("GET", "/things/map/overview")) return json(route, overviewMock(Boolean(state.bigMap)));
+    if (is("GET", /^\/things\/map\/community\/\d+$/)) { const o = overviewMock(Boolean(state.bigMap)); const id = Number(path.split("/")[4]); const ns = o.nodes.filter((n) => n.community === id).slice(0, 300); const ids = new Set(ns.map((n) => n.id));
+      return json(route, { id, name: o.communities[0].name, size: ns.length, nodes: ns, edges: o.edges.filter((e) => ids.has(e.source) && ids.has(e.target)) }); }
+    if (is("GET", "/things/moc")) return json(route, { communities: [{ id: 1, name: "llama.cpp", size: 7 }, { id: 2, name: "Alibaba", size: 4 }], channels: [{ id: "local-llm", name: "ローカル LLM", color: "#f5c518" }, { id: "amd-gpu", name: "AMD・GPU", color: "#38bdf8" }] });
+    if (is("GET", /^\/things\/moc\/community\/\d+$/)) return json(route, MOC_COMMUNITY);
+    if (is("GET", /^\/things\/moc\/channel\/[\w-]+$/)) return json(route, { ...MOC_COMMUNITY, kind: "channel", id: path.split("/")[4], title: "チャンネル「ローカル LLM」", size: 38 });
     if (is("PUT", /^\/kg\/entities\/\d+\/note$/)) { state.kgNote = (body as { body: string }).body; return json(route, { body: state.kgNote, updated_at: ago(0) }); }
     if (is("GET", "/graph/seeds")) return json(route, { items: KG_NODES.slice(0, 3) });
     if (is("POST", "/graph/neighbors")) {
-      const b = body as { ids: number[]; types?: string[]; min_confidence?: number; limit?: number };
-      const seeds = KG_NODES.filter((n) => b.ids.includes(n.id));
-      const es = KG_EDGES.filter((e) => (b.ids.includes(e.source) || b.ids.includes(e.target)) && (!b.types?.length || b.types.includes(e.type)) && e.confidence >= (b.min_confidence ?? 0)).slice(0, b.limit ?? 60);
+      const b = body as { ids: number[]; types?: string[]; min_confidence?: number; limit?: number; depth?: number };
+      const withDeg = (n: (typeof KG_NODES)[number]) => ({ ...n, degree: DEGREE(n.id), last_edge_at: ago(24) });
+      const seeds = KG_NODES.filter((n) => b.ids.includes(n.id)).map(withDeg);
       const known = new Set(b.ids);
-      const nodes = [...new Set(es.flatMap((e) => [e.source, e.target]))].filter((i) => !known.has(i)).map((i) => KG_NODES.find((n) => n.id === i)!);
-      return json(route, { seeds, levels: [{ depth: 1, nodes, edges: es }], truncated: false });
+      const levels: { depth: number; nodes: unknown[]; edges: unknown[] }[] = [];
+      let frontier = [...known];
+      const used = new Set<number>();
+      for (let d = 1; d <= (b.depth ?? 1) && frontier.length; d += 1) {
+        const es = KG_EDGES.filter((e) => !used.has(e.id) && (frontier.includes(e.source) || frontier.includes(e.target)) && (!b.types?.length || b.types.includes(e.type)) && e.confidence >= (b.min_confidence ?? 0)).slice(0, b.limit ?? 60);
+        es.forEach((e) => used.add(e.id));
+        const nodes = [...new Set(es.flatMap((e) => [e.source, e.target]))].filter((i) => !known.has(i)).map((i) => withDeg(KG_NODES.find((n) => n.id === i)!));
+        nodes.forEach((n) => known.add(n.id));
+        levels.push({ depth: d, nodes, edges: es });
+        frontier = nodes.map((n) => n.id);
+      }
+      return json(route, { seeds, levels, truncated: false });
     }
     if (is("POST", "/kg/export")) return route.fulfill({ status: 200, contentType: "application/zip", headers: { "X-Export-Files": "3" }, body: Buffer.from("PK\x05\x06" + "\0".repeat(18), "binary") });
     if (is("GET", "/news/settings")) return json(route, {

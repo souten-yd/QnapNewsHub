@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { AUTH_KEY, useAuthStatus } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
@@ -10,10 +10,16 @@ import NewsPage from "./pages/News";
 import AnalyticsPage from "./pages/Analytics";
 import KnowledgeMapPage from "./pages/KnowledgeMap";
 import EntitiesPage, { EntityPage } from "./pages/Entities";
+import { MocIndexPage, MocPage } from "./pages/Moc";
 import EventsPage, { EventPage } from "./pages/Events";
 import NewsSourcesPage from "./pages/NewsSources";
 import SettingsPage from "./pages/Settings";
 import DiagnosticsPage from "./pages/Diagnostics";
+
+/** /things/:id は /entities/:id の別名（画面の名前を Things にしたので、そう打っても開く）。 */
+function ThingRedirect() {
+  return <Navigate to={`/entities/${useParams().id ?? ""}`} replace />;
+}
 
 /** 状態（管理者がいるか・ログイン中か）で、最初の管理者を作る画面・ログイン・本体を切り替える。 */
 export default function App() {
@@ -48,6 +54,10 @@ export default function App() {
         <Route path="/entities" element={<EntitiesPage />} />
         <Route path="/entities/:id" element={<EntityPage />} />
         <Route path="/map" element={<KnowledgeMapPage />} />
+        <Route path="/moc" element={<MocIndexPage />} />
+        <Route path="/moc/:kind/:id" element={<MocPage />} />
+        <Route path="/things" element={<Navigate to="/entities" replace />} />
+        <Route path="/things/:id" element={<ThingRedirect />} />
         <Route path="/sources" element={<NewsSourcesPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

@@ -18,7 +18,7 @@ export interface NewsItem {
   also?: number; also_sources?: string[];
   /** 同じ出来事（イベント）の記事を 1 つにまとめたとき: イベントの id・ほかの記事の数・出どころの数・一次情報の有無 */
   event?: { id: number; others: number; sources: number; primary: boolean };
-  /** 要素の取り出し（AI）で取れた物の札（記事の数が多い順に最大 4）。押すと物のページ */
+  /** 要素の取り出し（AI）で取れたThingsの札（記事の数が多い順に最大 4）。押すとThingsのページ */
   entities?: EntityTag[];
 }
 export interface EntityTag { id: number; name: string; type: EntityType }
@@ -412,7 +412,7 @@ export interface GatewayTest { ok: boolean; models: string[]; ms: number; error:
 export const useTestGateway = () =>
   useMutation({ mutationFn: (baseUrl: string) => api<GatewayTest>("/news/gateway/test", { method: "POST", json: { base_url: baseUrl } }) });
 
-/** 物（要素の取り出し）。backend/qnapnewshub/entities.py・entities_router.py と対になる。 */
+/** Things（要素の取り出し）。backend/qnapnewshub/entities.py・entities_router.py と対になる。 */
 export type EntityType = "model" | "software" | "org" | "person" | "tech" | "product" | "game" | "policy" | "place" | "other";
 export const ENTITY_TYPE_LABEL: Record<EntityType, string> = {
   model: "モデル", software: "ソフト", org: "組織", person: "人", tech: "技術", product: "製品", game: "ゲーム", policy: "制度", place: "場所", other: "その他",
