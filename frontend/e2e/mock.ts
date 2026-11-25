@@ -100,7 +100,7 @@ export const SETTINGS: NewsRuntimeSettings = {
   translate: { engine: "quickmt", threads: 2, batch: 32, beam: 2, cpu_isa: "", body_enabled: true, body_per_day: 100, body_max_chars: 20000, ondemand: true, hq_jobs: true, llm_wait_hours: 6,
     glossary: { prefill: "プリフィル" }, keep: [], max_en_ratio: 0.5 },
   llm: { digest_model: "example/free-model:free", gist_enabled: false, gist_model: "example/free-model:free", digest_focus: "", prep_enabled: true, prep_model: "example/free-model:free", prep_max_per_run: 100, daily_limit: 800, minute_limit: 15,
-    extract_enabled: true, fallback_models: [], quota: { prep: 300, gist: 150, digest: 20, card: 150, trend: 10, event: 100, spare: 70 }, night_from: 21, backfill_enabled: true,
+    extract_enabled: true, fallback_models: [], quota: { prep: 300, gist: 150, digest: 20, card: 150, trend: 10, event: 100, resolve: 0, spare: 70 }, night_from: 21, backfill_enabled: true,
     gateway: { enabled: false, base_url: "", model: "auto", first: true, batch: 10, timeout_seconds: 300, minute_limit: 6, cooldown_minutes: 10 } },
 };
 
@@ -463,9 +463,10 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("POST", /^\/things\/\d+\/mentions\/\d+\/(confirm|dismiss)$/)) { state.decidedMentions.push(Number(path.split("/")[4])); return json(route, { status: path.endsWith("confirm") ? "confirmed" : "dismissed" }); }
     if (is("GET", "/things/merge-candidates")) {
       const done = state.mergeActions ?? [];
-      return json(route, { total: done.some((a) => a.startsWith("confirm") || a.startsWith("dismiss")) ? 0 : 1,
-        items: done.some((a) => a.startsWith("confirm") || a.startsWith("dismiss")) ? [] : [{ id: 7, reason: "rule_type", score: 0.8, keep: { id: 3, name: "VRChat", type: "software", article_count: 6 }, drop: { id: 9, name: "VRChat Inc.", type: "org", article_count: 1 } }],
-        merges: [{ id: 1, winner: { id: 1, name: "Sony" }, loser: { id: 5, name: "Sony Corporation" }, mode: "auto", reason: "rule", merged_at: ago(5), undone: done.includes("undo:1"), can_undo: !done.includes("undo:1") }] });
+      return json(route, { total: 1, items: [{ id: 7, reason: "rule_type", score: 0.8, keep: { id: 3, name: "VRChat", type: "software", article_count: 6 }, drop: { id: 9, name: "VRChat Inc.", type: "org", article_count: 1 } }],
+        merges: [{ id: 1, winner: { id: 1, name: "Sony" }, loser: { id: 5, name: "Sony Corporation" }, mode: "auto", reason: "rule", merged_at: ago(5), undone: done.includes("undo:1"), can_undo: !done.includes("undo:1") },
+          { id: 2, winner: { id: 2, name: "OpenAI" }, loser: { id: 6, name: "オープンエーアイ" }, mode: "wikidata", reason: "Q21708200", basis: { stage: "wikidata", qid: "Q21708200", description: "アメリカの人工知能研究機関" }, merged_at: ago(4), undone: false, can_undo: true },
+          { id: 3, winner: { id: 3, name: "Mistral AI" }, loser: { id: 8, name: "ミストラル" }, mode: "llm", reason: "llm 0.93", basis: { stage: "llm", confidence: 0.93, reason: "英語名の日本語表記" }, merged_at: ago(3), undone: false, can_undo: true }] });
     }
     if (is("POST", /^\/things\/(merge-candidates\/\d+\/(confirm|dismiss)|merges\/\d+\/undo)$/)) { const p = path.split("/"); (state.mergeActions ??= []).push(`${p[2] === "merges" ? "undo" : p[4]}:${p[2] === "merges" ? p[3] : p[3]}`); return json(route, { status: "ok" }); }
     if (is("GET", "/things/map/overview")) return json(route, overviewMock(state.bigMap ?? false, Boolean(state.noLayout)));
@@ -498,7 +499,7 @@ export async function mockApi(page: Page, state: MockState): Promise<void> {
     if (is("GET", "/news/settings")) return json(route, {
       settings: state.settings, weekdays: ["月", "火", "水", "木", "金", "土", "日"], interval_minutes: 30, prep_calls_today: 12, prep_batch: 30,
       rest_state: { enabled: state.settings.rest.enabled, active: state.restActive, mode: state.settings.rest.mode, ends_at: state.restActive ? "2026-11-25T06:00:00" : null },
-      quota_labels: { prep: "下ごしらえと取り出し", gist: "要約", digest: "まとめ", card: "知識カード", trend: "傾向の解説", event: "イベントの要約", spare: "予備" },
+      quota_labels: { prep: "下ごしらえと取り出し", gist: "要約", digest: "まとめ", card: "知識カード", trend: "傾向の解説", event: "イベントの要約", resolve: "名寄せの判定", spare: "予備" },
       model_chain: { gateway_down_in_seconds: null, chain: ["example/free-model:free"], current: "example/free-model:free", index: 0, return_in_seconds: null, paid: [], events: [] },
       gateway_key_set: state.gatewayKeySet,
       rest_modes: { keep_memory: "集め続けてメモリに保持", stop_all: "集める・分析・保存をすべて休む", flush_at_limit: "集め続けて上限のときだけ一括で保存" },

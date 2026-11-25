@@ -15,6 +15,8 @@ export interface Diagnostics {
     quota: Record<string, number>; spare_used: number; leftover: number; night_from: number; extract_enabled: boolean; extract_waiting: number;
     chain: { gateway_down_in_seconds: number | null; chain: string[]; current: string; index: number; return_in_seconds: number | null; events: { at: string; kind: string; model: string; reason: string }[] };
     gateway: { enabled: boolean; base_set: boolean; key_set: boolean; calls: number; model: string; batch: number };
+    resolve?: { merged_by_stage: { auto: number; wikidata: number; llm: number; confirmed: number }; undone: number; wikidata: { linked: number; none: number; ambiguous: number }; pending_pairs: number;
+      tonight: { wd_requests: number; wd_max: number; llm_calls: number; llm_max: number }; last: { wikidata?: { error?: string } | null; llm?: { error?: string } | null } | null };
     cards?: { night_from: number; window_open: boolean; next_run_at: string; blocked: string; pending: number; made: number; gave_up: number; max_tries: number;
       last: { at: string; done: number; calls: number; error: string; failed: number; todo: number } | null };
     knowledge: { entities: number; claims: number; extracted_articles: number; cards?: number; communities?: number; mention_candidates?: number; merged?: number; merge_candidates?: number };

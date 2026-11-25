@@ -5,7 +5,7 @@ import { Card, ghost, primary } from "../features/news/settingsUi";
 const bytes = (n: number) => (n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : n >= 1 << 10 ? `${(n / (1 << 10)).toFixed(0)} KB` : `${n} B`);
 const clock = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 const dur = (s: number) => (s >= 86400 ? `${Math.floor(s / 86400)} 日 ${Math.floor((s % 86400) / 3600)} 時間` : s >= 3600 ? `${Math.floor(s / 3600)} 時間 ${Math.floor((s % 3600) / 60)} 分` : `${Math.floor(s / 60)} 分`);
-const QUOTA_LABEL: Record<string, string> = { prep: "下ごしらえと取り出し", gist: "要約", digest: "まとめ", card: "知識カード", trend: "傾向の解説", spare: "予備（借りた数）" };
+const QUOTA_LABEL: Record<string, string> = { prep: "下ごしらえと取り出し", gist: "要約", digest: "まとめ", card: "知識カード", trend: "傾向の解説", resolve: "名寄せの判定", spare: "予備（借りた数）" };
 const REASONS: Record<string, string> = { http: "HTTP エラー", timeout: "時間切れ", xml: "XML・形の異常", robots: "robots.txt", other: "その他" };
 
 function Row({ k, v, id }: { k: string; v: React.ReactNode; id?: string }) {
@@ -110,6 +110,11 @@ export default function DiagnosticsPage() {
           <Row k="ゲートウェイ" v={!l.gateway.enabled ? "使わない" : l.chain.gateway_down_in_seconds !== null ? `つながらないため、あと約 ${Math.floor(l.chain.gateway_down_in_seconds / 60) + 1} 分は外しています` : `使う（今日 ${l.gateway.calls} 回・1 回 ${l.gateway.batch} 件）`} id="llm-gateway" />
           <Row k="取り出したThings・fact・記事" v={`${l.knowledge.entities} Things・${l.knowledge.claims} fact・${l.knowledge.extracted_articles} 記事`} id="llm-knowledge" />
           {l.knowledge.communities !== undefined && <Row k="Things の脳（定義つきカード・まとまり・つなぐ候補）" v={`${l.knowledge.cards ?? 0} カード・${l.knowledge.communities} まとまり・${l.knowledge.mention_candidates ?? 0} 候補・名寄せ ${l.knowledge.merged ?? 0} 件（確認待ち ${l.knowledge.merge_candidates ?? 0}）`} id="llm-things" />}
+          {l.resolve && <Row k="名寄せの自動化（夜）" id="llm-resolve" v={[
+            `寄せた数 規則 ${l.resolve.merged_by_stage.auto}・Wikidata ${l.resolve.merged_by_stage.wikidata}・AI ${l.resolve.merged_by_stage.llm}（戻した ${l.resolve.undone}）`,
+            `Wikidata 照合 ${l.resolve.wikidata.linked} 件・該当なし ${l.resolve.wikidata.none}・決まらず ${l.resolve.wikidata.ambiguous}`,
+            `判断待ちの組 ${l.resolve.pending_pairs}・今夜 問い合わせ ${l.resolve.tonight.wd_requests}/${l.resolve.tonight.wd_max}・AI ${l.resolve.tonight.llm_calls}/${l.resolve.tonight.llm_max} 回`,
+            l.resolve.last?.wikidata?.error ? `Wikidata: ${l.resolve.last.wikidata.error}` : "", l.resolve.last?.llm?.error ? `AI: ${l.resolve.last.llm.error}` : ""].filter(Boolean).join(" / ")} />}
           {l.cards && <Row k="知識カードの仕事（夜）" id="llm-cards" v={[
             l.cards.blocked ? `止まっています（${l.cards.blocked}）` : l.cards.window_open ? "いま走れます（次の取得の回）" : `次は ${l.cards.next_run_at.slice(0, 16).replace("T", " ")} 以降の取得の回`,
             l.cards.last ? `最後 ${l.cards.last.at.slice(0, 16).replace("T", " ")}: 作成 ${l.cards.last.done}・検査落ち ${l.cards.last.failed}・呼び出し ${l.cards.last.calls}${l.cards.last.error ? `・失敗「${l.cards.last.error}」（数えずにやり直し）` : ""}` : "まだ走っていません",

@@ -7,8 +7,8 @@ import { GatewayCard } from "./GatewayCard";
 
 const label = "block text-xs text-zinc-500";
 const REST_MODES: Record<string, string> = { keep_memory: "集め続けてメモリに保持", stop_all: "集める・分析・保存をすべて休む", flush_at_limit: "集め続けて上限のときだけ一括で保存" };
-const PURPOSE_LABEL: Record<string, string> = { prep: "下ごしらえ", digest: "まとめ", gist: "一言要約", card: "知識カード", trend: "傾向の解説", backfill: "夜の後回し" };
-const QUOTA_ORDER = ["prep", "gist", "digest", "card", "trend", "spare"];
+const PURPOSE_LABEL: Record<string, string> = { prep: "下ごしらえ", digest: "まとめ", gist: "一言要約", card: "知識カード", trend: "傾向の解説", resolve: "名寄せの判定", backfill: "夜の後回し" };
+const QUOTA_ORDER = ["prep", "gist", "digest", "card", "trend", "resolve", "spare"];
 const isPaid = (name: string) => name.trim() !== "" && !name.trim().endsWith(":free") && !name.startsWith("gateway:");
 
 /** 有料のモデルを選んだときの注意（無料は :free で終わる）。 */

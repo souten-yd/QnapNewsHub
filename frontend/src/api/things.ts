@@ -36,11 +36,17 @@ export function useDecideMention(entityId: number) {
   });
 }
 
-/** 名寄せ（同じ物の別表記）。確かなものは夜に自動で寄せ、迷うものは候補として管理者が確定する。寄せた記録は元に戻せる。 */
+/** 名寄せ（同じ物の別表記）。夜に自動で寄せる（規則 → Wikidata → AI の判断）。寄せた記録（段と根拠つき）は元に戻せる。確定の操作は無い。 */
 export interface MergeSide { id: number; name: string; type: EntityType; article_count: number }
 export interface MergeCandidate { id: number; reason: string; score: number; keep: MergeSide; drop: MergeSide }
-export interface MergeRecord { id: number; winner: { id: number; name: string }; loser: { id: number; name: string }; mode: "auto" | "confirmed"; reason: string; merged_at: string; undone: boolean; can_undo: boolean }
+export interface MergeRecord { id: number; winner: { id: number; name: string }; loser: { id: number; name: string }; mode: "auto" | "wikidata" | "llm" | "confirmed"; reason: string; basis?: { stage?: string; qid?: string; label?: string; description?: string; confidence?: number; reason?: string }; merged_at: string; undone: boolean; can_undo: boolean }
 export const MERGE_REASON: Record<string, string> = { rule_type: "表記は同じだが種類が違う", rule_paren: "括弧を除くと同じ", cross_script: "日本語と英語の表記（同じ出来事の記事に別々に出る）", rule: "表記の規則（会社の語尾・版の書き方）", undone: "戻した組" };
+/** 寄せた段と根拠を 1 行にする（規則・Wikidata の QID と説明・AI の確かさと理由）。 */
+export function mergeStage(m: MergeRecord): string {
+  if (m.mode === "wikidata") return `Wikidata ${m.basis?.qid ?? m.reason}${m.basis?.description ? `（${m.basis.description}）` : ""}`;
+  if (m.mode === "llm") return `AI の判断 確かさ ${m.basis?.confidence?.toFixed(2) ?? ""}${m.basis?.reason ? `・${m.basis.reason}` : ""}`;
+  return m.mode === "confirmed" ? "確定" : "規則";
+}
 export const useMergeCandidates = () => useQuery({ queryKey: ["things", "merge"], queryFn: () => api<{ items: MergeCandidate[]; total: number; merges: MergeRecord[] }>("/things/merge-candidates?limit=30"), retry: false });
 export function useMergeAction() {
   const qc = useQueryClient();

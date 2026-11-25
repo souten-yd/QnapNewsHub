@@ -75,11 +75,11 @@ async def _read(client: httpx.AsyncClient, method: str, url: str, *, max_bytes: 
 
 
 async def get(url: str, *, params: dict | None = None, accept: str = "application/json", headers: dict | None = None,
-              timeout: float = 25, follow: bool = True, max_bytes: int = MAX_BYTES) -> tuple[int, dict, bytes]:
+              timeout: float = 25, follow: bool = True, max_bytes: int = MAX_BYTES, ua: str | None = None) -> tuple[int, dict, bytes]:
     """GET 1 回。follow なら 3 段までリダイレクトを追う（各段を検査。認証のヘッダーは別のホストへ付けない）。(status, headers, 本文)。"""
     _check_url(url, https_only=False)
     current = url
-    async with egress.guarded_client(timeout=timeout, headers={"User-Agent": UA, "Accept": accept, "Accept-Language": "ja,en;q=0.8"}) as client:
+    async with egress.guarded_client(timeout=timeout, headers={"User-Agent": ua or UA, "Accept": accept, "Accept-Language": "ja,en;q=0.8"}) as client:
         for _ in range(MAX_REDIRECTS + 1):
             same = urlsplit(current).hostname == urlsplit(url).hostname
             status, head, body = await _read(client, "GET", current, params=params if current == url else None, headers=headers if same else None, **({} if max_bytes == MAX_BYTES else {"max_bytes": max_bytes}))
