@@ -302,7 +302,7 @@ def test_gleaning_stops_at_the_daily_cap_and_when_disabled(monkeypatch, keyed):
 
 def test_prompt_version_and_rules_text():
     """目的: プロンプトの版を上げた（ex4）。関係は「原文が明示しているものだけ・引用を必ず」・取得元と一般語を入れない例・題の数を fact に、が指示に入っている。型 made_by・develops が型の一覧にある。"""
-    assert extract.PROMPT_VERSION == "ex4" and {"made_by", "develops"} <= set(extract.REL_TYPES) <= set(kg.REL_TYPES)
+    assert extract.PROMPT_VERSION == "ex5" and {"made_by", "develops"} <= set(extract.REL_TYPES) <= set(kg.REL_TYPES)
     text = prep.build_prompt([{"title": "T", "source": "S", "summary": "x", "id": 1}])
     assert "原文が明示している関係だけ" in text and "quote は必ず付け" in text and "出どころ・媒体の名前" in text and "題に出る数・価格・日付は必ず fact" in text
 

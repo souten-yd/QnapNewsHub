@@ -230,6 +230,8 @@ class Claim(Base):
     ai_extracted: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     # 主張が述べる日付の既定は記事の公開日（取り出しのとき入れる。古い行は NULL＝出どころの文書の日付を使う）
     stated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 数値の測定の条件（JSON: model・quant・hw・engine・ctx・version。bench.py）。空は条件の記載なし（古い行）
+    cond: Mapped[str] = mapped_column(Text, default="", server_default="")
     # 出どころの文書（documents）と、そこから引き継いだ機密の区分（kg.inherit）。根拠は evidences を複数持てる
     document_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     sensitivity: Mapped[str] = mapped_column(String(12), default="public", server_default="public")
@@ -700,6 +702,17 @@ class TrendNote(Base):
     stats: Mapped[str] = mapped_column(Text, default="{}")
 
 
+class WatchItem(Base):
+    """ウォッチリスト（watch.py）。監視する Things（entity_id）。既定は空。seen_at は「前回見た」時刻（変化の要約の起点。利用者が「見た」を押すと進む）。"""
+
+    __tablename__ = "watch_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_id: Mapped[int] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ChangeLog(Base):
     """差分の同期（changes.py）の変更番号。記事・物・イベントの追加・更新・削除を、DB の trigger が 1 つの物につき 1 行（最新の変更）に記録する。
     seq は AUTOINCREMENT（単調。消えた番号を再利用しない）。同じ（kind, ref_id）が変わると古い行を消して新しい seq で入れ直す（表は物の数を超えない）。
@@ -816,7 +829,8 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("research_records", "sensitivity", "VARCHAR(12) NOT NULL DEFAULT 'public'"),
                                         ("entity_cards", "definition", "TEXT NOT NULL DEFAULT ''"), ("entity_cards", "state", "VARCHAR(12) NOT NULL DEFAULT ''"),
                                         ("entity_merges", "basis", "TEXT NOT NULL DEFAULT ''"), ("entity_cards", "questions", "TEXT NOT NULL DEFAULT '[]'"), ("entity_cards", "opposing", "TEXT NOT NULL DEFAULT '[]'"),
-                                        ("claims", "stated_at", "DATETIME"), ("evidences", "tier", "VARCHAR(10) NOT NULL DEFAULT ''")]
+                                        ("claims", "stated_at", "DATETIME"), ("evidences", "tier", "VARCHAR(10) NOT NULL DEFAULT ''"),
+                                        ("claims", "cond", "TEXT NOT NULL DEFAULT ''")]
 # 後から足した索引（既にあるファイルにも足す）
 _LATE_INDEXES = [("news_items", "canon_url"), ("news_items", "dup_of"), ("news_items", "fetched_at"), ("claims", "document_id"), ("documents", "tier"), ("research_records", "theme")]
 # 複数の列の索引で、あとから足したもの（既にあるファイルにも足す）

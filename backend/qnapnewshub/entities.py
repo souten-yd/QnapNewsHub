@@ -13,7 +13,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from qnapnewshub.db import ArticleEntity, Claim, Entity, EntityAlias, Evidence, NewsItem, Relationship
-from qnapnewshub import thing_filter
+from qnapnewshub import bench, thing_filter
 from qnapnewshub.extract import ENTITY_TYPES, normalize_key, relation_ok
 
 _UTC = timezone.utc
@@ -127,7 +127,8 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
             claim = Claim(article_id=article_id, entity_id=ent.id if ent else None, kind=fact["kind"], text=fact["text"], value=fact.get("value", ""),
                           source_article_id=article_id, model=str(data.get("model", ""))[:200], prompt_version=str(data.get("version", ""))[:16],
                           created_at=data.get("at") or datetime.now(_UTC), ai_extracted=True, document_id=doc[0] if doc else None, sensitivity=sens, ai_use=use,
-                          stated_at=when)      # 主張の日付の既定は記事の公開日
+                          stated_at=when,      # 主張の日付の既定は記事の公開日
+                          cond=bench.cond_json(bench.cond_of(fact.get("cond"), fact["text"])) if fact.get("value") else "")      # 測定の条件（LLM の欄＋文からの規則）
             db.add(claim)
             new_claims.append((claim, doc[0] if doc else None, fact))
         for rel in data.get("relations", []):

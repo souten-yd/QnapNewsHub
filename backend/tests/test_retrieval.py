@@ -333,7 +333,10 @@ def _tool_calls(c, secret_id: int, claim_id: int, rel_id: int, conf: dict):
             ("entities", send("GET", "/entities", q={"q": "SECRETENT", **{k: str(v).lower() for k, v in conf.items() if k == "confidential"}})),
             ("entity", send("GET", f"/entities/{secret_id}", q={k: str(v).lower() for k, v in conf.items() if k == "confidential"})),
             ("documents", send("GET", "/kg/documents", q={k: str(v).lower() for k, v in conf.items() if k == "confidential"})),
-            ("graph_seeds", send("GET", "/graph/seeds", q={k: str(v).lower() for k, v in conf.items() if k == "confidential"}))]
+            ("graph_seeds", send("GET", "/graph/seeds", q={k: str(v).lower() for k, v in conf.items() if k == "confidential"})),
+            ("watch_changes", send("GET", "/watch/changes", q={"thing": str(secret_id), "since": "400d", **{k: str(v).lower() for k, v in conf.items() if k == "confidential"}})),
+            ("watch_list", send("GET", "/watch", q={k: str(v).lower() for k, v in conf.items() if k == "confidential"})),
+            ("metrics_compare", send("GET", "/metrics/compare", q={"thing": str(secret_id), **{k: str(v).lower() for k, v in conf.items() if k == "confidential"}}))]
 
 
 def test_link_token_sees_only_the_allowed_sensitivity_on_every_read_api(client, cd):

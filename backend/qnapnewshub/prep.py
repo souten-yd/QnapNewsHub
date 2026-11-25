@@ -103,7 +103,8 @@ def _extract_rules() -> list[str]:
             '役職・職業（theoretical physicist・designer・研究者）、説明的な句（AI Subscription・Gifts for Dads・AI fan videos・screened porch）、数値つきの仕様の句（144Hz AMOLED display・10,000mAh power bank。数値は facts に書く）、'
             'SNS の俗語（FYP）、題を言い換えただけの句、版だけの語（v0.5.22）、文の断片。迷ったら入れない。版つきの製品は「製品名 版」の表記のまま。題の主題になっている固有名を最優先に入れる' % (extract.MAX_ENTITIES, ents),
             '- facts: 記事が述べる事実（最大 %d 個）。{"about": 主語の物の名前（entities の name と同じ）, "kind": %s のどれか, '
-            '"text": 日本語の短い 1 文, "value": 数値や版（あれば。無ければ空文字）, "quote": 題か抜粋からそのまま写した 40 文字以内の引用（数・日付・価格の fact には必ず付ける）}。'
+            '"text": 日本語の短い 1 文, "value": 数値や版（あれば。無ければ空文字）, "quote": 題か抜粋からそのまま写した 40 文字以内の引用（数・日付・価格の fact には必ず付ける）, '
+            '"cond": 数値の測定の条件（value があるときだけ。{"model": 測ったモデル, "quant": 量子化（Q4_K_M・FP8 など）, "hw": GPU・端末, "engine": エンジン・バックエンド, "ctx": 文脈の長さ, "version": 版} のうち、題か抜粋に**そのまま書かれているものだけ**。書かれていない欄は省く。推測しない）}。'
             '**題と抜粋に書かれていない数字・版・日付は絶対に書かない**。**題に出る数・価格・日付は必ず fact に 1 つ入れる**。無ければ空の配列' % (extract.MAX_FACTS, kinds),
             '- relations: 物どうしの関係。**原文が明示している関係だけ**（最大 %d 個。多くても 2〜3 個で足りる。無理に作らない）。{"subject": 主語の物の名前, "type": %s のどれか, "object": 目的語の物の名前, '
             '"quote": 題か抜粋からそのまま写した 60 文字以内の引用}。**quote は必ず付け、原文に書かれている文字列だけ**にする。引用できない関係は書かない。'
