@@ -7,6 +7,10 @@
   迷うもの（固有名詞らしい）は残す。名前が頭文字の大文字・数字・記号を含む固有名らしさを持つ物は一般語として落とさない（種類が org・person・place・model の物は一覧に載る語でない限り残す）。
 - 掃除（`retire_sweep`・夜）: 既にある物のうち、文脈なしで落とせるもの（媒体名・一般語・断片）を外す。外す物の記録は `entity_retirements`（名前・種類・理由・記事の数。元に戻す道は、規則をゆるめて取り出し直すこと）。
   人がメモを書いた物・機密の物は触らない。1 回の上限あり。**Entity を消すのはここと entity_merge.merge だけ**。
+- **一般名詞・カテゴリ・説明的な句（ex4・2026-11-25）**: 20 記事を本物の LLM（ex3）で取り出すと「AI Subscription」「tiny house」「144Hz AMOLED display」「Steam library」「theoretical physicist」などが物になった。次を機械で外す（`generic_phrase`）。
+  ①小文字だけの英語の複数語の句（固有名の印〔大文字・数字・記号〕が無い）②数値＋単位＋一般名詞の仕様（理由 spec。主張の主語だった場合は記事の主な物の主張に付け替える）
+  ③説明の語（for・best・your など）を含む句、語尾が説明的な一般名詞（library・subscription・videos・display・bank など）で数字・記号の無い句 ④役職・職業の名詞が語尾（人名は残す）
+  ⑤題の大半と同じで固有名の印が弱い句（題の言い換え。理由 title）。Flipper・Amazon Inspector・Nothing Phone (4a) Pro・Sony ULT Field 3・Busy Bar・UGREEN は残す。
 """
 from __future__ import annotations
 
@@ -46,13 +50,25 @@ GENERIC_EN = ("AI", "ML", "LLM", "LLMs", "AGI", "API", "APIs", "SDK", "CLI", "GU
               "platform", "service", "system", "robot", "robots", "phone", "smartphone", "laptop", "device", "devices", "feature", "update", "release", "version", "bug", "vulnerability",
               "exploit", "attack", "hacker", "hackers", "developer", "developers", "user", "users", "customer", "customers", "government", "regulators", "researchers", "scientists", "study",
               "paper", "report", "survey", "market", "industry", "technology", "internet", "web", "website", "email", "password", "code", "program", "programming", "server", "network",
-              "database", "game", "games", "gaming", "console", "battery", "screen", "display", "camera", "price", "deal", "sale", "event", "conference", "news", "blog", "article")
+              "database", "game", "games", "gaming", "console", "battery", "screen", "display", "camera", "price", "deal", "sale", "event", "conference", "news", "blog", "article",
+              "FYP", "For You Page", "physicist", "designer", "engineer", "CEO", "CTO", "founder", "professor")
 GENERIC_JA = ("取締役会", "マネジメントコンソール", "不安定な爆薬", "リーガルAI", "ランサムウェア", "マルウェア", "ウイルス", "セキュリティ", "クラウド", "サーバー", "ネットワーク", "データベース",
               "アルゴリズム", "ブラウザ", "ブラウザー", "アプリ", "ソフトウェア", "ハードウェア", "スタートアップ", "企業", "会社", "政府", "研究者", "開発者", "ユーザー", "利用者", "サービス", "システム",
               "プラットフォーム", "フレームワーク", "ライブラリ", "モデル", "AIエージェント", "AIモデル", "生成AI", "人工知能", "機械学習", "大規模言語モデル", "半導体", "スマートフォン", "スマホ",
               "パソコン", "ノートPC", "ゲーム", "ニュース", "ブログ", "記事", "論文", "調査", "発表", "新製品", "新機能", "アップデート", "脆弱性", "攻撃", "ハッカー", "個人情報", "オープンソース")
 GENERIC = frozenset(normalize_key(n) for n in (*GENERIC_EN, *GENERIC_JA)) - {""}
 
+# 説明的な句の語尾になる一般名詞（固有名の印の無い句の最後がこれなら一般語）。製品名の語尾になりやすい語（Pro・Max・Studio・Deck など）は入れない
+_DESC_HEADS = frozenset("library libraries subscription subscriptions videos gift gifts account accounts displays screens bank banks porch fan fans tips deals ".split())
+_ROLE_HEADS = frozenset("physicist physicists scientist scientists researcher researchers engineer engineers designer designers developer developers programmer programmers "
+                        "analyst analysts professor professors student students teacher teachers lawyer lawyers doctor doctors founder founders ceo cto cfo chairman president "
+                        "director directors manager managers executive executives officer officers expert experts author authors writer writers journalist journalists "
+                        "artist artists musician musicians youtuber streamer streamers influencer influencers".split())
+_DESC_WORDS = frozenset("for your".split())
+_PROPER_KINDS = frozenset(("org", "person", "place", "software", "model", "game"))      # 具体の種類で取り出された物は、説明的な語尾の規則から除く（Samsung Display・Prime Video）
+_SPEC_UNIT = r"(?:hz|khz|mhz|ghz|mah|wh|gb|tb|mb|kb|mp|nm|mm|cm|inch|in|fps|w|v|k|mbps|gbps|rpm|nits?|dpi|lm)"
+_SPEC_HEAD = re.compile(rf"^[\d][\d,.]*\s?{_SPEC_UNIT}$", re.I)
+_LOWER_PHRASE = re.compile(r"^[a-z]+(?:[ '\-][a-z]+)*$")
 # 「修飾語＋一般名詞」の組（Mac tool・financial firm・AI coding agent）。語の全部が修飾語か一般名詞で、最後が一般名詞のとき一般語とする。
 _HEADS = frozenset("agent agents tool tools firm firms company companies model models app apps framework library platform service services system systems startup startups browser "
                    "assistant assistants chatbot chatbots robot robots device devices chip chips algorithm algorithms feature features library libraries".split())
@@ -129,12 +145,48 @@ def is_generic(name: str, kind: str = "other") -> bool:
     return False
 
 
+def _has_mark(nfkc: str) -> bool:
+    """固有名の印（大文字・数字・記号）があるか。ハイフンとアポストロフィ・空白は印にしない。"""
+    return bool(re.search(r"[A-Z0-9]|[^\w\s'\-]", nfkc))
+
+
+def generic_phrase(name: str, kind: str = "other", *, title: str = "") -> str:
+    """一般名詞・カテゴリ・説明的な句なら理由（"lower"・"spec"・"phrase"・"role"・"title"）、固有名なら ""。人名・場所は小文字の句と語尾の規則から除く。"""
+    nfkc = unicodedata.normalize("NFKC", str(name or "")).strip()
+    if not nfkc or nfkc.isdigit() or (_CJK.search(nfkc) and not nfkc.isascii()):
+        return ""
+    tokens = nfkc.split()
+    low = [t.casefold().strip("(),.") for t in tokens]
+    mark = _has_mark(nfkc)
+    if len(tokens) >= 2 and _SPEC_HEAD.match(low[0]) and re.fullmatch(r"[a-z]+", low[-1]) and tokens[-1].islower():
+        return "spec"      # 144Hz AMOLED display・10,000mAh power bank（数値＋単位＋一般名詞）
+    if len(tokens) >= 2 and re.match(r"^[\d][\d,.]*$", low[0]) and low[1] in {"mah", "hz", "gb", "tb", "mp", "inch", "w", "wh", "nm", "mm", "k"} and tokens[-1].islower():
+        return "spec"      # 「144 Hz display」のように空白が入る
+    if kind in ("person", "place"):
+        return ""
+    if len(tokens) >= 2 and _LOWER_PHRASE.match(nfkc):
+        return "lower"      # tiny house・screened porch・handheld game system
+    if len(tokens) >= 2 and not re.search(r"\d|[^\w\s'\-]", nfkc):
+        if kind not in _PROPER_KINDS and (low[-1] in _DESC_HEADS or (kind in ("other", "tech", "product") and len(tokens) <= 4 and low[0].endswith("s") and any(t in _DESC_WORDS for t in low[1:-1]))):
+            return "phrase"      # Gifts for Dads・Steam library・AI Subscription・AI fan videos
+        if kind not in _PROPER_KINDS and low[-1] in _ROLE_HEADS:
+            return "role"      # theoretical physicist・UI designer
+    if len(tokens) >= 3 and not re.search(r"\d|[^\w\s'\-]", nfkc) and any(t.islower() and len(t) >= 3 for t in tokens) and kind not in ("org", "person", "place") and title:
+        nk, tk = normalize_key(nfkc), normalize_key(_title_head(title))
+        if nk and tk and len(nk) >= 0.7 * len(tk) and nk in tk:
+            return "title"      # 題の言い換え（名前が題の大半で、固有名の印が弱い）
+    return ""
+
+
 def reject(name: str, kind: str = "other", *, source: str = "", title: str = "", context: bool = True) -> str:
     """物にしない理由（"" は残す）。media・source・platform・generic。context=False は記事の文脈（出どころ・題）なしで言える分だけ（夜の掃除）。"""
     if is_media(name):
         return "media"
     if is_generic(name, kind):
         return "generic"
+    phrase = generic_phrase(name, kind, title=title if context else "")
+    if phrase:
+        return phrase
     if not context:
         return ""
     key = normalize_key(name)

@@ -276,8 +276,8 @@ def test_gleaning_stops_at_the_daily_cap_and_when_disabled(monkeypatch, keyed):
 
 
 def test_prompt_version_and_rules_text():
-    """目的: プロンプトの版を上げた（ex3）。関係は「原文が明示しているものだけ・引用を必ず」・取得元と一般語を入れない例・題の数を fact に、が指示に入っている。型 made_by・develops が型の一覧にある。"""
-    assert extract.PROMPT_VERSION == "ex3" and {"made_by", "develops"} <= set(extract.REL_TYPES) <= set(kg.REL_TYPES)
+    """目的: プロンプトの版を上げた（ex4）。関係は「原文が明示しているものだけ・引用を必ず」・取得元と一般語を入れない例・題の数を fact に、が指示に入っている。型 made_by・develops が型の一覧にある。"""
+    assert extract.PROMPT_VERSION == "ex4" and {"made_by", "develops"} <= set(extract.REL_TYPES) <= set(kg.REL_TYPES)
     text = prep.build_prompt([{"title": "T", "source": "S", "summary": "x", "id": 1}])
     assert "原文が明示している関係だけ" in text and "quote は必ず付け" in text and "出どころ・媒体の名前" in text and "題に出る数・価格・日付は必ず fact" in text
 
@@ -303,3 +303,47 @@ def test_sweep_retires_source_named_media_but_keeps_real_things(client):
 def test_dates_and_quantities_are_fragments(name):
     """目的: 日付・回数・量（測定の標本の「24日」「第 4回」「30.7 weeks」「12月1日～2027年1月30日」）は物にしない。"""
     assert thing_filter.reject(name, "other", context=False) == "generic"
+
+
+# ---- ex4: 一般名詞・カテゴリ・説明的な句 ----
+
+@pytest.mark.parametrize("name", ["AI Subscription", "Gifts for Dads", "tiny house", "theoretical physicist", "144Hz AMOLED display", "handheld game system", "Steam library",
+                                  "10,000mAh power bank", "screened porch", "AI fan videos", "FYP", "UI designer"])
+def test_generic_phrases_from_real_llm_run_are_rejected(name):
+    """目的: 本物の LLM（ex3）が実記事 20 件から出した一般名詞・カテゴリ・役職・説明的な句・仕様の句を、文脈なしで外す。根拠: 2026-11-25 の実取り出しで Things に混ざった誤り。"""
+    assert thing_filter.reject(name, "other", context=False)
+
+
+@pytest.mark.parametrize("name,kind", [("Flipper", "product"), ("Amazon Inspector", "product"), ("Nothing Phone (4a) Pro", "product"), ("Sony ULT Field 3", "product"),
+                                       ("Busy Bar", "product"), ("UGREEN", "org"), ("Steam Deck", "product"), ("Best Buy", "org"), ("bell hooks", "person")])
+def test_real_names_survive_generic_phrase_rules(name, kind):
+    """目的: 新しい規則（小文字の句・説明的な語尾・仕様・役職）が実在の固有名を巻き込まない歯止め。正しい例（実取り出しで正しかった物）を固定する。"""
+    assert thing_filter.reject(name, kind, context=False) == ""
+
+
+def test_title_paraphrase_is_rejected_only_when_mark_is_weak():
+    """目的: 題を言い換えただけの句（名前が題の大半で固有名の印が弱い）は外し、数字・記号のある固有名や短い名前は題と同じでも残す。"""
+    assert thing_filter.reject("How to cook a rice", "other", title="How to cook a rice - Blog") == "title"
+    assert thing_filter.reject("Why small teams ship faster", "other", title="Why small teams ship faster") == "title"
+    assert thing_filter.reject("small teams ship faster", "other", title="Why small teams ship faster") == "lower"
+    assert thing_filter.reject("Small teams Ship faster", "other", title="Small teams Ship faster?") == "title"
+    assert thing_filter.reject("Busy Bar", "product", title="Busy Bar") == ""
+    assert thing_filter.reject("Nothing Phone (4a) Pro", "product", title="Nothing Phone (4a) Pro") == ""
+
+
+def test_spec_phrase_fact_moves_to_main_thing_and_generic_things_are_swept(client):
+    """目的: 仕様の句（144Hz AMOLED display）は物にならず、その主張は記事の主な物の数値の事実として残る。説明的な句の物は夜の掃除で外れ、実在の物は残る（理由は entity_retirements）。"""
+    facts = [{"about": "144Hz AMOLED display", "kind": "other", "text": "144Hz の画面を持つ", "value": "144Hz"}]
+    art(1, [("Flipper Zero", "product"), ("144Hz AMOLED display", "other"), ("tiny house", "other")], facts=facts, title="Flipper Zero gets a screen")
+    with news_db.session() as db:
+        assert sorted(db.scalars(select(Entity.name))) == ["Flipper Zero"]
+        claim = db.scalars(select(Claim)).one()
+        assert claim.text == "144Hz の画面を持つ" and claim.entity_id == db.scalar(select(Entity.id))
+        db.add(Entity(name="Steam library", key="steamlibrary", type="other", sensitivity="public"))
+        db.commit()
+    from qnapnewshub import kg_job
+
+    kg_job.aggregate()
+    with news_db.session() as db:
+        assert sorted(db.scalars(select(Entity.name))) == ["Flipper Zero"]
+        assert "phrase" in set(db.scalars(select(EntityRetirement.reason)))

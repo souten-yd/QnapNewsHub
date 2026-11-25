@@ -113,7 +113,10 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
                 linked[ent.key] = ent
         for fact in data.get("facts", []):
             key = normalize_key(fact["about"])
-            if excluded(fact["about"]):
+            why = thing_filter.reject(fact["about"], "other", source=src, title=title)
+            if why == "spec" and linked:      # 仕様の句（144Hz AMOLED display）は物にせず、その記事の主な物（最初に結び付いた物）の数値の事実として残す
+                key = next(iter(linked))
+            elif why:
                 continue      # 取得元・一般語についての主張は捨てる
             ent = by_name.get(key) or linked.get(key)
             if ent is None and len(linked) < MAX_ENTITIES_PER_ARTICLE:

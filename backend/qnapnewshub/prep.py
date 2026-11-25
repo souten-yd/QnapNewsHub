@@ -93,13 +93,15 @@ async def attach_leads(items: list[dict]) -> None:
 
 
 def _extract_rules() -> list[str]:
-    """要素の取り出しの指示（ex3・2026-11-25）。物は固有名だけ（取得元・一般語を入れない例つき）・関係は原文が明示しているものだけで引用を必ず・題の数は fact に必ず。"""
+    """要素の取り出しの指示（ex4・2026-11-25）。物は固有名だけ（取得元・一般語・カテゴリ・役職・説明的な句を入れない例つき）・関係は原文が明示しているものだけで引用を必ず・題の数は fact に必ず。"""
     ents = ", ".join(extract.ENTITY_TYPES)
     kinds = ", ".join(extract.FACT_KINDS)
     rels = ", ".join(extract.REL_TYPES)
     return ['- entities: 記事に出る**固有名の物**（最大 %d 個）。{"name": 名前（記事の表記のまま）, "type": %s のどれか}。'
-            '**入れない物**: 記事の出どころ・媒体の名前（XDA・The Register・Ars Technica・Qiita など）、一般名詞・分類語（AI agent・browser・algorithm・取締役会・ランサムウェア など）、'
-            '版だけの語（v0.5.22）、文の断片。版つきの製品は「製品名 版」の表記のまま。題の主題になっている物を最優先に入れる' % (extract.MAX_ENTITIES, ents),
+            '**入れてよいのは固有名だけ**（製品名・会社名・組織名・人名・モデル名・ソフト名・規格名・法令名）。例: Flipper・Amazon Inspector・Nothing Phone (4a) Pro・Sony ULT Field 3・Busy Bar・UGREEN・Claude Code・熊本市・サンワサプライ・個人情報保護法。'
+            '**入れない物**: 記事の出どころ・媒体の名前（XDA・The Register・Ars Technica・Qiita など）、一般名詞・分類語・カテゴリ（AI model・SSD・browser・algorithm・tiny house・handheld game system・Steam library・取締役会・ランサムウェア・小型犬 など）、'
+            '役職・職業（theoretical physicist・designer・研究者）、説明的な句（AI Subscription・Gifts for Dads・AI fan videos・screened porch）、数値つきの仕様の句（144Hz AMOLED display・10,000mAh power bank。数値は facts に書く）、'
+            'SNS の俗語（FYP）、題を言い換えただけの句、版だけの語（v0.5.22）、文の断片。迷ったら入れない。版つきの製品は「製品名 版」の表記のまま。題の主題になっている固有名を最優先に入れる' % (extract.MAX_ENTITIES, ents),
             '- facts: 記事が述べる事実（最大 %d 個）。{"about": 主語の物の名前（entities の name と同じ）, "kind": %s のどれか, '
             '"text": 日本語の短い 1 文, "value": 数値や版（あれば。無ければ空文字）, "quote": 題か抜粋からそのまま写した 40 文字以内の引用（数・日付・価格の fact には必ず付ける）}。'
             '**題と抜粋に書かれていない数字・版・日付は絶対に書かない**。**題に出る数・価格・日付は必ず fact に 1 つ入れる**。無ければ空の配列' % (extract.MAX_FACTS, kinds),
