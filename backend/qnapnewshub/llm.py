@@ -203,6 +203,15 @@ def calls_today(purpose: str | None = None) -> int:
     return int(raw.get(purpose, 0)) if purpose else sum(int(raw.get(p, 0)) for p in PURPOSES)
 
 
+def extra_today(key: str) -> int:
+    """用途の割り当てとは別に数える今日の回数（例: gleaning の呼び出し。1 日の上限用）。日付が変われば 0。"""
+    return int(_read().get(key, 0))
+
+
+def count_extra(key: str) -> None:
+    _count(key)
+
+
 def _count(purpose: str) -> None:
     with _lock:
         raw = _read()

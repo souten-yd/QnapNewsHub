@@ -11,6 +11,10 @@
   物の集計（ana_entity）・つなぐ候補を付け替える。**機密の区分が public どうしだけ**（機密は触らない）。冪等（寄せ済みは None）。
 - **元に戻せる**: 寄せるたびに `entity_merges` へ snapshot（負けた物の行・別名・結び付き・移した主張と関係・落とした関係の全行・根拠の移動）を残し、`undo` で戻す。戻した組は「違う」の候補にして夜に再び寄せない。
 - 寄せた後に同じ表記が取り出されたら、`resolve_key` が勝った物へ向ける（`entities._get_or_create`）。
+- **版・repo の寄せ（`variant_parts`・`compute_variants`。2026-11-25）**: `org/repo` と `repo`、版つき（`Firefox 161.0`・`Claude Code v2.1.331`）と本体、大きさ違い（`Qwen 3.5 27B` と `Qwen 3.5`）を、
+  本体（版・org・大きさの無い名前の物）へ寄せる。本体が実在し、種類が合うときだけ**自動**。版は「本体の Things＋版の属性」: 負けた名前は別名に残り、版は release の主張（根拠は言い換えの段）として本体に付く。
+  モデル（model）の版（Claude 3.5 と Claude）は別の物なので候補止まり・整数だけの版（Python 3）は版とみなさない。本体が無い・種類が合わない・同じ本体に版が複数あるだけ、は候補（reason variant）。
+  記録・戻しは寄せと同じ（entity_merges。snapshot の variant_claims で付けた主張も戻す）。
 書くのは夜の仕事（kg_job.aggregate）と管理者の操作（writer の中）だけ。コミットは呼ぶ側。
 """
 from __future__ import annotations
@@ -50,6 +54,29 @@ def rule_key(name: str, *, paren: bool = False) -> str:
     t = _DOT_ZERO.sub("", t)
     key = "".join(ch for ch in t.replace("ー", "") if ch.isalnum())[:200]
     return key if len(key) >= 2 else ""
+
+
+_ORG_REPO = re.compile(r"^[A-Za-z0-9][\w.\-]{0,38}/([A-Za-z0-9][\w.\-]{1,100})$")
+_VER_TAIL = re.compile(r"[\s\-_]+(?:v|ver\.?\s*|version\s*)?(\d+(?:\.\d+)+(?:[\-.]?(?:rc|beta|alpha|preview|lts)\d*)?)(?:\s*[〜~–]\s*v?\d+(?:\.\d+)+)?$", re.I)
+_VER_V = re.compile(r"[\s\-_]+v(\d+)$", re.I)
+_SIZE_TAIL = re.compile(r"[\s\-_(（]*(\d+(?:\.\d+)?\s?[bmkt](?:[\-\s]?a\d+(?:\.\d+)?b)?)[)）]?$", re.I)
+
+
+def variant_parts(name: str) -> tuple[str, str, str]:
+    """名前を（本体の名前, 種類, 属性）に分ける。種類: plain（そのまま）・repo（org/repo）・version（版つき）・size（大きさつき）。属性は版・大きさ。
+    org/repo は repo 名だけにする（その後ろの版も見る）。版は 1.0 のように小数点を含むか v3 のように v が付くものだけ（Python 3・GPT 4 の整数は版とみなさない）。"""
+    t = unicodedata.normalize("NFKC", str(name or "")).strip()
+    kind, attr = "plain", ""
+    m = _ORG_REPO.match(t)
+    if m and " " not in t:
+        t, kind = m.group(1), "repo"
+    m = _VER_TAIL.search(t) or _VER_V.search(t)
+    if m and m.start() > 0 and t[:m.start()].strip():
+        return t[:m.start()].strip(), "version", m.group(1)
+    m = _SIZE_TAIL.search(t)
+    if m and m.start() > 0 and t[:m.start()].strip() and kind == "plain":
+        return t[:m.start()].strip(" -_(（"), "size", m.group(1)
+    return t, kind, attr
 
 
 def compatible(a: str, b: str) -> bool:
@@ -259,6 +286,9 @@ def undo(db: Session, merge_id: int) -> dict | None:
     if back:
         db.execute(insert(ArticleEntity), [{"article_id": a, "entity_id": lid} for a in back])
     # 主張
+    if snap.get("variant_claims"):      # 寄せるとき付けた版の主張は消す
+        db.execute(delete(Evidence).where(Evidence.claim_id.in_(snap["variant_claims"])))
+        db.execute(delete(Claim).where(Claim.id.in_(snap["variant_claims"])))
     if snap["claims"]:
         db.execute(update(Claim).where(Claim.id.in_(snap["claims"]), Claim.entity_id == wid).values(entity_id=lid))
     # 関係（逆順）
@@ -319,6 +349,85 @@ def undo(db: Session, merge_id: int) -> dict | None:
 
 # ---- 夜: 自動の寄せと候補 ----
 
+AUTO_VERSION_TYPES = ("software", "product", "tech", "other")      # 版の違いを自動で本体へ寄せる種類（model の版は別の物なので候補止まり）
+
+
+def _add_version_claim(db: Session, winner_id: int, loser: Entity, attr: str, rec_id: int) -> None:
+    """寄せた版を、本体の release の主張として残す（根拠は言い換えの段）。戻すとき消せるよう、付けた主張の id を記録の snapshot へ。"""
+    if not attr:
+        return
+    aid = db.scalar(select(ArticleEntity.article_id).where(ArticleEntity.entity_id == winner_id).order_by(ArticleEntity.article_id).limit(1))
+    snap_rec = db.get(EntityMerge, rec_id)
+    snap = json.loads(snap_rec.snapshot)
+    arts = snap.get("articles") or []
+    aid = arts[0] if arts else aid
+    if aid is None:
+        return
+    item = db.get(NewsItem, aid)
+    if item is None:
+        return
+    doc = kg.docs_of_articles(db, [aid]).get(aid)
+    sens, use = kg.inherit([(doc[1], doc[2])]) if doc else ("public", "allowed")
+    claim = Claim(article_id=aid, entity_id=winner_id, kind="release", text=f"{snap['loser']['name']}（版 {attr}）", value=attr[:120], source_article_id=aid, model="rule:variant",
+                  prompt_version="", created_at=_now(), ai_extracted=False, document_id=doc[0] if doc else None, sensitivity=sens, ai_use=use, stated_at=item.published_at)
+    db.add(claim)
+    db.flush()
+    if doc:
+        db.add(kg.evidence_row(doc[0], claim_id=claim.id, confidence=kg.TIER_CONF["paraphrase"], tier="paraphrase"))
+    snap["variant_claims"] = [claim.id]
+    snap_rec.snapshot = json.dumps(snap, ensure_ascii=False)
+
+
+def compute_variants(db: Session, ents: dict[int, Entity], blocked: set[tuple[int, int]], gone: set[int], budget: int) -> tuple[int, list[tuple[int, int, str, float]]]:
+    """org/repo・版つき・大きさ違いを本体へ寄せる。(寄せた数, 候補)。"""
+    by_rule: dict[str, list[int]] = {}
+    for i, e in ents.items():
+        if i not in gone:
+            k = rule_key(e.name)
+            if k:
+                by_rule.setdefault(k, []).append(i)
+    redirect: dict[int, int] = {}
+
+    def resolve(i: int) -> int:
+        while i in redirect:
+            i = redirect[i]
+        return i
+
+    merged = 0
+    pending: list[tuple[int, int, str, float]] = []
+    bases: dict[str, list[tuple[int, str, str]]] = {}      # 本体が無いときの、同じ本体の版の仲間
+    order = sorted((i for i in ents if i not in gone), key=lambda i: (-len(ents[i].name), i))      # 長い名前（大きさ → 版の順）から寄せる
+    for i in order:
+        e = ents[i]
+        base_name, kind, attr = variant_parts(e.name)
+        if kind == "plain":
+            continue
+        k = rule_key(base_name)
+        cands = [c for c in by_rule.get(k, []) if c != i and c not in gone]
+        if kind == "repo" and not attr:
+            cands = [c for c in cands if variant_parts(ents[c].name)[1] == "plain"]
+        head = max((resolve(c) for c in cands), key=lambda c: (ents[c].article_count, -c), default=None)
+        if head is None or head == i or head in gone:
+            bases.setdefault(k, []).append((i, kind, attr))
+            continue
+        auto_ok = compatible(ents[head].type, e.type) and (kind in ("repo", "size") or e.type in AUTO_VERSION_TYPES)
+        if _pair(head, i) in blocked:
+            continue
+        if auto_ok and merged < MAX_AUTO_PER_RUN:
+            rid = merge(db, head, i, mode="auto", reason="variant")
+            if rid is not None:
+                merged += 1
+                gone.add(i)
+                redirect[i] = head
+                _add_version_claim(db, head, e, attr, rid)
+                continue
+        pending.append((head, i, "variant", 0.55))
+    for k, rows in bases.items():      # 本体の無い版どうし: 記事の最も多い物を残す候補
+        if len(rows) >= 2:
+            keep = max(rows, key=lambda r: (ents[r[0]].article_count, -r[0]))[0]
+            pending += [(keep, i, "variant", 0.45) for i, _, _ in rows if i != keep and i not in gone]
+    return merged, pending
+
 def _pair(a: int, b: int) -> tuple[int, int]:
     return (a, b) if a < b else (b, a)
 
@@ -355,6 +464,10 @@ def compute_merges(db: Session) -> dict:
                     gone.add(other)
             else:
                 pending.append((top, other, "rule_type", 0.8))
+    # ①b org/repo・版つき・大きさ違いを本体へ（本体が実在するときだけ自動。迷うものは候補）
+    vmerged, vpending = compute_variants(db, ents, blocked, gone, MAX_AUTO_PER_RUN - merged)
+    merged += vmerged
+    pending += vpending
     # ② 括弧を除くと同じ（括弧の中が違う物どうしは別物かもしれないので候補止まり）
     pgroups: dict[str, list[int]] = {}
     for i, e in ents.items():

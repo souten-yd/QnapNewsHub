@@ -12,8 +12,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from qnapnewshub.db import ArticleEntity, Claim, Entity, EntityAlias, Evidence, NewsItem
-from qnapnewshub.extract import ENTITY_TYPES, normalize_key
+from qnapnewshub.db import ArticleEntity, Claim, Entity, EntityAlias, Evidence, NewsItem, Relationship
+from qnapnewshub import thing_filter
+from qnapnewshub.extract import ENTITY_TYPES, normalize_key, relation_ok
 
 _UTC = timezone.utc
 MAX_ENTITIES_PER_ARTICLE = 10      # 8 ＋ fact の about が物の一覧に無かった分
@@ -65,6 +66,7 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
     meta = {r[0]: r[1:] for r in db.execute(select(NewsItem.id, NewsItem.published_at, NewsItem.dup_of, NewsItem.kind, NewsItem.user_id, NewsItem.source_key)
                                             .where(NewsItem.id.in_(ids)))}
     published = {i: m[0] for i, m in meta.items()}
+    texts = {r[0]: (r[1] or "", r[2] or "") for r in db.execute(select(NewsItem.id, NewsItem.source, NewsItem.title).where(NewsItem.id.in_(ids)))}
     deltas: list[tuple] = []      # 物の集計（ana_entity）への増減。取り出し直しは、前の結びつきを引いて新しい結びつきを足す
     touched: set[int] = set()
     cache: dict[str, Entity] = {}
@@ -73,23 +75,37 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
 
     kg.sync_documents(db, ids)      # 記事 → 文書の対応（冪等）。主張・関係はその文書の機密の区分を引き継ぐ
     docs = kg.docs_of_articles(db, ids)
-    old_rels = kg.drop_article_evidence(db, [d[0] for a, d in docs.items() if a in meta])      # 再取り出しの前の関係の根拠を消す（人が入れたものは残す）
+    # 再取り出しの前の関係の根拠を消す（人が入れたものは残す）。追加（取りこぼしの問い直し additive）の記事は、前の取り出しを消さない
+    old_rels = kg.drop_article_evidence(db, [d[0] for a, d in docs.items() if a in meta and not staged[a].get("additive")])
     rel_work: list[tuple] = []
-    new_claims: list[tuple[Claim, int | None]] = []
+    new_claims: list[tuple[Claim, int | None, dict]] = []
     for article_id, data in staged.items():
         if article_id not in published:
             continue
         when = published[article_id]
+        additive = bool(data.get("additive"))
         old = list(db.scalars(select(ArticleEntity.entity_id).where(ArticleEntity.article_id == article_id)))
         touched.update(old)
-        db.execute(delete(ArticleEntity).where(ArticleEntity.article_id == article_id))
-        db.execute(delete(Evidence).where(Evidence.claim_id.in_(select(Claim.id).where(Claim.article_id == article_id, Claim.ai_extracted.is_(True)))))
-        db.execute(delete(Claim).where(Claim.article_id == article_id, Claim.ai_extracted.is_(True)))
+        if not additive:
+            db.execute(delete(ArticleEntity).where(ArticleEntity.article_id == article_id))
+            db.execute(delete(Evidence).where(Evidence.claim_id.in_(select(Claim.id).where(Claim.article_id == article_id, Claim.ai_extracted.is_(True)))))
+            db.execute(delete(Claim).where(Claim.article_id == article_id, Claim.ai_extracted.is_(True)))
         doc = docs.get(article_id)
         sens, use = kg.inherit([(doc[1], doc[2])]) if doc else ("public", "allowed")
         linked: dict[str, Entity] = {}
         by_name: dict[str, Entity] = {}      # 表記の鍵 → 物（名寄せで寄せた表記は、勝った物の key と違う）
+        if additive:      # 前の取り出しの物は、そのまま結び付けておく（新しい物・主張・関係だけを足す）
+            for ent in db.scalars(select(Entity).join(ArticleEntity, ArticleEntity.entity_id == Entity.id).where(ArticleEntity.article_id == article_id)):
+                linked[ent.key] = ent
+                by_name[ent.key] = ent
+        src, title = texts.get(article_id, ("", ""))
+
+        def excluded(name: str, kind: str = "other") -> bool:
+            return bool(thing_filter.reject(name, kind, source=src, title=title))
+
         for row in data.get("entities", []):
+            if excluded(row["name"], row["type"]):
+                continue      # 取得元・媒体・一般語・断片は物にしない（thing_filter）
             ent = _get_or_create(db, row["name"], row["type"], when, cache)
             if ent is not None:
                 by_name[normalize_key(row["name"])] = ent
@@ -97,6 +113,8 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
                 linked[ent.key] = ent
         for fact in data.get("facts", []):
             key = normalize_key(fact["about"])
+            if excluded(fact["about"]):
+                continue      # 取得元・一般語についての主張は捨てる
             ent = by_name.get(key) or linked.get(key)
             if ent is None and len(linked) < MAX_ENTITIES_PER_ARTICLE:
                 ent = _get_or_create(db, fact["about"], "other", when, cache)
@@ -105,12 +123,16 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
                     by_name[key] = ent
             claim = Claim(article_id=article_id, entity_id=ent.id if ent else None, kind=fact["kind"], text=fact["text"], value=fact.get("value", ""),
                           source_article_id=article_id, model=str(data.get("model", ""))[:200], prompt_version=str(data.get("version", ""))[:16],
-                          created_at=data.get("at") or datetime.now(_UTC), ai_extracted=True, document_id=doc[0] if doc else None, sensitivity=sens, ai_use=use)
+                          created_at=data.get("at") or datetime.now(_UTC), ai_extracted=True, document_id=doc[0] if doc else None, sensitivity=sens, ai_use=use,
+                          stated_at=when)      # 主張の日付の既定は記事の公開日
             db.add(claim)
-            new_claims.append((claim, doc[0] if doc else None))
+            new_claims.append((claim, doc[0] if doc else None, fact))
         for rel in data.get("relations", []):
             ends = []
             for name in (rel["subject"], rel["object"]):
+                if excluded(name) or (thing_filter.is_platform(name) and rel["type"] != "other"):
+                    ends.append(None)      # 取得元・一般語・プラットフォームは関係の相手にしない
+                    continue
                 e = by_name.get(normalize_key(name)) or linked.get(normalize_key(name))
                 if e is None and len(linked) < MAX_ENTITIES_PER_ARTICLE:
                     e = _get_or_create(db, name, "other", when, cache)
@@ -118,13 +140,16 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
                         linked[e.key] = e
                         by_name[normalize_key(name)] = e
                 ends.append(e)
-            if all(ends):
+            if all(ends) and relation_ok(rel["type"], ends[0].type, ends[1].type):      # 型の定義域・値域に合う関係だけ
                 rel_work.append((article_id, rel, ends[0], ends[1], str(data.get("model", "")), str(data.get("version", ""))))
+        had = set(old) if additive else set()
         for ent in linked.values():
+            if ent.id in had:
+                continue
             db.add(ArticleEntity(article_id=article_id, entity_id=ent.id))
             touched.add(ent.id)
         db.flush()
-        now_ids = {ent.id for ent in linked.values()}
+        now_ids = {ent.id for ent in linked.values()} | had
         deltas += [(eid, *meta[article_id], -1) for eid in set(old) - now_ids]
         deltas += [(eid, *meta[article_id], 1) for eid in now_ids - set(old)]
         done += 1
@@ -134,9 +159,10 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
         for ent in db.scalars(select(Entity).where(Entity.id.in_(chunk))):
             ent.article_count = int(counts.get(ent.id, 0))
     db.flush()
-    for claim, doc_id in new_claims:      # 主張の根拠（文書。位置・引用は取り出し元に無いので持たない）
+    for claim, doc_id, fact in new_claims:      # 主張の根拠（文書。引用が原文に一致＝exact・言い換え・無し の段階。位置は取り出し元に無いので持たない）
         if doc_id is not None:
-            db.add(kg.evidence_row(doc_id, claim_id=claim.id))
+            t = fact.get("tier") or "none"
+            db.add(kg.evidence_row(doc_id, claim_id=claim.id, quote=fact.get("quote", "") if t == "exact" else "", grounded=t == "exact", confidence=kg.TIER_CONF[t], tier=t))
     kg.apply_article_relations(db, rel_work, docs, old_rels)
     from qnapnewshub import analytics
 
@@ -241,4 +267,9 @@ def summary(db: Session) -> dict:
             "mention_candidates": int(db.scalar(select(func.count(MentionCandidate.id)).where(MentionCandidate.status == "candidate")) or 0),
             # 名寄せ（2026-11-25）: 寄せた数（元に戻した分を除く）・管理者の確認待ちの候補
             "merged": int(db.scalar(select(func.count(EntityMerge.id)).where(EntityMerge.undone_at.is_(None))) or 0),
-            "merge_candidates": int(db.scalar(select(func.count(MergeCandidate.id)).where(MergeCandidate.status == "candidate")) or 0)}
+            "merge_candidates": int(db.scalar(select(func.count(MergeCandidate.id)).where(MergeCandidate.status == "candidate")) or 0),
+            # 取り出しの精度（2026-11-25）: 機械の除外で外した物・版の寄せ・取りこぼしの問い直しが済んだ記事・関係の根拠の段階（原文に一致／推測）
+            "retired": thing_filter.summary(db)["retired"], "variant_merged": int(db.scalar(select(func.count(EntityMerge.id)).where(EntityMerge.reason == "variant", EntityMerge.undone_at.is_(None))) or 0),
+            "gleaned_articles": int(db.scalar(select(func.count(NewsItem.id)).where(NewsItem.extract_v >= 2)) or 0),
+            "relations_exact": int(db.scalar(select(func.count(Relationship.id)).where(Relationship.type != "co_occurs", Relationship.status.in_(("extracted", "confirmed")))) or 0),
+            "relations_inferred": int(db.scalar(select(func.count(Relationship.id)).where(Relationship.type != "co_occurs", Relationship.status == "inferred")) or 0)}

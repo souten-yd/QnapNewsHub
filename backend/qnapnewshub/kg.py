@@ -31,14 +31,22 @@ _UTC = timezone.utc
 DOC_KINDS = ("news", "paper", "repo", "model", "research", "note", "patent", "standard", "other")
 SENSITIVITY = ("public", "confidential")
 AI_USE = ("allowed", "local_only", "prohibited")
-REL_TYPES = ("uses", "supports", "replaces", "competes", "part_of", "implements", "cites", "contradicts", "co_occurs", "other")
+REL_TYPES = ("uses", "supports", "replaces", "competes", "part_of", "implements", "cites", "contradicts", "made_by", "develops", "co_occurs", "other")
 SYMMETRIC = frozenset({"co_occurs", "competes", "contradicts"})      # 向きの無い型。subject_id < object_id にそろえる
 STATUSES = ("extracted", "inferred", "statistical", "confirmed")
 COOC_MIN_COUNT = 3
 COOC_MIN_RATIO = 2.0
 COOC_DAYS = 180
 COOC_MAX_ENTITIES_PER_UNIT = 12
-CONF_EXTRACTED, CONF_INFERRED, INFERRED_CAP, CONF_CONFIRMED = 0.7, 0.3, 0.35, 0.9
+CONF_EXTRACTED, CONF_INFERRED, INFERRED_CAP, CONF_CONFIRMED = 0.7, 0.15, 0.35, 0.9
+# 根拠の段階ごとの確かさ（一致＞言い換え＞無し）。関係・主張の根拠の confidence に入り、検索の辺の重み・主張の根拠の並び・カードの並びに効く
+TIER_CONF = {"exact": 0.7, "paraphrase": 0.3, "none": 0.15}
+TIER_RANK = {"exact": 2, "paraphrase": 1, "none": 0, "": 0}
+
+
+def tier_of(grounded: bool, tier: str = "") -> str:
+    """根拠の段階。tier が空の古い行は grounded（原文に照合できた）なら exact、そうでなければ none。"""
+    return "exact" if grounded else (tier if tier in TIER_CONF else "none")
 CONTRADICT_DAYS = 3
 MAX_HISTORY_CLAIMS = 300
 _DOC_HI = "kg_doc_hi"
@@ -221,10 +229,10 @@ def doc_dict(d: Document) -> dict:
 # ---- 根拠・主張・関係を入れる ----
 
 def evidence_row(doc_id: int, *, claim_id: int | None = None, relationship_id: int | None = None, quote: str = "", start: int | None = None, end: int | None = None,
-                 page: int | None = None, grounded: bool = False, confidence: float = 0.0) -> Evidence:
+                 page: int | None = None, grounded: bool = False, confidence: float = 0.0, tier: str = "") -> Evidence:
     quote = quote.strip()[:300]
     return Evidence(document_id=doc_id, claim_id=claim_id, relationship_id=relationship_id, start=start, end=end, page=page, quote=quote,
-                    quote_hash=hashlib.sha256(quote.encode()).hexdigest() if quote else "", grounded=grounded, confidence=confidence)
+                    quote_hash=hashlib.sha256(quote.encode()).hexdigest() if quote else "", grounded=grounded, confidence=confidence, tier=tier)
 
 
 def entity_for(db: Session, name: str, kind: str, when: datetime, sens: str, use: str) -> Entity | None:
@@ -270,16 +278,17 @@ def get_relationship(db: Session, subject_id: int, object_id: int, rel_type: str
 
 
 def add_relationship(db: Session, *, subject: Entity, object_: Entity, rel_type: str, document: Document, quote: str = "", start: int | None = None, end: int | None = None,
-                     page: int | None = None, grounded: bool = False, model: str = "", version: str = "", by: str = "") -> Relationship:
+                     page: int | None = None, grounded: bool = False, model: str = "", version: str = "", by: str = "", tier: str = "") -> Relationship:
     """関係に根拠を 1 つ足す（同じ関係には根拠が複数付く）。確かさ・状態・区分は recompute_relationships が根拠から決める。"""
     if rel_type not in REL_TYPES or rel_type == "co_occurs":
         raise ValueError("関係の型が正しくありません（一緒に出る co_occurs は集計だけが作ります）")
     if subject.id == object_.id:
         raise ValueError("主語と目的語が同じです")
     rel = get_relationship(db, subject.id, object_.id, rel_type)
-    conf = CONF_CONFIRMED if by and quote else (CONF_EXTRACTED if grounded else CONF_INFERRED)
+    t = tier_of(grounded, tier) if not by else "exact"
+    conf = CONF_CONFIRMED if by and quote else TIER_CONF[t]
     db.add(evidence_row(document.id, relationship_id=rel.id, quote=quote if (grounded or by) else "", start=start, end=end, page=page, grounded=grounded or bool(by and quote),
-                        confidence=conf))
+                        confidence=conf, tier=t))
     rel.activity_model, rel.activity_version = model[:200] or rel.activity_model, version[:16] or rel.activity_version
     if by:
         rel.activity_by = by[:80]
@@ -331,7 +340,7 @@ def apply_article_relations(db: Session, work: list[tuple], docs: dict[int, tupl
             continue
         document = db.get(Document, doc[0])
         r = add_relationship(db, subject=subj, object_=obj, rel_type=rel["type"], document=document, quote=rel.get("quote", ""), grounded=bool(rel.get("grounded")),
-                             model=model, version=version)
+                             model=model, version=version, tier=str(rel.get("tier") or ""))
         touched.add(r.id)
     recompute_relationships(db, touched)
 
@@ -460,3 +469,29 @@ def history(db: Session, entity_id: int, scopes: list[str] | None = None) -> dic
         out.append({"kind": kind, "entries": [{**e, "t": iso(e["t"])} for e in series]})
     out.sort(key=lambda g: g["kind"])
     return {"series": out, "changes": changes, "contradictions": contradictions}
+
+
+def sweep_relations(db: Session, limit: int = 2000) -> dict:
+    """夜: AI が取り出した関係（人が確認していない・co_occurs 以外）のうち、型の定義域・値域に合わない・型 other（内容の空な関係。測定で正しく具体的なものは 0 件）・端がプラットフォームのものを捨てる（根拠ごと）。
+    {"dropped", "checked"}。確定（confirmed）は触らない。コミットは呼ぶ側。"""
+    from qnapnewshub import thing_filter
+
+    types = {i: (t, n) for i, t, n in db.execute(select(Entity.id, Entity.type, Entity.name))}
+    drop: list[int] = []
+    checked = 0
+    for r in db.scalars(select(Relationship).where(Relationship.type != "co_occurs", Relationship.activity_by == "").order_by(Relationship.id)):
+        checked += 1
+        s_, o_ = types.get(r.subject_id), types.get(r.object_id)
+        if s_ is None or o_ is None:
+            continue
+        if (not extract.relation_ok(r.type, s_[0], o_[0]) or r.type == "other"
+                or (r.type in ("uses", "cites", "supports", "part_of") and (thing_filter.is_platform(s_[1]) or thing_filter.is_platform(o_[1])))
+                or thing_filter.is_media(s_[1]) or thing_filter.is_media(o_[1])):
+            drop.append(r.id)
+            if len(drop) >= limit:
+                break
+    for i in range(0, len(drop), 400):
+        part = drop[i:i + 400]
+        db.execute(delete(Evidence).where(Evidence.relationship_id.in_(part)))
+        db.execute(delete(Relationship).where(Relationship.id.in_(part)))
+    return {"dropped": len(drop), "checked": checked}
