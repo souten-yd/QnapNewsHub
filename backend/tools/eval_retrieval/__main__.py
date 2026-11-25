@@ -1,7 +1,7 @@
 """`./hub.sh eval-retrieval --data <評価用の DB の置き場（コピー）> --questions <json> --out <md> [--build] [--per-type 10] [--raw <json>]`
 
 --data の下の news/news.sqlite3 を使う（呼ぶ側がコピーしたもの。ここでは読むだけではなく、ハブを起動するので開いたときの更新は入る。本物の置き場を指さないこと）。
---build を付けると、--questions に問いの集めを作ってから流す。--build-bridge は橋渡しの問い（経路 2〜6 段）を作る。外へ通信しない・LLM は呼ばない。
+--build を付けると、--questions に問いの集めを作ってから流す。--build-bridge は橋渡しの問い（経路 2〜6 段）を、--build-short は 3 文字未満の語の問いを作る。外へ通信しない・LLM は呼ばない。
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--build-bridge", action="store_true", help="橋渡しの問い（経路 2〜6 段の 2 物。--questions に作る。評価の置き場へ。リポジトリに入れない）を作ってから流す")
     ap.add_argument("--build-tools", action="store_true", help="変化（watch）・条件つきの数値の比較（bench）の問いを作る（--questions に。評価の置き場へ。リポジトリに入れない）")
+    ap.add_argument("--build-short", action="store_true", help="3 文字未満の語の問い（語だけ・別の語＋語。--per-type 問いずつ。--questions に。評価の置き場へ。リポジトリに入れない）を作る")
     ap.add_argument("--per-length", type=int, default=20, help="橋渡しの問いの、経路の長さごとの数")
     ap.add_argument("--meet-depth", default="auto", help="③' の会合の展開の深さ（auto＝問いで決める・1〜5＝固定）")
     ap.add_argument("--raw", default="", help="問いごとの生の点数の JSON の出力先（任意）")
@@ -41,7 +42,11 @@ def main(argv: list[str] | None = None) -> int:
     qpath = Path(a.questions).expanduser()
     from . import build_questions, checks, report, runner
 
-    if a.build_tools:
+    if a.build_short:
+        d = build_questions.main_short(db_path, qpath, a.per_type, a.seed)
+        print("3 文字未満の語の問いを作りました:", d["counts"])
+        checks.warn_dangling(db_path, d["questions"], "作るとき")
+    elif a.build_tools:
         d = build_questions.main_tools(db_path, qpath, a.per_type, a.seed)
         print("変化・比較の問いを作りました:", d["counts"])
         checks.warn_dangling(db_path, d["questions"], "作るとき")

@@ -163,3 +163,29 @@ def test_dangling_gold_is_warned(client, capsys):
     stale = [{"id": "q999", "gold": {"docs": [], "entities": [99999], "claims": [88888], "relationships": [], "events": []}}]
     assert checks.dangling_refs(_db_path(), stale) == {"q999": ["ent:99999", "clm:88888"]}
     assert checks.warn_dangling(_db_path(), stale, "測るとき") == 1 and "測るとき" in capsys.readouterr().err
+
+
+def test_short_term_questions_and_breakdown_classes(client):
+    """目的: 3 文字未満の語の問い（build_short）の正解が「題にその語（と別の語）を含む文書」で、同じ seed なら同じ問い。内訳（breakdown.classify）が
+    短い語（内容の語）・雛形の語だけ・短い語なし・事実を問うかを分ける。根拠: 3 文字未満の語は trigram の索引が引けず、全体の平均では効果が見えない（feat/retrieval-boost）。"""
+    from tools.eval_retrieval import breakdown
+
+    for n, t in enumerate(["Passkey 対応で認証が簡単に", "Wallet の認証が刷新された", "Bank の認証を強化", "Chip の冷却方式", "Server の冷却ファン"], start=1):
+        art(n, [(f"Thing{n}x", "tech")], title=t)
+    data = build_questions.build_short(_db_path(), per_form=3, seed=1)
+    qs = data["questions"]
+    assert qs and all(q["type"] == "short" for q in qs)
+    with news_db.session() as db:
+        from qnapnewshub.db import Document
+
+        titles = {d.id: d.title for d in db.query(Document)}
+    for q in qs:
+        w = q["anchor"]["word"]
+        assert q["gold"]["docs"] and all(w in titles[i] for i in q["gold"]["docs"])
+        if q["anchor"]["form"] == "with_term":
+            assert all(q["anchor"]["term"].casefold() in titles[i].casefold() for i in q["gold"]["docs"])
+    assert build_questions.build_short(_db_path(), per_form=3, seed=1)["questions"] == qs
+    c = breakdown.classify({"q": "認証 について何が報じられたか", "keywords": ["認証"], "type": "short"})
+    assert c["短い語（内容）"] and not c["短い語なし"] and not c["事実を問う"]
+    c2 = breakdown.classify({"q": "Foo の関係を知りたい", "keywords": ["Foo"], "type": "fact"})
+    assert c2["短い語（雛形の語だけ）"] and c2["事実を問う"]

@@ -8,6 +8,7 @@
 - relation（関係）: ある物を object にした uses／implements／supports／part_of／cites の関係 → 正解は、subject の物・関係・根拠の文書・object の物。
 - bridge（橋渡し。build_bridge で別に作る）: 関係（co_occurs を除く・向きなし）の最短経路が 2〜6 段の 2 物「A と B はどうつながっているか」→ 正解は、途中の物・経路の関係・その根拠の文書（経路上の全部）。
   通常の問いの正解は 1 段先までで作られ、深さを測れない。これは深さ・会合（retrieval.expand_meet）を測る物差し。端の物は名前が 1 つしか無いものだけ。
+- short（3 文字未満の語。build_short で別に作る）: 題に 2 文字の漢字語（「認証」「量子」など）を持つ記事 → 「{語} について何が報じられたか」（語だけ）と「{題の別の語} の {語}」（語＋別の語）。正解は、題にその語（と別の語）を含む文書。FTS5 trigram が引けない語を測る。
 - crosslingual（日本語の問い・英語の記事が正解）: 題がほぼ ASCII の記事（英語）に付いた日本語の主張 → 日本語の主張を含む問い（半分は物の名前つき、半分は名前なし）。正解は、その英語の記事・主張・物。
 正解が 1 件も無い・記事の根拠が無いものは問いにしない。区分が public の物・文書だけ。
 DB は読むだけ（mode=ro）。出力の JSON は利用者の実データ由来なので、リポジトリに入れない。
@@ -21,9 +22,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-TYPES = ("fact", "compare", "change", "multi", "relation", "crosslingual", "bridge", "watch", "bench")
+TYPES = ("fact", "compare", "change", "multi", "relation", "crosslingual", "bridge", "watch", "bench", "short")
 BRIDGE_LENGTHS = (2, 3, 4, 5, 6)
-TYPE_LABEL = {"fact": "事実", "compare": "比較", "change": "変化", "multi": "複数の文書", "relation": "関係", "crosslingual": "日本語の問い・英語の記事", "bridge": "橋渡し（2〜6 段）", "watch": "最近の変化（ウォッチ）", "bench": "条件つきの数値の比較"}
+TYPE_LABEL = {"fact": "事実", "compare": "比較", "change": "変化", "multi": "複数の文書", "relation": "関係", "crosslingual": "日本語の問い・英語の記事", "bridge": "橋渡し（2〜6 段）", "watch": "最近の変化（ウォッチ）", "bench": "条件つきの数値の比較", "short": "3 文字未満の語"}
 GOLD_DOCS_MAX = 5
 GOLD_CLAIMS_MAX = 4
 _JA = re.compile(r"[぀-ヿ㐀-鿿]")
@@ -392,6 +393,59 @@ def main(db_path: Path, out: Path, per_type: int = 10, seed: int = 1) -> dict:
 
 def main_bridge(db_path: Path, out: Path, per_length: int = 20, seed: int = 1) -> dict:
     data = build_bridge(db_path, per_length, seed)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    return data
+
+
+_KANJI2 = re.compile(r"(?<![㐀-鿿々])[一-鿿]{2}(?![㐀-鿿々])")
+_ANCHOR = re.compile(r"[A-Za-z][A-Za-z0-9.+\-]{2,}|[ァ-ヿー]{3,}")
+SHORT_DF = (3, 12)      # 2 文字の語の、題に出る記事の数の範囲（正解が少なすぎず多すぎない）
+
+
+def make_short(s: Src, rng: random.Random, n: int) -> list[dict]:
+    """3 文字未満の語の問い。n 問ずつ: ① 語だけ ② 別の語（題の ASCII の語・カタカナ 3 文字以上）＋語。正解は題が条件を満たす文書。"""
+    titles = {i: d["title"] for i, d in s.docs.items()}
+    df: dict[str, list[int]] = {}
+    for i, t in titles.items():
+        for w in set(_KANJI2.findall(t)):
+            df.setdefault(w, []).append(i)
+    words = sorted(w for w, ids in df.items() if SHORT_DF[0] <= len(ids) <= SHORT_DF[1] and w not in STOP_TEMPLATE)
+    rng.shuffle(words)
+    out: list[dict] = []
+    for w in words[:n]:
+        out.append({"type": "short", "q": f"{w} について何が報じられたか", "keywords": [w], "gold": _gold(docs=df[w]), "anchor": {"word": w, "form": "alone"}})
+    both = 0
+    for w in words[n:]:
+        if both >= n:
+            break
+        ids = df[w]
+        for i in ids:
+            for a in _ANCHOR.findall(titles[i]):
+                gold = [j for j in ids if a.casefold() in titles[j].casefold()]
+                if 1 <= len(gold) <= 8 and len([j for j in titles if a.casefold() in titles[j].casefold()]) >= 3:
+                    out.append({"type": "short", "q": f"{a} の {w}", "keywords": [a, w], "gold": _gold(docs=gold), "anchor": {"word": w, "form": "with_term", "term": a}})
+                    both += 1
+                    break
+            else:
+                continue
+            break
+    return out
+
+
+STOP_TEMPLATE = frozenset(["関係", "報道", "条件", "記事", "性能", "数値", "発表", "複数", "経緯", "一部", "直近", "前回", "価格", "実装", "対応", "引用", "修正", "検索"])      # 雛形に使う語は内容の語にしない
+
+
+def build_short(db_path: Path, per_form: int = 25, seed: int = 1) -> dict:
+    qs = make_short(Src(db_path), random.Random(f"{seed}:short"), per_form)
+    for n, q in enumerate(qs, 1):
+        q["id"] = f"s{n:03d}"
+    return {"version": 1, "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "seed": seed, "per_form": per_form,
+            "counts": {"short": len(qs)}, "questions": qs}
+
+
+def main_short(db_path: Path, out: Path, per_form: int = 25, seed: int = 1) -> dict:
+    data = build_short(db_path, per_form, seed)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     return data
