@@ -21,7 +21,7 @@ BUDGET = Field(rcache.BUDGET_DEFAULT_MS, ge=10, le=rcache.BUDGET_MAX_MS)
 
 class SeedsIn(BaseModel):
     q: str = Field(min_length=1, max_length=500)
-    kinds: list[str] = Field(default_factory=list, max_length=3)      # document・entity・event（空は全部）
+    kinds: list[str] = Field(default_factory=list, max_length=4)      # document・entity・event・claim（空は全部）
     doc_kinds: list[str] = Field(default_factory=list, max_length=9)      # news・paper・repo…（空は全部）
     limit: int = Field(20, ge=1, le=100)      # 種類ごとの上限
     since: datetime | None = None
@@ -94,6 +94,7 @@ class EvidenceIn(BaseModel):
     claims: list[int] = Field(default_factory=list, max_length=retrieval.EVIDENCE_IDS_MAX)
     relationships: list[int] = Field(default_factory=list, max_length=retrieval.EVIDENCE_IDS_MAX)
     per_item: int = Field(5, ge=1, le=retrieval.EVIDENCE_PER_ITEM_MAX)
+    compact: bool = False      # true なら文書の url を省く（label・id だけ。LLM に渡す文脈用）
     confidential: bool = False
     sensitivity: list[str] | None = Field(None, max_length=2)
 
@@ -105,7 +106,7 @@ def retrieve_evidence(body: EvidenceIn, user: User = Depends(read_user), db: Ses
 
     def compute() -> dict:
         budget = rcache.Budget(rcache.BUDGET_DEFAULT_MS)
-        out = retrieval.evidence(db, entities=body.entities, claims=body.claims, relationships=body.relationships, scopes=scopes, per_item=body.per_item)
+        out = retrieval.evidence(db, entities=body.entities, claims=body.claims, relationships=body.relationships, scopes=scopes, per_item=body.per_item, compact=body.compact)
         out["meta"] = {"elapsed_ms": budget.elapsed_ms()}
         return out
 

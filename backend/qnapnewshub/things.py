@@ -144,6 +144,13 @@ def mentions_of(db: Session, entity_id: int, limit: int = 8) -> list[dict]:
 
 # ---- LLM の脳の API（context） ----
 
+def doc_label(source: str, published_at, doc_id) -> str:
+    """LLM に渡す文脈の出どころの印: 「出どころの名前 日付 d<文書の id>」。Google ニュースの転送 URL のような長い URL をトークンに使わず、元の URL は JSON の sources・src に残す。
+    d<id> は /retrieve/evidence・/retrieve/seeds の文書の id と同じ（そこから根拠・URL をたどれる）。"""
+    day = str(published_at or "")[:10]
+    return " ".join(x for x in (str(source or "").strip(), day, f"d{doc_id}" if doc_id else "") if x)
+
+
 def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int = 12, max_facts: int = 5, def_chars: int = 60) -> dict:
     """短い文脈。frontmatter のような項目（type・status・aliases・confidence・updated・sources）＋ 1 行の定義 ＋ 型つきの関係（相手の 1 行の定義つき）＋ 主な事実と根拠の URL ＋ 未解決の問い。
     空の項目は出さない（トークンの節約）。関係は節ごとの均等な枠で max_relations まで。"""
@@ -174,18 +181,21 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
     claims = kg_view._claims_with_evidence(db, ent.id, scopes, limit=max_facts * 3)
     facts = []
     for c in claims:
-        urls = [e["document"]["url"] for e in c["evidences"] if e["document"]["url"]][:2]
-        if c["value"] or urls:
+        docs = [e["document"] for e in c["evidences"] if e["document"]["url"]][:2]
+        if c["value"] or docs:
             row = {"text": c["text"][:120]}
             if c["value"]:
                 row["value"] = c["value"]
-            if urls:
-                row["src"] = urls
+            if docs:
+                row["src"] = [d["url"] for d in docs]
+                row["src_label"] = [doc_label(d.get("source", ""), d.get("published_at", ""), d["id"]) for d in docs]
             facts.append(row)
         if len(facts) >= max_facts:
             break
-    sources = [u for (u,) in db.execute(select(NewsItem.url).join(ArticleEntity, ArticleEntity.article_id == NewsItem.id).where(ArticleEntity.entity_id == ent.id, NewsItem.url != "")
-                                        .order_by(NewsItem.published_at.desc()).limit(3))]
+    src_rows = db.execute(select(NewsItem.url, NewsItem.source, NewsItem.published_at, NewsDocument.document_id).join(ArticleEntity, ArticleEntity.article_id == NewsItem.id)
+                          .outerjoin(NewsDocument, NewsDocument.news_item_id == NewsItem.id).where(ArticleEntity.entity_id == ent.id, NewsItem.url != "")
+                          .order_by(NewsItem.published_at.desc()).limit(3)).all()
+    sources = [u for u, *_ in src_rows]
     out: dict = {"id": ent.id, "name": ent.name, "type": ent.type, "status": b["state"]["key"], "confidence": b["confidence"], "updated": (b["latest_evidence_at"] or "")[:10]}
     if b["definition"]:
         out["definition"] = b["definition"]
@@ -195,6 +205,7 @@ def context(db: Session, ent: Entity, scopes: list[str], *, max_relations: int =
         out["aliases"] = b["aliases"][:6]
     if sources:
         out["sources"] = sources
+        out["source_label"] = [doc_label(src, kg.iso(at), did) for _, src, at, did in src_rows]
     if rel_out:
         out["relations"] = rel_out
     if facts:
@@ -215,7 +226,7 @@ def context_text(c: dict) -> str:
         fm.append("aliases: " + ", ".join(c["aliases"]))
     if c.get("updated"):
         fm.append(f"updated: {c['updated']}")
-    for s in c.get("sources", []):
+    for s in c.get("source_label", []):
         fm.append(f"source: {s}")
     lines = ["---", *fm, "---"]
     if c.get("definition"):
@@ -225,7 +236,7 @@ def context_text(c: dict) -> str:
         lines += [f"- [{r['name']}]#{r['id']} ({r['rel']}, {r['conf']})" + (f": {r['def']}" if r.get("def") else "") for r in rows]
     if c.get("facts"):
         lines.append("## Facts")
-        lines += [f"- {f['text']}" + (f" = {f['value']}" if f.get("value") else "") + ("".join(f" <{u}>" for u in f.get("src", []))) for f in c["facts"]]
+        lines += [f"- {f['text']}" + (f" = {f['value']}" if f.get("value") else "") + ("".join(f" <{u}>" for u in f.get("src_label", []))) for f in c["facts"]]
     if c.get("open_questions"):
         lines.append("## Open Questions")
         lines += [f"- {q}" for q in c["open_questions"]]

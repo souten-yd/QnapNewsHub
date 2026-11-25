@@ -272,6 +272,13 @@ MPKR 本体（計画・融合・reranker・埋め込み）は ControlDeck 側。
 - **datetime の警告**: Python 3.12 の sqlite3 の既定の変換は、`text()` や生の SQL に datetime を直接束縛すると出る。`kg._sql_dt` など文字列で渡す形にして（書式は DateTime 列と同じ）0 にした。pytest の `filterwarnings` で再発したら落ちる。
 - **まだ無いもの**: MMR・ブリッジ・reranker（ControlDeck 側）・意味（埋め込み）の検索（I8）・種の検索の 2 文字語の全文・つないだ相手の区分の範囲をあとから変える画面（いまはつなぎ直し）・本物の MPKR からの呼び出しでの評価（I0・I4）。
 
+### 8 章の続き: 検索の改善（文脈の密度・主張を種に・周りの点数。feat/retrieval-density・2026-11-25）
+物差し（DESIGN 17 章）の基準値で見つかった弱い所のうち効果の大きい 3 点を、前後の点数で確かめながら直した（結果は非公開の評価の置き場。DESIGN 17.1）。
+- **文脈の密度**: `things.doc_label`＝「出どころ 日付 d<文書の id>」。`things/context` の text 形式は URL を出さずこれを出す（JSON は `sources`・`src` の URL を残し、並びが同じ `source_label`・`src_label` を足した）。`/retrieve/evidence` は文書に `label` を足し、`compact: true` なら `url` を省く（既定は従来どおり）。解いた元記事の URL（gnews.resolve）は外へ通信し、結果も保存していないので使わない。
+- **主張を種に**: 主張の本文＋値・主語の物の名前と別名の全文索引 `claim_fts_tri`・`claim_fts_word`（`searchindex.ensure_claims`。既存と同じ trigram＋porter・BM25。開くとき 1 回だけ既存の行を入れ〔`claim_fts_v1`〕、以後はトリガー〔claims・entity_aliases・entities.name〕が追う）。`POST /retrieve/seeds` が `kind: claim` を返す（`retrieval._claim_seeds`。主語の物・根拠の文書〔id・題・label。区分の範囲のものだけ〕つき。最上位の BM25 の 0.8 未満は出さない）。`kinds` は 4 種類（document・entity・event・claim）。
+- **周りの点数**: `POST /graph/neighbors` に `seed_scores`・`q` を渡すと、辺・物に `score`（`retrieval.score_neighbors`）。元の点数 × 0.95 × 確かさ × 根拠の数 × 問いの係数。係数はどれも 1 以下なので、周りは必ず元の種より低い。問いの係数＝相手の名前が問いに出る、または辺の型を尋ねる語（`REL_CUES`）が問いにあれば 1.0、なければ 0.2。`seed_scores` が無ければ従来と同じ応答。
+- **まだ無いもの**: ④（種＋PPR）への「種と周りの両方から来たら押し上げる」の適用・PPR の点数の同じ扱い・係数の別の問いでの再確認（調整と測定が同じ 60 問）・claims の索引の作り直しの画面（`request_rebuild` が一緒に入れ直す）。
+
 ## 9. 書き込みと読み込みを最小に（最重要の要件の 1 つ）
 - **Write Coordinator**: すべての永続化（記事・履歴・集計・知識・ジョブの状態・画像・ログ・WAL の checkpoint・FTS のマージ・バックアップ）を 1 つの係が束ね、まとめて書く。各処理が勝手にディスクを書かない。
 - 既定: 記事のまとめ書き 30 分ごと・バッファ 1,000 件 / 128MB・単一の書き手・WAL の checkpoint は保存の直後と保守の時間だけ（自動の checkpoint を切る）・索引の更新はまとめて・ログはメモリ（リングバッファ）・アクセスのログは既定で切・一時ファイルはメモリ優先・DB の最適化とバックアップは指定の時間・QNAP の上の LLM は既定で切。

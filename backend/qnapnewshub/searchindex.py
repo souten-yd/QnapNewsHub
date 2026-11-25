@@ -7,6 +7,8 @@
 - 索引は news_items のトリガーで追う（書くのはまとめ書き＝Write Coordinator の 1 トランザクションの中だけ。ここで別に書かない）。物の名前は entities.apply_extractions が reindex_ids を呼ぶ。
 - 古い DB（3 列の外部コンテンツの索引）は、開くときに新しい表・トリガーだけ先に作り（以後の書き込みは索引に載る）、既存の行は「作り直し」の仕事（backfill_batch）が
   まとめ書きの単位（既定 2 万件ごとの 1 トランザクション）で入れる。入れ終わるまで、検索は未索引の範囲を LIKE で補う。お休み中は進めない（呼ぶ側 maintenance.py）。
+- 主張（claims）の索引は別の 2 表（`claim_fts_tri`・`claim_fts_word`。列は 主張の本文＋値・主語の物の名前と別名）。主張は短い文なので、記事のような作り直しの仕事は持たず、
+  開くときに 1 回だけ既存の行を入れる（docstore の索引と同じ作り。`claim_fts_v1` の印）。以後はトリガーが追う。MPKR の種（POST /retrieve/seeds）が主張を直接引くための索引。
 """
 from __future__ import annotations
 
@@ -50,6 +52,55 @@ def _set_meta(conn, key: str, value: str) -> None:
     conn.execute(text("INSERT INTO news_meta(key, value) VALUES (:k, :v) ON CONFLICT(key) DO UPDATE SET value = :v"), {"k": key, "v": value})
 
 
+CLAIM_TRI, CLAIM_WORD = "claim_fts_tri", "claim_fts_word"
+CLAIM_COLUMNS = "body, ents"
+CLAIM_WEIGHTS = "4.0, 3.0"      # 主張の本文 > 主語の物の名前（問いが物の名前で引くとき、その物の主張が出るように）
+_CLAIM_ENTS = ("(SELECT e.name || ' ' || COALESCE((SELECT group_concat(a.alias, ' ') FROM entity_aliases a WHERE a.entity_id = e.id), '') FROM entities e WHERE e.id = {a}.entity_id)")
+
+
+def _claim_row(a: str) -> str:
+    return f"{a}.text || ' ' || {a}.value, COALESCE({_CLAIM_ENTS.format(a=a)}, '')"
+
+
+def ensure_claims(conn) -> bool:
+    """主張の索引の表・トリガーを用意し、既にある主張を 1 回だけ入れる（冪等）。作れなければ False（種は主張を返さない）。"""
+    try:
+        for name, tok in ((CLAIM_TRI, "trigram"), (CLAIM_WORD, "porter unicode61 remove_diacritics 2")):
+            conn.execute(text(f"CREATE VIRTUAL TABLE IF NOT EXISTS {name} USING fts5({CLAIM_COLUMNS}, content='', contentless_delete=1, tokenize='{tok}')"))
+        ins = " ".join(f"INSERT INTO {t}(rowid, {CLAIM_COLUMNS}) VALUES (new.id, {_claim_row('new')});" for t in (CLAIM_TRI, CLAIM_WORD))
+        dele = " ".join(f"DELETE FROM {t} WHERE rowid = old.id;" for t in (CLAIM_TRI, CLAIM_WORD))
+        conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS claims_fts_ai AFTER INSERT ON claims BEGIN {ins} END"))
+        conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS claims_fts_ad AFTER DELETE ON claims BEGIN {dele} END"))
+        conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS claims_fts_au AFTER UPDATE OF text, value, entity_id ON claims BEGIN {dele} {ins} END"))
+        for trig, event, ent in (("claim_fts_alias_ai", "AFTER INSERT ON entity_aliases", "new.entity_id"), ("claim_fts_alias_ad", "AFTER DELETE ON entity_aliases", "old.entity_id"),
+                                 ("claim_fts_name_au", "AFTER UPDATE OF name ON entities", "new.id")):      # 物の名前・別名が変わったら、その物の主張を入れ直す
+            body = " ".join(f"DELETE FROM {t} WHERE rowid IN (SELECT id FROM claims WHERE entity_id = {ent}); "
+                            f"INSERT INTO {t}(rowid, {CLAIM_COLUMNS}) SELECT c.id, {_claim_row('c')} FROM claims c WHERE c.entity_id = {ent};" for t in (CLAIM_TRI, CLAIM_WORD))
+            conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS {trig} {event} BEGIN {body} END"))
+        if conn.execute(text("SELECT 1 FROM news_meta WHERE key = 'claim_fts_v1'")).first() is None:
+            reindex_claims(conn)
+            _set_meta(conn, "claim_fts_v1", "1")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("主張の検索の索引を用意できません: %s", exc)
+        return False
+
+
+def reindex_claims(conn, entity_ids: list[int] | None = None) -> None:
+    """主張の索引を入れ直す（全部、または物の名前・別名が変わった物の主張だけ）。"""
+    where, args = "", {}
+    if entity_ids:
+        marks = ",".join(f":e{n}" for n in range(len(entity_ids)))
+        where, args = f"WHERE c.entity_id IN ({marks})", {f"e{n}": v for n, v in enumerate(entity_ids)}
+    for t in (CLAIM_TRI, CLAIM_WORD):
+        conn.execute(text(f"DELETE FROM {t} WHERE rowid IN (SELECT c.id FROM claims c {where})" if where else f"DELETE FROM {t}"), args)
+        conn.execute(text(f"INSERT INTO {t}(rowid, {CLAIM_COLUMNS}) SELECT c.id, {_claim_row('c')} FROM claims c {where}"), args)
+
+
+def has_claim_index(conn) -> bool:
+    return conn.dialect.name == "sqlite" and conn.execute(text("SELECT 1 FROM sqlite_master WHERE name = :n"), {"n": CLAIM_TRI}).first() is not None
+
+
 def _create_tables(conn) -> None:
     for name, tok in ((TRI, "trigram"), (WORD, "porter unicode61 remove_diacritics 2")):
         conn.execute(text(f"CREATE VIRTUAL TABLE IF NOT EXISTS {name} USING fts5({COLUMNS}, content='', contentless_delete=1, tokenize='{tok}')"))
@@ -85,6 +136,7 @@ def ensure(conn) -> bool:
         logger.warning("全文検索（FTS5）を作れません。LIKE で探します: %s", exc)
         return False
     _create_triggers(conn)
+    ensure_claims(conn)
     if fresh or legacy:
         top = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM news_items")).scalar() or 0
         if top:      # 既存の行は、まとめ書きの単位の仕事で入れる（開くとき重い処理をしない）
@@ -100,6 +152,8 @@ def request_rebuild(conn) -> int:
     """索引を空にして、全件の作り直しの仕事を予約する（入れるのは backfill_batch）。予約した件数（最大の id）を返す。"""
     conn.execute(text(f"DELETE FROM {TRI}"))
     conn.execute(text(f"DELETE FROM {WORD}"))
+    if has_claim_index(conn):
+        reindex_claims(conn)
     top = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM news_items")).scalar() or 0
     _set_meta(conn, "search_cursor", "0" if top else "-1")
     _set_meta(conn, "search_hi", str(top))
@@ -215,5 +269,19 @@ def search_any(conn, tri: list[str], word: list[str], limit: int = 200) -> list[
         match = " OR ".join(_phrase(t) for t in terms)
         sql = f"SELECT rowid, bm25({name}, {WEIGHTS}) AS r FROM {name} WHERE {name} MATCH :m ORDER BY r LIMIT :k"
         for rid, r in conn.execute(text(sql), {"m": match, "k": limit}):
+            scores[int(rid)] = scores.get(int(rid), 0.0) - float(r)
+    return sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+
+
+def search_claims(conn, tri: list[str], word: list[str], limit: int = 100) -> list[tuple[int, float]]:
+    """問いの文から取った語のどれかを含む（OR）主張の候補 [(主張の id, 点数)]（点数の大きい順。点数は BM25 の符号を反転したもの）。search_any の主張版。索引が無いときは空。"""
+    if not has_claim_index(conn) or not (tri or word):
+        return []
+    scores: dict[int, float] = {}
+    for name, terms in ((CLAIM_TRI, tri), (CLAIM_WORD, word)):
+        if not terms:
+            continue
+        sql = f"SELECT rowid, bm25({name}, {CLAIM_WEIGHTS}) AS r FROM {name} WHERE {name} MATCH :m ORDER BY r LIMIT :k"
+        for rid, r in conn.execute(text(sql), {"m": " OR ".join(_phrase(t) for t in terms), "k": limit}):
             scores[int(rid)] = scores.get(int(rid), 0.0) - float(r)
     return sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]

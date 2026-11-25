@@ -327,7 +327,7 @@ def _claims_with_evidence(db: Session, entity_id: int, scopes: list[str], limit:
     if claims:
         for ev, d in db.execute(select(Evidence, Document).join(Document, Document.id == Evidence.document_id).where(Evidence.claim_id.in_([c.id for c in claims]))):
             if d.sensitivity in scopes:
-                evs.setdefault(ev.claim_id, []).append({"document": {"id": d.id, "kind": d.kind, "title": d.title, "url": d.url}, "quote": ev.quote, "start": ev.start, "end": ev.end,
+                evs.setdefault(ev.claim_id, []).append({"document": {"id": d.id, "kind": d.kind, "title": d.title, "url": d.url, "source": d.source, "published_at": kg.iso(d.published_at)}, "quote": ev.quote, "start": ev.start, "end": ev.end,
                                                          "page": ev.page, "quote_hash": ev.quote_hash, "grounded": bool(ev.grounded)})
     return [{"id": c.id, "kind": c.kind, "text": c.text, "value": c.value, "ai_extracted": bool(c.ai_extracted), "model": c.model, "sensitivity": c.sensitivity,
              "evidences": evs.get(c.id, [])} for c in claims]
