@@ -321,14 +321,14 @@ def _cfg() -> dict:
     return {"daily": cfg["daily_limit"], "per_minute": cfg["minute_limit"], "quota": cfg["quota"], "night_from": cfg["night_from"], "gateway": cfg["gateway"]}
 
 
-async def complete(model: str, messages: list[dict], *, max_tokens: int = 2048, temperature: float = 0.3, purpose: str = "prep", abandon=None) -> str:
+async def complete(model: str, messages: list[dict], *, max_tokens: int = 2048, temperature: float = 0.3, purpose: str = "prep", abandon=None, response_format: dict | None = None) -> str:
     """1 回の生成。混み合いなら RETRY_DELAYS の間隔で待ってやり直す（最大 3 回）。鍵が無ければ LlmNotAllowed、1 日の上限なら LlmDailyLimit、それ以外の失敗は LlmUnavailable。"""
     if purpose not in PURPOSES:
         raise ValueError("purpose が違います")
     cfg = await asyncio.to_thread(_cfg)
     for delay in (*RETRY_DELAYS, None):
         try:
-            return await _complete_once(model, messages, max_tokens=max_tokens, temperature=temperature, purpose=purpose, cfg=cfg)
+            return await _complete_once(model, messages, max_tokens=max_tokens, temperature=temperature, purpose=purpose, cfg=cfg, response_format=response_format)
         except LlmDailyLimit:
             raise
         except LlmUnavailable as exc:
@@ -393,9 +393,23 @@ def _content_from(model: str, text: str) -> str:
     return content
 
 
-async def _complete_once(model: str, messages: list[dict], *, max_tokens: int, temperature: float, purpose: str, cfg: dict) -> str:
+# 構造化出力（response_format）を受け付けなかったモデル（HTTP 400・422）。以後は付けずに呼ぶ（プロセスの間だけ覚える）
+_NO_SCHEMA: set[str] = set()
+
+
+def _schema_refused(model: str, status: int, response_format: dict | None) -> bool:
+    """構造化出力つきの呼び出しが 400・422 で断られたか（断られたら覚えて、呼び出し側が付けずにやり直す）。"""
+    if response_format is not None and status in (400, 422):
+        _NO_SCHEMA.add(model)
+        return True
+    return False
+
+
+async def _complete_once(model: str, messages: list[dict], *, max_tokens: int, temperature: float, purpose: str, cfg: dict, response_format: dict | None = None) -> str:
+    if model in _NO_SCHEMA:
+        response_format = None
     if is_gateway(model):
-        return await _complete_gateway(model, messages, max_tokens=max_tokens, temperature=temperature, gw=cfg["gateway"])
+        return await _complete_gateway(model, messages, max_tokens=max_tokens, temperature=temperature, gw=cfg["gateway"], response_format=response_format)
     try:
         key = await asyncio.to_thread(secretbox.get_secret, KEY_NAME)
     except secretbox.SecretError as exc:
@@ -404,6 +418,8 @@ async def _complete_once(model: str, messages: list[dict], *, max_tokens: int, t
         raise LlmNotAllowed("OpenRouter の鍵が未設定です（設定で入れてください）")
     await _reserve(purpose, cfg)
     body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "reasoning": {"enabled": False}}
+    if response_format is not None:
+        body["response_format"] = response_format
     started = _clock()
     try:
         status, text = await _post(body, key)
@@ -411,6 +427,8 @@ async def _complete_once(model: str, messages: list[dict], *, max_tokens: int, t
         note_model(model, ok=False, ms=int((_clock() - started) * 1000))
         _chain_fail(model, "通信の失敗")
         raise
+    if status >= 400 and _schema_refused(model, status, response_format):
+        return await _complete_once(model, messages, max_tokens=max_tokens, temperature=temperature, purpose=purpose, cfg=cfg)
     if status >= 400:
         note_model(model, ok=False, status=status, ms=int((_clock() - started) * 1000))
         _chain_fail(model, "429" if status == 429 else f"HTTP {status}")
@@ -488,7 +506,7 @@ async def get_gateway_models(base_url: str, key: str, timeout: float = 15.0) -> 
         raise LlmUnavailable(f"ゲートウェイに接続できません: {type(exc).__name__}") from exc
 
 
-async def _complete_gateway(model: str, messages: list[dict], *, max_tokens: int, temperature: float, gw: dict) -> str:
+async def _complete_gateway(model: str, messages: list[dict], *, max_tokens: int, temperature: float, gw: dict, response_format: dict | None = None) -> str:
     if not gw["enabled"] or not gw["base_url"]:
         raise LlmNotAllowed("ゲートウェイが設定されていません")
     try:
@@ -497,6 +515,8 @@ async def _complete_gateway(model: str, messages: list[dict], *, max_tokens: int
         raise LlmNotAllowed(str(exc)) from exc
     await _gw_reserve(gw["minute_limit"])
     body = {"model": model[len(GATEWAY_PREFIX):], "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+    if response_format is not None:
+        body["response_format"] = response_format
     async with _gw_sem():
         started = _clock()
         try:
@@ -507,6 +527,8 @@ async def _complete_gateway(model: str, messages: list[dict], *, max_tokens: int
             raise
     await asyncio.to_thread(_count_gateway)
     ms = int((_clock() - started) * 1000)
+    if status >= 400 and _schema_refused(model, status, response_format):
+        return await _complete_gateway(model, messages, max_tokens=max_tokens, temperature=temperature, gw=gw)
     if status >= 400:
         note_model(model, ok=False, status=status, ms=ms)
         _chain_fail(model, f"HTTP {status}")

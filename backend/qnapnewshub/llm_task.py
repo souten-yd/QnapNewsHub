@@ -27,7 +27,7 @@ def json_of(text: str) -> object:
     return json.loads(body[start:end + 1])
 
 
-async def ask(cfg: dict, purpose: str, system: str, prompt: str, *, max_tokens: int) -> tuple[str, str]:
+async def ask(cfg: dict, purpose: str, system: str, prompt: str, *, max_tokens: int, response_format: dict | None = None) -> tuple[str, str]:
     """(返事の文, 使ったモデル)。使えなければ llm の例外（LlmNotAllowed・LlmDailyLimit・LlmUnavailable）。"""
     messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
     tried: list[str] = []
@@ -36,7 +36,7 @@ async def ask(cfg: dict, purpose: str, system: str, prompt: str, *, max_tokens: 
         model = llm_models.current(chain)
         tried.append(model)
         try:
-            text = await llm.complete(model, messages, max_tokens=max_tokens, temperature=0.2, purpose=purpose, abandon=lambda m=model: llm_models.switched_away(m))
+            text = await llm.complete(model, messages, max_tokens=max_tokens, temperature=0.2, purpose=purpose, abandon=lambda m=model: llm_models.switched_away(m), response_format=response_format)
             return text, model
         except llm.LlmDailyLimit:
             raise

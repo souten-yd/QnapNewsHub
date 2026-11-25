@@ -41,6 +41,12 @@ def _llm_try(args: argparse.Namespace) -> int:
     return llm_try.run(args.provider, args.base, args.model, args.items)
 
 
+def _numeric_try(args: argparse.Namespace) -> int:
+    from qnapnewshub import numeric_try
+
+    return numeric_try.run(args.provider, args.base, args.model, args.items)
+
+
 def _map_layout(args: argparse.Namespace) -> int:
     from qnapnewshub import mapgrav, writer
 
@@ -77,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
     try_p.add_argument("--model", required=True)
     try_p.add_argument("--items", type=int, default=10)
     try_p.set_defaults(func=_llm_try)
+    nt = sub.add_parser("numeric-try", help="数値パスを流して歩留まりを見る（何も書かない。鍵は環境変数 NEWSHUB_LLM_TRY_KEY か置き場の secretbox）")
+    nt.add_argument("--provider", choices=("gateway", "openrouter"), default="gateway")
+    nt.add_argument("--base", default="", help="ゲートウェイの基準の URL（省略すると設定の値）")
+    nt.add_argument("--model", required=True)
+    nt.add_argument("--items", type=int, default=30, help="読む記事の件数（新しい順。候補の文のある記事だけを送る）")
+    nt.set_defaults(func=_numeric_try)
     sub.add_parser("map-layout", help="知識の地図の配置（ForceAtlas2）と重要度を今すぐ計算して保存する（夜の仕事と同じ）").set_defaults(func=_map_layout)
     sub.add_parser("run", help="起動する").set_defaults(func=_run)
     args = parser.parse_args(argv)

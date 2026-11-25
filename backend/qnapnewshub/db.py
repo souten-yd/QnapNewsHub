@@ -71,6 +71,8 @@ class NewsItem(Base):
     dup_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 要素の取り出し（entities.py）の版。0 なら未（夜の後回しの仕事が拾う）。下ごしらえと同じ 1 回の呼び出しで取り出したら EXTRACT_VERSION が入る
     extract_v: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # 数値パス（numeric.py）の済みの印: 1＝題・抜粋で済み／2＝本文で済み
+    num_v: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # 画像が ControlDeck の生成物（artifacts.py）に差し替えられた印。画面に「AI 生成のイメージ」を出す
     image_ai: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     # 本文の取り出し（bodies.py）: 0 未・1 取れた（news_body に圧縮した本文）・2 取れない（理由は news_body.reason。二度と試さない）
@@ -816,7 +818,7 @@ _LATE_COLUMNS: list[tuple[str, str, str]] = [("news_items", "image_tried", "BOOL
                                         ("news_items", "img_prompt", "TEXT DEFAULT ''"), ("news_items", "prep_tries", "INTEGER NOT NULL DEFAULT 0"),
                                         ("news_items", "canon_url", "VARCHAR(1000) DEFAULT ''"), ("news_items", "guid", "VARCHAR(500) DEFAULT ''"),
                                         ("news_items", "simhash", "BIGINT"), ("news_items", "dup_of", "INTEGER"),
-                                        ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "image_ai", "BOOLEAN NOT NULL DEFAULT 0"),
+                                        ("news_items", "extract_v", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "num_v", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "image_ai", "BOOLEAN NOT NULL DEFAULT 0"),
                                         ("ana_count", "lag_sum", "BIGINT NOT NULL DEFAULT 0"), ("ana_count", "lag_n", "INTEGER NOT NULL DEFAULT 0"),
                                         ("ana_count", "lag_fast", "INTEGER NOT NULL DEFAULT 0"),
                                         ("news_items", "body_state", "INTEGER NOT NULL DEFAULT 0"), ("news_items", "cold", "INTEGER NOT NULL DEFAULT 0"),
