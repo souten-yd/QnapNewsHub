@@ -347,6 +347,7 @@ class MeasurementRun(Base):
     doc_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
     doc_hash: Mapped[str] = mapped_column(String(64))
     input_hash: Mapped[str] = mapped_column(String(64))
+    result_hash: Mapped[str] = mapped_column(String(64))
     extractor: Mapped[str] = mapped_column(String(40))
     ids_json: Mapped[str] = mapped_column(Text, default="[]")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
