@@ -36,3 +36,5 @@
 - measure_store.py: 同じfingerprintで失効済み/区分変更済みの記録を再利用しない。
 - 再評価: measure_search.py blob `dacde88425a5c7abc7e44264d4d591ad70697363` と一致したコピーをSQLAlchemy/SQLiteで実行。最小ORM・条件辞書の代替を使用。1203合成候補で13検査（完全一致の古い候補、3状態順、一致済み条件数、hash、区分・local_only、入力拒否など）成功。初回は部分一致内で新しい無条件行が先になることを発見し修正。30回の単一条件・limit1はp50 3.875ms、p95 5.186ms（コンテナ内のメモリDB、実NASではない）。実DBクラス/全体pytest/Zstd・writer統合は未実行（clone DNS失敗、コンテナにzstandardなし）。test_measure_service.pyに実ORM/Zstdの回帰試験を追加。実機で要検証。
 - 残: API/認可、既存FTSからの候補生成、旧claimとの互換、更新履歴/失効、範囲値、保存バッチ性能、実機writer/休止と競合、本文上限の見直し。自動適用はしない。マージしない。
+
+- 追加確認: [python-zstandard decompression API](https://python-zstandard.readthedocs.io/en/0.20.0/decompressor.html) のwindow上限の単位とextra dataの動作を確認。frame.content_sizeとframe.window_sizeをバイト単位で別検査し、古いORMのEntity属性に依存せずSQL joinで現行の区分を照合。最終版measure_search.py blob `ee7c2b4286e3cbed1977fafd4c92bfb011310a38` の一致コピーで、古いORM権限の1ケースも含め14検査成功。1203件の合成SQLite、30回 p50 3.862ms/p95 5.213ms。Zstd/実ORM/実機writerは未実行。#54はこのPRの途中のheadから作ったので、レビュー時にbaseの最新差分を反映して統合試験する（今回はマージしない）。
