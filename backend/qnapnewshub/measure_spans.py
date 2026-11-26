@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from qnapnewshub import bench
+from qnapnewshub import bench, measure_quantity as mq
 from qnapnewshub.measure_vocab import normalize_condition
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class MeasurementDraft:
     conditions: tuple[Candidate, ...] = ()
 
 
-_NUM_UNIT = re.compile(r"(?<![A-Za-z0-9_.+-])(?P<value>[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)[ \t]*(?P<unit>tokens/s|tok/s|tok/min|ms|s|GiB|GB|MiB|MB|kW|mW|W|MHz|GHz|%|USD|JPY|円)(?![A-Za-z0-9_/])")
+_NUM_UNIT = re.compile(r"(?<![A-Za-z0-9_.+-])(?P<value>" + mq.NUMBER + r")[ \t]*(?P<unit>tokens/s|tok/s|tok/min|ms|s|GiB|GB|MiB|MB|kW|mW|W|MHz|GHz|%|USD|JPY|円)(?![A-Za-z0-9_/])")
 _BOUNDARY = re.compile(r"\n+|(?<=[。！？!?])\s*|(?<=\.)\s+(?=[A-Z])")
 
 
@@ -51,7 +51,7 @@ def condition_candidates(source: str, start: int, end: int) -> tuple[Candidate, 
     text = source[start:end]
     out = []
     for key, pattern in (("quant", bench._QUANT), ("hw", bench._HW), ("engine", bench._ENGINE),
-                         ("ctx", bench._CTX), ("version", bench._VERSION)):
+                         ("ctx", bench._CTX), ("version", bench._VERSION), ("backend", bench._BACKEND)):
         for m in pattern.finditer(text):
             out.append(Candidate(key, Span(start+m.start(), start+m.end(), m.group())))
     return tuple(out)
@@ -78,6 +78,23 @@ def extract_explicit(source: str, subject: str) -> list[MeasurementDraft]:
         if len(names) != 1 or len(nums) != 1 or text.lstrip().startswith("|"):
             continue
         name, num = names[0], nums[0]
+        # 原文 span を維持したまま、範囲・近似・上下限は保留。
+        if mq.RANGE.search(text) or mq.QUALIFIED.match(text[:num.start('value')].split(':')[-1]) or '±' in text:
+            continue
+        prefix = text[:num.start('value')].rstrip()
+        if re.search(r'(?:[<>≤≥≈~]|\babout|\baround|\bapproximately|\bup to|\bat least|約|最大|最低)
+        def span(m, group=0):
+            return Span(start+m.start(group), start+m.end(group), m.group(group))
+        unit = span(num, "unit")
+        canonical_unit = "tok/s" if unit.text in ("tokens/s", "tok/min") else unit.text
+        mid = bench.metric_id("benchmark", text, canonical_unit)
+        if mid not in ("llm.decode_tps", "llm.prefill_tps", "llm.throughput_total_tps", "llm.throughput_per_user_tps", "llm.tps_unspecified"):
+            continue
+        out.append(MeasurementDraft(span(name), span(num, "value"), unit, mid, f"block:{start}",
+                                    unambiguous(condition_candidates(source, start, end))))
+    return out
+, prefix, re.I):
+            continue
         def span(m, group=0):
             return Span(start+m.start(group), start+m.end(group), m.group(group))
         unit = span(num, "unit")
