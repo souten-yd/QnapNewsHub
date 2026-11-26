@@ -22,6 +22,18 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
     spans = [draft.subject, draft.value, draft.unit] + [c.span for c in draft.conditions]
     if not all(s.valid(source) for s in spans):
         raise ValueError("unverified source span")
+    # Verify the relation, not just independent literal spans. Only reconstructed
+    # candidates from the same prose clause or parsed Markdown row can be saved.
+    if len(source.encode("utf-8")) > 1_000_000:
+        raise ValueError("source too large")
+    from qnapnewshub.measure_spans import extract_explicit
+    from qnapnewshub.measure_tables import markdown_measurements
+    candidates = (markdown_measurements(source) if draft.block_id.startswith("table:")
+                  else extract_explicit(source, draft.subject.text))
+    core = (draft.subject, draft.value, draft.unit, draft.metric_id, draft.block_id)
+    if not any((d.subject, d.value, d.unit, d.metric_id, d.block_id) == core
+               and set(draft.conditions) <= set(d.conditions) for d in candidates):
+        raise ValueError("unverified measurement relation")
     keys = [c.key for c in draft.conditions]
     if len(keys) != len(set(keys)) or not set(keys) <= LLM_KEYS:
         raise ValueError("invalid condition keys")
