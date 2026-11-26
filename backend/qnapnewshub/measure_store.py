@@ -39,9 +39,9 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
         raise ValueError("invalid condition keys")
     if not draft.metric_id.startswith("llm."):
         raise ValueError("unsupported metric")
-    value, unit, _ = normalize_quantity(draft.value.text, draft.unit.text)
-    if not math.isfinite(float(value)):
-        raise ValueError("nonfinite measurement")
+    value, unit, dimension = normalize_quantity(draft.value.text, draft.unit.text)
+    if not math.isfinite(float(value)) or value < 0 or dimension != "token_rate":
+        raise ValueError("invalid token rate")
     digest = hashlib.sha256(source.encode()).hexdigest()
     conds = sorted((c.key, normalize_condition(c.key, c.span.text), c.span.start, c.span.end)
                    for c in draft.conditions)
@@ -50,6 +50,16 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
     fp = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
     old = db.scalar(select(Measurement).where(Measurement.fingerprint == fp))
     if old is not None:
+        expected = (entity.id if entity else None, draft.subject.text, draft.metric_id, float(value),
+                    draft.value.text, unit, draft.unit.text, draft.value.start, draft.value.end, draft.block_id)
+        actual = (old.entity_id, old.subject_text, old.metric_id, old.value, old.value_text,
+                  old.unit, old.unit_text, old.span_start, old.span_end, old.block_id)
+        actual_conds = sorted((c.key, c.value_norm, c.span_start, c.span_end, c.value_text)
+                              for c in db.scalars(select(MeasurementCond).where(MeasurementCond.measurement_id == old.id)))
+        expected_conds = sorted((c.key, normalize_condition(c.key, c.span.text), c.span.start, c.span.end, c.span.text)
+                                for c in draft.conditions)
+        if actual != expected or actual_conds != expected_conds:
+            raise ValueError("stored measurement differs from verified evidence")
         if old.sensitivity != doc.sensitivity or old.ai_use != doc.ai_use:
             raise ValueError("existing measurement is restricted")
         if (reactivate and old.status == "superseded" and old.extractor in {"rule:c5b", "rule:c6c"}
