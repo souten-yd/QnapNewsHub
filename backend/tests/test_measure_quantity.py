@@ -36,3 +36,9 @@ def test_per_request_is_not_per_user_or_aggregate():
     assert bench.metric_id("benchmark", "60 tok/s per request", "tok/s") == "llm.throughput_per_request_tps"
     assert bench.metric_id("benchmark", "60 tok/s per user", "tok/s") == "llm.throughput_per_user_tps"
     assert bench.metric_id("benchmark", "aggregate 60 tok/s per user", "tok/s") == "llm.tps_unspecified"
+
+
+@pytest.mark.parametrize("text", ["40 tok/s–60 tok/s", "1,2 tok/s", "60 tok/s以上",
+                                  "60 tok/s程度", "60 tok/s±5 tok/s", "60±5 tok/s"])
+def test_extended_scalar_occurrence_rejects_non_scalar(text):
+    assert list(mq.scalar_tokens(text)) == []
