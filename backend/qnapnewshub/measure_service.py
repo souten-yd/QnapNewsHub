@@ -193,15 +193,15 @@ def apply_in_transaction(db, doc_id: int, expected_hash: str, *, expected_input_
     db.execute(update(Measurement).where(Measurement.doc_id == doc_id,
                Measurement.status == "active", Measurement.extractor.in_(MANAGED),
                Measurement.id.not_in(ids)).values(status="superseded"))
+    result_hash = _result_hash(db, ids)
+    if result_hash is None:
+        raise ValueError("inconsistent measurement result")
     run = db.get(MeasurementRun, doc_id)
     if run is None:
         run = MeasurementRun(doc_id=doc_id)
         db.add(run)
     run.doc_hash, run.input_hash, run.extractor = src.digest, signature, EXTRACTOR
     run.ids_json = json.dumps(ids)
-    result_hash = _result_hash(db, ids)
-    if result_hash is None:
-        raise ValueError("inconsistent measurement result")
     run.result_hash = result_hash
     run.updated_at = datetime.now(timezone.utc)
     db.flush()
