@@ -242,3 +242,13 @@ def test_compare_separates_prefill_decode_total_and_unknown(client):
     assert all(g["n"] == 1 for g in groups)
     response = client.get("/api/v1/metrics/compare", params={"thing": "Foo", "metric": "llm.decode_tps"}).json()
     assert [g["metric_id"] for g in response["things"][0]["groups"]] == ["llm.decode_tps"]
+
+
+def test_parse_value_only_uses_adjacent_matching_number():
+    """目的・根拠: C1レビュー 2026-11-26。異なる値の単位や with の w を拾わない。"""
+    assert bench.parse_value("60", "Foo with RTX 4070, 24 GB RAM, speed 60 tok/s") == (60.0, "tok/s")
+    assert bench.parse_value("60", "Foo with 24 GB RAM; score 60") == (60.0, "")
+    assert bench.parse_value("60", "60 tok/s and 60 W") == (60.0, "")
+    assert bench.parse_value("-60", "60 tok/s; -60 W") == (-60.0, "w")
+    assert bench.parse_value("60", "60 watts") == (60.0, "")
+    assert bench.cond_of({"hw": "unknown"}) == {}
