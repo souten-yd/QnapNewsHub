@@ -9,10 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 import zstandard
 
-from qnapnewshub import ztext
 from qnapnewshub.db import ArticleEntity, Document, Entity, NewsBody, NewsDocument, NewsItem
 from qnapnewshub.measure_spans import extract_explicit
 from qnapnewshub.measure_tables import markdown_measurements
@@ -36,7 +35,7 @@ class StoredSource:
 def load_source(db, doc_id: int) -> StoredSource | None:
     """Read the unique representative body from the DB, never caller text/hash."""
     rows = db.execute(
-        select(Document, NewsItem.id, NewsBody.raw_len, NewsBody.body)
+        select(Document, NewsItem.id, NewsBody.raw_len, NewsBody.state)
         .join(NewsDocument, NewsDocument.document_id == Document.id)
         .join(NewsItem, NewsItem.id == NewsDocument.news_item_id)
         .outerjoin(NewsBody, NewsBody.item_id == NewsItem.id)
@@ -46,9 +45,13 @@ def load_source(db, doc_id: int) -> StoredSource | None:
                NewsItem.dup_of.is_(None)).limit(2)).all()
     if len(rows) != 1:
         return None
-    doc, aid, size, blob = rows[0]
-    body = db.get(NewsBody, aid)
-    if body is None or body.state != 1 or not blob or not size or not 0 < size <= MAX_BODY or len(blob) > MAX_BODY * 2:
+    doc, aid, size, state = rows[0]
+    if state != 1 or not size or not 0 < size <= MAX_BODY:
+        return None
+    blob = db.scalar(select(NewsBody.body).where(NewsBody.item_id == aid,
+                      NewsBody.state == 1, NewsBody.raw_len == size,
+                      func.length(NewsBody.body) <= MAX_BODY * 2))
+    if not blob:
         return None
     # Known frame size only; zstd max_output_size alone does not bound a frame
     # that declares its decompressed size. Reject extra frames/trailing bytes.
