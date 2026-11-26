@@ -28,11 +28,12 @@ from sqlalchemy import select
 
 from qnapnewshub import bench, extract, llm, llm_task, rest, settings, writer
 from qnapnewshub import db as news_db
+from qnapnewshub import measure_quantity as mq
 from qnapnewshub.db import Claim, NewsBody, NewsItem
 
 logger = logging.getLogger("qnapnewshub.numeric")
 
-PROMPT_VERSION = "num2"
+PROMPT_VERSION = "num3"
 NUMERIC_BATCH = 5
 NUMERIC_DAILY_MAX = 40            # 新しい記事: 1 日の呼び出しの上限（用途 prep の割り当ての中・1 日 最大 200 記事）
 NUMERIC_BACKFILL_DAILY_MAX = 12   # 古い記事の埋め戻し: 1 日の呼び出しの上限（夜・用途 backfill・1 日 最大 60 記事）
@@ -46,13 +47,13 @@ HEADING_MAX = 80
 MAX_NUMBERS = 8                   # 記事あたりに受け取る数値
 TOKENS_PER_ITEM = 1300
 QUOTE_MAX = 240
-FIELDS = ("quote", "about", "metric", "value", "unit", "model", "quant", "hw", "engine", "ctx", "version")
-NULLABLE = ("unit", "model", "quant", "hw", "engine", "ctx", "version")
+FIELDS = ("quote", "about", "metric", "value", "unit", "model", "quant", "hw", "engine", "ctx", "version", "backend")
+NULLABLE = ("unit", "model", "quant", "hw", "engine", "ctx", "version", "backend")
 NUM_DONE_EXCERPT, NUM_DONE_BODY = 1, 2
 
 # ---- 候補の文の選び方（規則） ----
 
-_N = r"\d[\d,]*(?:\.\d+)?"
+_N = mq.NUMBER
 _UNIT_AFTER = (r"(?:tok(?:en)?s?/s(?:ec)?|t/s|tps|ms|msec|fps|[kmgt]i?b(?![a-z])|[kmg]?w(?:h)?(?![a-z])|mah|[mg]hz|t?flops|tops|%|×|x(?![a-z])|倍|秒|分|時間|円|ドル|万円|億円|"
                r"万|億|点|ポイント|pts?(?![a-z])|points?|usd|eur|ドル|s(?![a-z])|secs?(?![a-z])|seconds?|minutes?|mins?(?![a-z])|hours?|[km] ?(?:tokens?|ctx|context)|版|倍速|件|人|ユーザー|users?)")
 _NUM_UNIT = re.compile(rf"(?<![\w.])(?:[$€£¥]\s?{_N}|{_N}\s?{_UNIT_AFTER}|v\d+\.\d+(?:\.\d+)*|version\s?\d+(?:\.\d+)+|\bb\d{{4,5}}\b|"
@@ -218,7 +219,7 @@ def _kind(unit: str, metric: str, quote: str) -> str:
     return "benchmark"
 
 
-_VALUE_TOKEN = re.compile(r"(?<![A-Za-z0-9_.+\-])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?!\d|[.,]\d)")
+_VALUE_TOKEN = mq.TOKEN
 
 
 def _value_key(value: str) -> str:
@@ -227,9 +228,18 @@ def _value_key(value: str) -> str:
 
 
 def _number_matches(value: str, quote: str):
-    target = _norm(value).replace(",", "")
-    return [m for m in _VALUE_TOKEN.finditer(_norm(quote))
-            if m.group().replace(",", "") == target]
+    try:
+        target = mq.decimal_value(value)
+    except ValueError:
+        return []
+    out = []
+    for m in mq.scalar_tokens(quote):
+        try:
+            if mq.decimal_value(m.group()) == target:
+                out.append(m)
+        except ValueError:
+            continue
+    return out
 
 
 def _unit_in_quote(unit: str, value: str, quote: str) -> bool:
@@ -242,7 +252,7 @@ def _unit_in_quote(unit: str, value: str, quote: str) -> bool:
         aliases.update({"円", "jpy"})
     pattern = "|".join(re.escape(a) for a in sorted(aliases, key=len, reverse=True) if a)
     prefix = {"usd": ("$", "US$"), "円": ("¥",), "jpy": ("¥",), "eur": ("€",), "gbp": ("£",)}
-    text = _norm(quote)
+    text = mq.normalized(quote)
     for m in _number_matches(value, quote):
         if pattern and re.match(r"\s*(?:" + pattern + r")(?![a-z0-9_])", text[m.end():], re.I):
             return True
@@ -283,7 +293,7 @@ def check_item(raw: object, art: dict) -> tuple[dict | None, str]:
     if unit:
         # 同じ単位の値が複数ある節は、条件・値の対応が一意とは限らない。
         # C3/C4 で位置と節を解決するまでは無理に採用しない。
-        matches = [m for m in _VALUE_TOKEN.finditer(_norm(quote))
+        matches = [m for m in mq.scalar_tokens(quote)
                    if _unit_in_quote(unit, m.group(), quote)]
         if len(matches) != 1:
             return None, "ambiguous_value"
