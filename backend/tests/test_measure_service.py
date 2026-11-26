@@ -2,7 +2,7 @@
 import hashlib
 from datetime import datetime, timezone
 import pytest
-from sqlalchemy import create_engine, select, func
+from sqlalchemy import create_engine, select, func, update
 from sqlalchemy.orm import Session
 from qnapnewshub import ztext
 from qnapnewshub.db import Base, ArticleEntity, Document, Entity, NewsBody, NewsDocument, NewsItem, Measurement, MeasurementCond
@@ -81,6 +81,11 @@ def test_rank_before_limit_and_scope():
         assert search(db, **args)[0]["id"] == rows[0].id
         assert search(db, **{**args,"filters":{"hw":"RTX 4070","quant":"Q4"}})[0]["id"] == rows[0].id
         assert search(db, **{**args,"current_hashes":{doc.id:"b"*64}}) == []
+        # Do not trust stale ORM state for an entity's permissions.
+        db.execute(update(Entity).where(Entity.id == ent.id).values(ai_use="prohibited").execution_options(synchronize_session=False))
+        assert ent.ai_use == "allowed"
+        assert search(db, **args) == []
+        db.execute(update(Entity).where(Entity.id == ent.id).values(ai_use="allowed").execution_options(synchronize_session=False))
         doc.ai_use = "local_only"
         db.flush()
         assert search(db, **args) == []
