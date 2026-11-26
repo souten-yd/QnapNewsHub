@@ -50,6 +50,8 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
     fp = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
     old = db.scalar(select(Measurement).where(Measurement.fingerprint == fp))
     if old is not None:
+        if old.status != "active" or old.sensitivity != doc.sensitivity or old.ai_use != doc.ai_use:
+            raise ValueError("existing measurement is stale or restricted")
         return old
     row = Measurement(doc_id=doc.id, doc_hash=digest, entity_id=entity.id if entity else None,
                       subject_text=draft.subject.text, metric_id=draft.metric_id, value=float(value),
