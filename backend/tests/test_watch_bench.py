@@ -207,3 +207,38 @@ def test_context_shows_change_points(client):
     c = client.get(f"/api/v1/things/{sid}/context").json()
     assert "上がった" in c["change_points"][0]
     assert "## 変化点" in client.get(f"/api/v1/things/{sid}/context", params={"format": "text"}).text
+
+
+def test_cond_exact_aliases_and_ambiguous_candidates():
+    """目的・根拠: MEASUREMENT.md P2/P3/P9（2026-11-26）。部分一致・複数候補・既存値との衝突で別の条件を確定しない。"""
+    assert bench.cond_status({"hw": "RTX 4070"}, {"hw": "RTX 4070 Ti"}) == "other"
+    assert bench.cond_status({"quant": "Q4"}, {"quant": "Q4_K_M"}) == "other"
+    assert bench.cond_status({"quant": "Q4_K_M"}, {"quant": "UD-Q4_K_M"}) == "other"
+    assert bench.cond_status({"hw": "R9700"}, {"hw": "AMD Radeon AI PRO R9700"}) == "matching"
+    assert bench.cond_status({"ctx": "32K"}, {"ctx": "132K"}) == "other"
+    assert bench.parse_cond("RTX 4070 Q4_K_M; RTX 4070 Ti Q8_0") == {}
+    assert bench.parse_cond("RTX 4070 Q4_K_M and RTX 4070 Q4_K_M") == {"hw": "RTX 4070", "quant": "Q4_K_M"}
+    assert bench.clean_cond({"hw": "RTX 4070"}, "RTX 4070 Ti") == {}
+    assert bench.clean_cond({"quant": "Q4"}, "Q4_K_M") == {}
+    assert bench.cond_of({"hw": "RTX 4070"}, "RTX 4070 Ti") == {}
+    assert bench.cond_of({"hw": "RTX 4070"}, "RTX 4070 and RTX 4070 Ti") == {}
+    assert bench.cond_of({"hw": "RTX 4070"}, "RTX 4070 costs 500 USD", kind="price") == {}
+
+
+def test_compare_separates_prefill_decode_total_and_unknown(client):
+    """目的・根拠: MEASUREMENT.md P5（2026-11-26）。同じ機材・同じ tok/s でも測定指標を混ぜない。"""
+    art(2, [("Foo", "model")], facts=[
+        fact("Foo", "prefill 420 tok/s", "420 tok/s", hw="R9700", quant="Q4_K_M"),
+        fact("Foo", "decode 60 tok/s", "60 tok/s", hw="R9700", quant="Q4_K_M"),
+        fact("Foo", "total throughput 180 tok/s", "180 tok/s", hw="R9700", quant="Q4_K_M"),
+        fact("Foo", "速度 72 tok/s", "72 tok/s", hw="R9700", quant="Q4_K_M"),
+    ])
+    response = client.get("/api/v1/metrics/compare", params={"thing": "Foo", "metric": "tok/s", "cond": "hw:R9700"}).json()
+    groups = response["things"][0]["groups"]
+    assert {g["metric_id"]: g["latest"]["value"] for g in groups} == {
+        "llm.prefill_tps": 420.0, "llm.decode_tps": 60.0,
+        "llm.throughput_total_tps": 180.0, "llm.tps_unspecified": 72.0,
+    }
+    assert all(g["n"] == 1 for g in groups)
+    response = client.get("/api/v1/metrics/compare", params={"thing": "Foo", "metric": "llm.decode_tps"}).json()
+    assert [g["metric_id"] for g in response["things"][0]["groups"]] == ["llm.decode_tps"]
