@@ -32,7 +32,7 @@ from qnapnewshub.db import Claim, NewsBody, NewsItem
 
 logger = logging.getLogger("qnapnewshub.numeric")
 
-PROMPT_VERSION = "num1"
+PROMPT_VERSION = "num2"
 NUMERIC_BATCH = 5
 NUMERIC_DAILY_MAX = 40            # 新しい記事: 1 日の呼び出しの上限（用途 prep の割り当ての中・1 日 最大 200 記事）
 NUMERIC_BACKFILL_DAILY_MAX = 12   # 古い記事の埋め戻し: 1 日の呼び出しの上限（夜・用途 backfill・1 日 最大 60 記事）
@@ -180,7 +180,7 @@ def build_prompt(arts: list[dict]) -> str:
     lines = ["次の記事それぞれについて、「候補の文」に書かれている**数値**（ベンチマーク・速度・価格・版・性能・容量・件数など）を、1 つの数値ごとに 1 行の JSON で取り出してください。",
              f"形（例。ここの名前・数字は例で、記事とは無関係）: {_FORM_EXAMPLE}",
              "- 欄は全部必ず書く。書かれていない欄は null（推測しない・空文字にしない）。記事に数値が無ければ {\"numbers\": []}",
-             "- quote: 候補の文からそのまま写した引用（240 文字以内）。**先に quote を決め、その文に書かれていることだけで他の欄を埋める**。数値（value）は quote の中に出ている物だけ",
+             "- quote: 候補の文からそのまま写した引用（240 文字以内）。**先に quote を決め、その文に書かれていることだけで他の欄を埋める**。対象名・数値（value）・条件を同じ文または表の行の中に含める。複数の文をつなげない",
              "- about: その数値が述べる対象の名前（記事の表記のまま）。metric: 何の数値か（日本語の短い語。例: 生成速度・価格・スコア・版・メモリ使用量）",
              "- value: 数だけ（\"120.5\"・\"1299\"・\"91\"）。unit: 単位（tok/s・ms・GB・%・USD・円・点・倍 など。無ければ null）",
              "- model・quant・hw・engine・ctx・version: その数値を**測った条件**。model=測ったモデル名、quant=量子化（Q4_K_M・FP8 など）、hw=GPU・端末、engine=エンジン・ソフト（llama.cpp など）、ctx=文脈の長さ（32k など）、version=版・ビルド。"
@@ -213,6 +213,20 @@ def _kind(unit: str, metric: str, quote: str) -> str:
     return "benchmark"
 
 
+_VALUE_TOKEN = re.compile(r"(?<![A-Za-z0-9_.+\-])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?!\d|[.,]\d)")
+
+
+def _value_key(value: str) -> str:
+    """符号は消さない。空白・大小・全半角だけを正規化する。"""
+    return extract.fold(value)
+
+
+def _number_matches(value: str, quote: str):
+    target = _norm(value).replace(",", "")
+    return [m for m in _VALUE_TOKEN.finditer(_norm(quote))
+            if m.group().replace(",", "") == target]
+
+
 def _unit_in_quote(unit: str, value: str, quote: str) -> bool:
     """数値に隣接する単位のみ。通貨記号と既知の別表記も許す。"""
     u = _norm(unit).casefold()
@@ -224,9 +238,7 @@ def _unit_in_quote(unit: str, value: str, quote: str) -> bool:
     pattern = "|".join(re.escape(a) for a in sorted(aliases, key=len, reverse=True) if a)
     prefix = {"usd": ("$", "US$"), "円": ("¥",), "jpy": ("¥",), "eur": ("€",), "gbp": ("£",)}
     text = _norm(quote)
-    for m in re.finditer(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?![\d.,])", text):
-        if m.group().replace(",", "") != _norm(value).replace(",", ""):
-            continue
+    for m in _number_matches(value, quote):
         if pattern and re.match(r"\s*(?:" + pattern + r")(?![a-z0-9_])", text[m.end():], re.I):
             return True
         if any(text[:m.start()].rstrip().endswith(sym) for sym in prefix.get(u, ())):
@@ -245,10 +257,14 @@ def check_item(raw: object, art: dict) -> tuple[dict | None, str]:
     value = _clean_str(raw.get("value"), 30)
     if not quote or not about or not metric or not value:
         return None, "form"
-    if not extract.quote_grounded(quote, source):
+    if not extract.quote_grounded(quote, source) or len(_SENT_SPLIT.split(quote)) != 1 or "｜" in quote:
         return None, "quote"
+    if not bench.literal_condition(about, quote):
+        return None, "subject"
     wanted = extract.numbers_in(value)
     if not wanted or not wanted <= extract.numbers_in(quote):
+        return None, "value"
+    if _kind("", metric, quote) != "release" and not _number_matches(value, quote):
         return None, "value"
     unit = _clean_str(raw.get("unit"), 40)
     unit = _UNIT_MAP.get(unit.lower(), unit)[:16]      # 長い書き方（tokens per second）は切る前に短い形へ
@@ -302,12 +318,12 @@ def parse(text: str, arts: list[dict]) -> tuple[dict[int, list[dict]], dict]:
             stats["dropped"][why] = stats["dropped"].get(why, 0) + 1
             continue
         fact = to_fact(item)
-        key = (n, bench.fold(fact["value"]), extract.normalize_key(item["about"]),
+        key = (n, _value_key(fact["value"]), extract.normalize_key(item["about"]),
                extract.normalize_key(item["metric"]), extract.fold(item["quote"]), bench._group_key(fact["cond"]))
         if key in seen or len(out.get(n, [])) >= MAX_NUMBERS:
             continue
         seen.add(key)
-        out.setdefault(n, []).append({**item, "rule_cond": bench.parse_cond(item["quote"])})
+        out.setdefault(n, []).append({**item, "rule_cond": {} if fact["kind"] == "price" else bench.parse_cond(item["quote"])})
         stats["passed"] += 1
     return out, stats
 
@@ -342,13 +358,13 @@ def apply_numeric(db, staged: dict[int, dict]) -> dict:
     for article_id, rec in staged.items():
         existing = db.execute(select(Claim, Entity.key).outerjoin(Entity, Entity.id == Claim.entity_id)
                               .where(Claim.article_id == article_id, Claim.ai_extracted.is_(True), Claim.value != "")).all()
-        seen = {(key, c.kind, extract.fold(c.text), bench.fold(c.value),
+        seen = {(key, c.kind, extract.fold(c.text), _value_key(c.value),
                  bench._group_key(bench.cond_of(c.cond, c.text, kind=c.kind)))
                 for c, key in existing if key}
         fresh: list[dict] = []
         for fact in rec["facts"]:
             key = (extract.normalize_key(fact["about"]), fact["kind"], extract.fold(fact["text"]),
-                   bench.fold(fact["value"]), bench._group_key(fact["cond"]))
+                   _value_key(fact["value"]), bench._group_key(fact["cond"]))
             if key not in seen:
                 seen.add(key)
                 fresh.append(fact)
