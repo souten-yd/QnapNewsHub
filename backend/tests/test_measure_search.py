@@ -28,7 +28,7 @@ def test_search_checks_current_doc_hash_and_scope():
         args = dict(entity_id=ent.id, metric_id="llm.decode_tps", filters={"hw": "RTX 4070"},
                     scopes={"public"}, current_hashes={doc.id: digest})
         assert search(db, **args)[0]["status"] == "matching"
-        assert search(db, **{**args, "current_hashes": {doc.id: "wrong"}}) == []
+        assert search(db, **{**args, "current_hashes": {doc.id: "0"*64}}) == []
         doc.sensitivity = "confidential"
         db.flush()
         assert search(db, **args) == []
