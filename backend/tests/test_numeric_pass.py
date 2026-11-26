@@ -322,3 +322,13 @@ def test_original_segments_prevent_cross_row_or_cross_paragraph_quote():
     assert numeric.check_item(_row(quote=first + " " + second, value="60"), article)[1] == "quote"
     quote = "Foo-7B reached 60 tok/s and 80 tok/s on RTX 4070"
     assert numeric.check_item(_row(quote=quote, value="60"), {"source": quote})[1] == "ambiguous_value"
+
+
+def test_short_quote_cannot_hide_negation_or_another_measurement():
+    quote = "Foo-7B reached 60 tok/s on RTX 4070"
+    for original, reason in [
+        ("It is not true that " + quote, "ambiguous_relation"),
+        (quote + " and 80 tok/s on the same device", "ambiguous_value"),
+        (quote + " or RTX 4090", "ambiguous_relation"),
+    ]:
+        assert numeric.check_item(_row(quote=quote, value="60"), {"source": original, "segments":[original]})[1] == reason
