@@ -24,7 +24,7 @@ COMPARE_THINGS_MAX = 5
 GROUP_POINTS_MAX = 6
 
 _QUANT = re.compile(r"\b(?:i?q[2-8]_(?:k_)?(?:xxs|xs|s|m|l|0|1)|iq[1-4]_(?:xxs|xs|s|m|nl)|[fb]f?16|fp(?:4|8|16|32)|nvfp4|mxfp4|int[48]|[2-8][- ]?bit)\b|[2-8] ?ビット", re.I)
-_HW = re.compile(r"\b(?:rtx ?(?:pro )?\d{4}(?: ?ti)?(?: ?super)?|gtx ?\d{3,4}|rx ?\d{4}(?: ?xt)?|r9700|mi\d{2,3}x?|[hab]\d{2,3}0?|gb\d{2,3}|m[1-9] ?(?:pro|max|ultra)?|a1[0-9] ?pro|snapdragon ?\w*(?: ?elite)?|"
+_HW = re.compile(r"\b(?:(?:amd ?)?radeon ?(?:ai ?pro ?)?r9700|rtx ?(?:pro )?\d{4}(?: ?ti)?(?: ?super)?|gtx ?\d{3,4}|rx ?\d{4}(?: ?xt)?|r9700|mi\d{2,3}x?|[hab]\d{2,3}0?|gb\d{2,3}|m[1-9] ?(?:pro|max|ultra)?|a1[0-9] ?pro|snapdragon ?\w*(?: ?elite)?|"
                  r"arc ?[ab]\d{3}|radeon ?(?:pro )?\w+ ?\d*|strix ?halo|dgx ?spark|jetson ?\w+|ryzen ?ai ?\w*)\b|骁龙 ?\w+(?: ?elite)?|スナドラ ?\w*", re.I)
 _ENGINE = re.compile(r"\b(?:llama\.cpp|vllm|sglang|ollama|mlx|tensorrt-?llm|onnx ?runtime|ctranslate2|lm studio|exllama\w*|transformers|rocm|cuda|vulkan|metal|migraphx|openvino|directml|"
                      r"hexagon|coreml|webgpu|candle|burn|mistral\.rs|strata|radiance)\b", re.I)
@@ -42,29 +42,51 @@ def _clip(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:COND_MAX_CHARS]
 
 
-def parse_cond(text: str) -> dict[str, str]:
-    """文から条件の欄を規則で取る（見つかった欄だけ。最初の 1 つ）。model は規則では取らない（物の名前と区別できない）。"""
+# 明示の別名だけを同じ機材と扱う。部分一致で別の SKU を寄せない。
+_HW_ALIASES = {"amdradeonr9700": "r9700", "radeonr9700": "r9700",
+               "amdradeonaipror9700": "r9700", "radeonaipror9700": "r9700"}
+
+
+def cond_key(key: str, value: object) -> str:
+    norm = fold(value)
+    return _HW_ALIASES.get(norm, norm) if key == "hw" else norm
+
+
+def cond_candidates(text: str) -> dict[str, dict[str, str]]:
+    """欄ごとに全候補を保持する。同じ表記の繰り返しだけを寄せる。"""
     s = unicodedata.normalize("NFKC", str(text or ""))
-    out: dict[str, str] = {}
-    for key, pat in (("quant", _QUANT), ("hw", _HW), ("engine", _ENGINE)):
-        m = pat.search(s)
-        if m:
-            out[key] = _clip(m.group(0))
-    m = _CTX.search(s)
-    if m:
-        num, unit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
-        out["ctx"] = f"{num}{unit.upper()}"
-    m = _VERSION.search(s)
-    if m:
-        out["version"] = _clip(m.group(1) or f"b{m.group(2)}")
+    out: dict[str, dict[str, str]] = {}
+    for key, pat in (("quant", _QUANT), ("hw", _HW), ("engine", _ENGINE), ("ctx", _CTX), ("version", _VERSION)):
+        for m in pat.finditer(s):
+            if key == "ctx":
+                num, unit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+                value = f"{num}{unit.upper()}"
+            elif key == "version":
+                value = m.group(1) or f"b{m.group(2)}"
+            else:
+                value = _clip(m.group(0))
+            out.setdefault(key, {})[cond_key(key, value)] = value
     return out
+
+
+def parse_cond(text: str) -> dict[str, str]:
+    """一意な条件だけ。複数の異なる候補があれば確定しない。"""
+    return {key: next(iter(values.values())) for key, values in cond_candidates(text).items() if len(values) == 1}
+
+
+def literal_condition(value: str, text: str) -> bool:
+    """条件の出現をトークン境界込みで照合する（短い量子化名の誤一致を避ける）。"""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    parts = re.split(r"[\s_-]+", unicodedata.normalize("NFKC", value).casefold())
+    pattern = r"[\s_-]*".join(re.escape(p) for p in parts if p)
+    return bool(pattern and re.search(r"(?<![a-z0-9_])" + pattern + r"(?![a-z0-9_])", normalized))
 
 
 def clean_cond(raw: object, source_text: str = "") -> dict[str, str]:
     """LLM が書いた条件を整える。知らない欄・空・長すぎる値は捨てる。source_text（原文の題と抜粋）が渡されたら、原文に出ない値も捨てる（書かれていない条件を作らせない）。"""
     if not isinstance(raw, dict):
         return {}
-    src = fold(source_text)
+    candidates = cond_candidates(source_text) if source_text else {}
     out: dict[str, str] = {}
     for key in COND_KEYS:
         v = raw.get(key)
@@ -73,14 +95,21 @@ def clean_cond(raw: object, source_text: str = "") -> dict[str, str]:
         v = _clip(v)
         if len(fold(v)) < 2 or fold(v) in {"unknown", "不明", "none", "null", "なし", "na", "n/a"}:
             continue
-        if source_text and fold(v) not in src:
-            continue
+        if source_text:
+            known = candidates.get(key)
+            if known:
+                if len(known) != 1 or cond_key(key, v) not in known:
+                    continue
+            elif not literal_condition(v, source_text):
+                continue
         out[key] = v
     return out
 
 
-def cond_of(stored: str | dict | None, text: str = "") -> dict[str, str]:
+def cond_of(stored: str | dict | None, text: str = "", *, kind: str = "") -> dict[str, str]:
     """主張 1 件の条件: 保存された cond（JSON）＋ 文からの規則（保存された欄が先）。"""
+    if kind == "price":
+        return {}  # 製品仕様（GPU 等）は価格の測定条件ではない
     d: dict = {}
     if isinstance(stored, dict):
         d = stored
@@ -116,9 +145,9 @@ def parse_filter(raw: str) -> dict[str, str]:
     return out
 
 
-def _field_match(want: str, have: str) -> bool:
-    w, h = fold(want), fold(have)
-    return bool(w) and bool(h) and (w == h or w in h or h in w)
+def _field_match(want: str, have: str, key: str = "") -> bool:
+    w, h = cond_key(key, want), cond_key(key, have)
+    return bool(w) and w == h
 
 
 def cond_status(filter_: dict[str, str], cond: dict[str, str]) -> str:
@@ -128,7 +157,7 @@ def cond_status(filter_: dict[str, str], cond: dict[str, str]) -> str:
     unknown = False
     for key, want in filter_.items():
         if key == "*":
-            if not any(_field_match(want, v) for v in cond.values()):
+            if not any(_field_match(want, v, k) for k, v in cond.items()):
                 unknown = True if not cond else unknown
                 if cond:
                     return "other"
@@ -136,7 +165,7 @@ def cond_status(filter_: dict[str, str], cond: dict[str, str]) -> str:
         have = cond.get(key, "")
         if not have:
             unknown = True
-        elif not _field_match(want, have):
+        elif not _field_match(want, have, key):
             return "other"
     return "unspecified" if unknown else "matching"
 
@@ -165,12 +194,29 @@ def _label(cond: dict[str, str]) -> str:
 
 
 def _group_key(cond: dict[str, str]) -> tuple:
-    return tuple((k, fold(cond[k])) for k in COND_KEYS if cond.get(k))
+    return tuple((k, cond_key(k, cond[k])) for k in COND_KEYS if cond.get(k))
+
+
+def metric_id(kind: str, text: str, unit: str) -> str:
+    """C1: 明示された速度の種類だけを分類する。複数の手がかりは不明。"""
+    if unit != "tok/s" or kind != "benchmark":
+        return kind
+    patterns = {
+        "llm.prefill_tps": r"\bprefill\b|\bpp\d+\b|prompt processing|プリフィル|前処理|入力処理",
+        "llm.decode_tps": r"\bdecode\b|\btg\d+\b|generation speed|生成速度|デコード",
+        "llm.throughput_total_tps": r"aggregate|total throughput|合計スループット|総スループット|合計.*tok/s",
+    }
+    def matches(value: str) -> list[str]:
+        return [key for key, pattern in patterns.items() if re.search(pattern, value, re.I)]
+    found = matches(text)
+    return found[0] if len(found) == 1 else "llm.tps_unspecified"
 
 
 def _metric_match(metric: str, kind: str, text: str, unit: str) -> bool:
     if not metric:
         return True
+    if metric.startswith("llm."):
+        return metric == metric_id(kind, text, unit)
     m = fold(metric)
     return m in {fold(kind), fold(unit)} or m in fold(text) or fold(metric) in fold(unit)
 
@@ -198,7 +244,7 @@ def _claim_rows(db: Session, ent, scopes: list[str], metric: str) -> list[dict]:
         num, unit = parse_value(c.value, c.text)
         if num is None or not _metric_match(metric, c.kind, c.text, unit):
             continue
-        rows.append({"source": "claim", "claim_id": c.id, "kind": c.kind, "text": c.text[:160], "value": num, "raw": c.value, "unit": unit, "cond": cond_of(c.cond, c.text),
+        rows.append({"source": "claim", "claim_id": c.id, "kind": c.kind, "text": c.text[:160], "value": num, "raw": c.value, "unit": unit, "cond": cond_of(c.cond, c.text, kind=c.kind),
                      "at": c.stated_at or c.created_at})
     if not rows:
         return rows
@@ -253,14 +299,15 @@ def compare(db: Session, ents: list, scopes: list[str], *, metric: str = "", con
         rows = _claim_rows(db, ent, scopes, metric) + _metric_rows(db, ent, metric)
         groups: dict[tuple, dict] = {}
         for r in rows:
-            key = (r["unit"], r["kind"] if r["source"] == "metric" else "", r.get("metric", ""), _group_key(r["cond"]))
-            g = groups.setdefault(key, {"unit": r["unit"], "cond": r["cond"], "cond_label": _label(r["cond"]), "status": cond_status(flt, r["cond"]), "points": []})
+            mid = r.get("metric") if r["source"] == "metric" else metric_id(r["kind"], r["text"], r["unit"])
+            key = (r["source"], r["unit"], mid, _group_key(r["cond"]))
+            g = groups.setdefault(key, {"unit": r["unit"], "metric_id": mid, "cond": r["cond"], "cond_label": _label(r["cond"]), "status": cond_status(flt, r["cond"]), "points": []})
             g["points"].append(r)
         out_groups = []
         for g in groups.values():
             pts = sorted(g["points"], key=lambda r: (r["at"] is not None, r["at"] or datetime.min), reverse=True)
             vals = [p["value"] for p in pts]
-            out_groups.append({"unit": g["unit"], "cond": g["cond"], "cond_label": g["cond_label"], "status": g["status"], "n": len(pts), "latest": {"value": pts[0]["value"], "at": _iso(pts[0]["at"])},
+            out_groups.append({"unit": g["unit"], "metric_id": g["metric_id"], "cond": g["cond"], "cond_label": g["cond_label"], "status": g["status"], "n": len(pts), "latest": {"value": pts[0]["value"], "at": _iso(pts[0]["at"])},
                                "min": min(vals), "max": max(vals),
                                "points": [{"value": p["value"], "at": _iso(p["at"]), "text": p["text"], "source": p["source"], **({"src": p["src_label"]} if p.get("src_label") else {}),
                                            **({"url": p["url"]} if p.get("url") else {}), **({"grounded": True} if p.get("grounded") else {}),
@@ -291,6 +338,6 @@ def compare_text(c: dict, max_groups: int = 6) -> str:
             for g in gs:
                 p = g["points"][0]
                 span = f"（{g['n']} 件・{g['min']:g}〜{g['max']:g}）" if g["n"] > 1 else ""
-                lines.append(f"- {g['cond_label']}: {g['latest']['value']:g}{g['unit']}{span} [{p.get('src', p['source'])}]")
+                lines.append(f"- {g.get('metric_id', '')} / {g['cond_label']}: {g['latest']['value']:g}{g['unit']}{span} [{p.get('src', p['source'])}]")
     lines.append(f"注: {c['note']}")
     return "\n".join(lines)
