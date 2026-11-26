@@ -82,7 +82,8 @@ def extract_explicit(source: str, subject: str) -> list[MeasurementDraft]:
         if not mq.is_scalar_occurrence(text, num.start("value"), num.end("value")):
             continue
         try:
-            mq.decimal_value(num.group("value"))
+            if mq.decimal_value(num.group("value")) < 0:
+                continue
         except ValueError:
             continue
         def span(m, group=0):
