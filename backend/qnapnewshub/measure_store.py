@@ -14,7 +14,7 @@ from qnapnewshub.measure_vocab import LLM_KEYS, normalize_condition, normalize_q
 
 
 def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entity: Entity | None = None,
-               extractor: str = "rule:c3") -> Measurement:
+               extractor: str = "rule:c3", reactivate: bool = False) -> Measurement:
     if doc.id is None or doc.ai_use == "prohibited":
         raise ValueError("document unavailable for analysis")
     if entity is not None and (entity.sensitivity != doc.sensitivity or entity.ai_use != doc.ai_use):
@@ -50,8 +50,15 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
     fp = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
     old = db.scalar(select(Measurement).where(Measurement.fingerprint == fp))
     if old is not None:
-        if old.status != "active" or old.sensitivity != doc.sensitivity or old.ai_use != doc.ai_use:
-            raise ValueError("existing measurement is stale or restricted")
+        if old.sensitivity != doc.sensitivity or old.ai_use != doc.ai_use:
+            raise ValueError("existing measurement is restricted")
+        if (reactivate and old.status == "superseded" and old.extractor in {"rule:c5b", "rule:c6c"}
+                and extractor == "rule:c6c"):
+            # Same fingerprint, current verified source and conditions only.
+            old.status = "active"
+            db.flush()
+        if old.status != "active":
+            raise ValueError("existing measurement is stale")
         return old
     row = Measurement(doc_id=doc.id, doc_hash=digest, entity_id=entity.id if entity else None,
                       subject_text=draft.subject.text, metric_id=draft.metric_id, value=float(value),
