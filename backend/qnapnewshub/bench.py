@@ -30,8 +30,9 @@ _ENGINE = re.compile(r"\b(?:llama\.cpp|vllm|sglang|ollama|mlx|tensorrt-?llm|onnx
                      r"hexagon|coreml|webgpu|candle|burn|mistral\.rs|strata|radiance)\b", re.I)
 _CTX = re.compile(r"(?:\b(\d{1,4}(?:\.\d)?) ?([km]) ?(?:tokens? )?(?:ctx|context|コンテキスト)|(?:ctx|context(?: length| window)?|コンテキスト(?:長|窓|ウィンドウ)?|文脈(?:の)?長さ?)[ :=は]*(\d{1,4}(?:\.\d)?) ?([km])\b)", re.I)
 _VERSION = re.compile(r"\bv?(\d+\.\d+(?:\.\d+){0,2})\b(?= ?(?:版|release|で|にて|時点|以降|以上))|\bb(\d{4,5})\b")
-_UNIT = re.compile(r"(tok(?:en)?s?/s(?:ec)?|t/s|tps|ms|秒|倍|％|%|gb|mb|gib|w|usd|ドル|円|fps|x\b)", re.I)
-_NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+# 単位は数値の直後だけで認識する。別の数値や "with" の w を拾わない。
+_UNIT = re.compile(r"\s*(tokens? per second|tok(?:en)?s?/(?:sec(?:ond)?|s)|t/s|tps|tok/min|ms|msec|秒|s|倍|％|%|gib|mib|gb|mb|kw|mw|w|usd|jpy|eur|ドル|円|fps|x)(?![a-z0-9_/])", re.I)
+_NUM = re.compile(r"(?<![A-Za-z0-9_.+\-])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?!\d|[.,]\d)")
 
 
 def fold(text: object) -> str:
@@ -107,7 +108,7 @@ def clean_cond(raw: object, source_text: str = "") -> dict[str, str]:
 
 
 def cond_of(stored: str | dict | None, text: str = "", *, kind: str = "") -> dict[str, str]:
-    """主張 1 件の条件: 保存された cond（JSON）＋ 文からの規則（保存された欄が先）。"""
+    """保存条件と文からの規則を合わせ、複数候補・衝突は確定しない。"""
     if kind == "price":
         return {}  # 製品仕様（GPU 等）は価格の測定条件ではない
     d: dict = {}
@@ -119,7 +120,7 @@ def cond_of(stored: str | dict | None, text: str = "", *, kind: str = "") -> dic
             d = raw if isinstance(raw, dict) else {}
         except ValueError:
             d = {}
-    base = {k: _clip(v) for k, v in d.items() if k in COND_KEYS and _clip(v)}
+    base = clean_cond(d)
     for k, values in cond_candidates(text).items():
         if len(values) != 1 or (k in base and cond_key(k, base[k]) not in values):
             base.pop(k, None)
@@ -183,12 +184,25 @@ def parse_value(value: str, text: str = "") -> tuple[float | None, str]:
         num = float(m.group(0).replace(",", ""))
     except ValueError:
         return None, ""
-    tail = s[m.end():].strip()
-    um = _UNIT.search(tail) if tail else None
-    if um is None:
-        um = _UNIT.search(unicodedata.normalize("NFKC", str(text or "")))
-    unit = um.group(1).lower() if um else ""
-    unit = {"tokens/s": "tok/s", "token/s": "tok/s", "tokens/sec": "tok/s", "tok/sec": "tok/s", "t/s": "tok/s", "tps": "tok/s", "％": "%", "x": "倍"}.get(unit, unit)
+    def adjacent_unit(src: str, match) -> str:
+        um = _UNIT.match(src, match.end())
+        if um:
+            u = um.group(1).lower()
+            if re.fullmatch(r"tokens? per second|tok(?:en)?s?/(?:sec(?:ond)?|s)|t/s|tps", u):
+                return "tok/s"
+            return {"％": "%", "x": "倍", "msec": "ms"}.get(u, u)
+        prefix = src[:match.start()].rstrip()
+        return next((u for symbol, u in (("$", "usd"), ("€", "eur"), ("¥", "jpy")) if prefix.endswith(symbol)), "")
+
+    unit = adjacent_unit(s, m)
+    if not unit:
+        raw = unicodedata.normalize("NFKC", str(text or ""))
+        # 同じ符号・数値の出現だけ。異なる単位が複数なら不明。
+        candidates = {adjacent_unit(raw, n) for n in _NUM.finditer(raw)
+                      if n.group().replace(",", "") == m.group().replace(",", "")}
+        candidates.discard("")
+        if len(candidates) == 1:
+            unit = next(iter(candidates))
     return num, unit
 
 
@@ -221,7 +235,7 @@ def _metric_match(metric: str, kind: str, text: str, unit: str) -> bool:
     if metric.startswith("llm."):
         return metric == metric_id(kind, text, unit)
     m = fold(metric)
-    return m in {fold(kind), fold(unit)} or m in fold(text) or fold(metric) in fold(unit)
+    return m in {fold(kind), fold(unit)} or (bool(m) and m in fold(text))
 
 
 def resolve_things(db: Session, spec: str, scopes: list[str]) -> list:
