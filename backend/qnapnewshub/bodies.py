@@ -89,10 +89,11 @@ async def _allowed(url: str) -> bool:
 
 
 def extract_text(html: bytes, url: str) -> str:
-    """Trafilatura で本文（プレーンテキスト）を取り出す。取れなければ空。コメント・表は入れない（精度優先）。"""
+    """Trafilatura で本文（プレーンテキスト）を取り出す。取れなければ空。コメントは入れない（精度優先）。
+    表は入れる（2026-11-26: 直近の本文の記事 20 件のうち 2 件にベンチマークの表があり、表を捨てると数値と条件が取れなかった。取り出しの時間は変わらない）。"""
     import trafilatura
 
-    got = trafilatura.extract(html, url=url, include_comments=False, include_tables=False, favor_precision=True, output_format="txt")
+    got = trafilatura.extract(html, url=url, include_comments=False, include_tables=True, favor_precision=True, output_format="txt")
     return (got or "").strip()
 
 
