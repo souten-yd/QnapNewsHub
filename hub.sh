@@ -18,7 +18,7 @@
 #   ./hub.sh set-openrouter-key  OpenRouter の鍵を暗号化して保存
 #   ./hub.sh llm-try --provider gateway|openrouter --base <URL> --model <名前> --items <件数>
 #                           取り出しを 1 回だけ流して、検査の結果・物と facts を表示する（評価用。記事は NEWSHUB_DATA の DB の新しい順。鍵は環境変数 NEWSHUB_LLM_TRY_KEY。何も書かない）
-#   ./hub.sh numeric-try --provider gateway|openrouter --base <URL> --model <名前> --items <件数>
+#   ./hub.sh numeric-try --provider gateway|openrouter --base <URL> --model <名前> --items <件数> [--bench]
 #                           数値パス（numeric.py）を流して、候補の文のある記事・LLM が返した数値・検査を通った数値・条件の欄ごとの埋まり方を表示する（何も書かない。鍵は NEWSHUB_LLM_TRY_KEY か置き場の secretbox）
 #   ./hub.sh eval-retrieval --data <評価用 DB の置き場（コピー）> --questions <json> --out <md> [--build]
 #                           検索の評価の物差し（問いの集め・5 つの道・Recall/MRR/nDCG/文脈の密度/時間）。外へ通信しない・LLM は呼ばない。結果は公開しない（docs/DESIGN.md）

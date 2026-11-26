@@ -207,3 +207,61 @@ def test_context_shows_change_points(client):
     c = client.get(f"/api/v1/things/{sid}/context").json()
     assert "上がった" in c["change_points"][0]
     assert "## 変化点" in client.get(f"/api/v1/things/{sid}/context", params={"format": "text"}).text
+
+
+def test_cond_exact_aliases_and_ambiguous_candidates():
+    """目的・根拠: MEASUREMENT.md P2/P3/P9（2026-11-26）。部分一致・複数候補・既存値との衝突で別の条件を確定しない。"""
+    assert bench.cond_status({"hw": "RTX 4070"}, {"hw": "RTX 4070 Ti"}) == "other"
+    assert bench.cond_status({"quant": "Q4"}, {"quant": "Q4_K_M"}) == "other"
+    assert bench.cond_status({"quant": "Q4_K_M"}, {"quant": "UD-Q4_K_M"}) == "other"
+    assert bench.cond_status({"hw": "R9700"}, {"hw": "AMD Radeon AI PRO R9700"}) == "matching"
+    assert bench.cond_status({"ctx": "32K"}, {"ctx": "132K"}) == "other"
+    assert bench.parse_cond("RTX 4070 Q4_K_M; RTX 4070 Ti Q8_0") == {}
+    assert bench.parse_cond("RTX 4070 Q4_K_M and RTX 4070 Q4_K_M") == {"hw": "RTX 4070", "quant": "Q4_K_M"}
+    assert bench.clean_cond({"hw": "RTX 4070"}, "RTX 4070 Ti") == {}
+    assert bench.clean_cond({"quant": "Q4"}, "Q4_K_M") == {}
+    assert bench.cond_of({"hw": "RTX 4070"}, "RTX 4070 Ti") == {}
+    assert bench.cond_of({"hw": "RTX 4070"}, "RTX 4070 and RTX 4070 Ti") == {}
+    assert bench.cond_of({"hw": "RTX 4070"}, "RTX 4070 costs 500 USD", kind="price") == {}
+
+
+def test_compare_separates_prefill_decode_total_and_unknown(client):
+    """目的・根拠: MEASUREMENT.md P5（2026-11-26）。同じ機材・同じ tok/s でも測定指標を混ぜない。"""
+    art(2, [("Foo", "model")], facts=[
+        fact("Foo", "prefill 420 tok/s", "420 tok/s", hw="R9700", quant="Q4_K_M"),
+        fact("Foo", "decode 60 tok/s", "60 tok/s", hw="R9700", quant="Q4_K_M"),
+        fact("Foo", "total throughput 180 tok/s", "180 tok/s", hw="R9700", quant="Q4_K_M"),
+        fact("Foo", "速度 72 tok/s", "72 tok/s", hw="R9700", quant="Q4_K_M"),
+    ])
+    response = client.get("/api/v1/metrics/compare", params={"thing": "Foo", "metric": "tok/s", "cond": "hw:R9700"}).json()
+    groups = response["things"][0]["groups"]
+    assert {g["metric_id"]: g["latest"]["value"] for g in groups} == {
+        "llm.prefill_tps": 420.0, "llm.decode_tps": 60.0,
+        "llm.throughput_total_tps": 180.0, "llm.tps_unspecified": 72.0,
+    }
+    assert all(g["n"] == 1 for g in groups)
+    response = client.get("/api/v1/metrics/compare", params={"thing": "Foo", "metric": "llm.decode_tps"}).json()
+    assert [g["metric_id"] for g in response["things"][0]["groups"]] == ["llm.decode_tps"]
+
+
+def test_parse_value_only_uses_adjacent_matching_number():
+    """目的・根拠: C1レビュー 2026-11-26。異なる値の単位や with の w を拾わない。"""
+    assert bench.parse_value("60", "Foo with RTX 4070, 24 GB RAM, speed 60 tok/s") == (60.0, "tok/s")
+    assert bench.parse_value("60", "Foo with 24 GB RAM; score 60") == (60.0, "")
+    assert bench.parse_value("60", "60 tok/s and 60 W") == (60.0, "")
+    assert bench.parse_value("-60", "60 tok/s; -60 W") == (-60.0, "w")
+    assert bench.parse_value("60", "60 watts") == (60.0, "")
+    assert bench.cond_of({"hw": "unknown"}) == {}
+
+
+def test_condition_vocabulary_jetson_and_llama_cpp_binaries():
+    """目的: Jetson（Thor・Orin）を機材として、llama-server などを llama.cpp として認識し、似た別の機材・別のエンジンと混ぜない。
+    根拠: 2026-11-26 実データのベンチマーク記事で、Thor を知らずに引用の中の H100 を条件にした・llama-server を知らずに記事の LM Studio を共通の設定にした。"""
+    from qnapnewshub import bench
+
+    assert bench.cond_key("engine", "llama-server") == bench.cond_key("engine", "llama.cpp")
+    assert bench.cond_key("hw", "Jetson AGX Thor") == bench.cond_key("hw", "Thor") != bench.cond_key("hw", "Jetson Orin")
+    got = bench.cond_candidates("FlashDrive on H100 and Prefilling (Thor) 256 ms with llama-server and LM Studio")
+    assert len(got["hw"]) == 2 and len(got["engine"]) == 2 and "hw" not in bench.parse_cond("Prefilling (Thor) on H100")
+    assert bench.cond_key("hw", "RTX 4070") != bench.cond_key("hw", "RTX 4070 Ti") != bench.cond_key("hw", "RTX 4070 Ti Super")
+    assert bench.cond_key("quant", "Q4_K_M") != bench.cond_key("quant", "Q4_K_S") != bench.cond_key("quant", "Q4")

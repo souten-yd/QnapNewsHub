@@ -8,14 +8,19 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import time
 
 from qnapnewshub import bench, llm, numeric, settings
 
 
-def load_articles(count: int, scan: int = 600) -> tuple[list[dict], dict]:
-    """新しい順の記事 count 件を読み、候補の文のある記事の入力を作る（本文があれば全文から）。"""
+_BENCH = re.compile(r"tok(?:en)?s?/s|t/s\b|tokens per second|\bpp\d{3}\b|\btg\d{3}\b|llama-bench|prefill|decode speed|生成速度", re.I)
+
+
+def load_articles(count: int, scan: int = 600, *, bench: bool = False) -> tuple[list[dict], dict]:
+    """新しい順の記事 count 件を読み、候補の文のある記事の入力を作る（本文があれば全文から）。
+    bench=True: 本文が保存されていて、ベンチマークの語（tok/s・pp512・prefill など）が載る記事だけを、新しい順に count 件（条件の結び付けを確かめる用）。"""
     from sqlalchemy import select
 
     from qnapnewshub import db as news_db
@@ -23,9 +28,12 @@ def load_articles(count: int, scan: int = 600) -> tuple[list[dict], dict]:
     from qnapnewshub.db import NewsItem
 
     with news_db.session() as db:
-        rows = db.scalars(select(NewsItem).where(NewsItem.kind != "event", NewsItem.extract_v >= 1).order_by(NewsItem.published_at.desc()).limit(min(count, scan))).all()
+        rows = db.scalars(select(NewsItem).where(NewsItem.kind != "event", NewsItem.extract_v >= 1).order_by(NewsItem.published_at.desc()).limit(5000 if bench else min(count, scan))).all()
         items = [store.item_dict(r) for r in rows]
     bodies = numeric.full_bodies([i["id"] for i in items])
+    if bench:
+        items = [i for i in items if i["id"] in bodies and _BENCH.search(bodies[i["id"]])][:count]
+        bodies = {i["id"]: bodies[i["id"]] for i in items}
     arts = []
     for i in items:
         got = numeric.candidates_for(i["title"], numeric.article_text(i["title"], i.get("summary") or "", bodies.get(i["id"], "")))
@@ -45,7 +53,7 @@ def _secret(provider: str) -> str:
 
 
 async def _post(provider: str, base: str, model: str, key: str, messages: list[dict], with_schema: bool) -> tuple[int, str]:
-    body = {"model": model, "messages": messages, "max_tokens": 6000, "temperature": 0.2}
+    body = {"model": model, "messages": messages, "max_tokens": numeric.max_tokens(numeric.NUMERIC_BATCH), "temperature": 0.2}
     if with_schema:
         body["response_format"] = numeric.response_format()
     if provider == "gateway":
@@ -54,16 +62,35 @@ async def _post(provider: str, base: str, model: str, key: str, messages: list[d
     return await llm._post(body, key)  # noqa: SLF001
 
 
+def _replay_path(part: list[dict]):
+    """環境変数 NUMERIC_TRY_REPLAY（置き場）があれば、記事の組ごとの返事の保存先。無ければ None。
+    1 回目は保存、2 回目からは再生する。LLM の返事は回ごとにぶれるので、検査の版どうしは同じ返事で比べる（2026-11-26）。"""
+    import hashlib
+    from pathlib import Path
+
+    root = os.environ.get("NUMERIC_TRY_REPLAY", "").strip()
+    if not root:
+        return None
+    Path(root).mkdir(parents=True, exist_ok=True)
+    return Path(root) / (hashlib.sha256(",".join(str(a["id"]) for a in part).encode()).hexdigest()[:16] + ".json")
+
+
 async def try_once(provider: str, base: str, model: str, key: str, arts: list[dict]) -> dict:
     """候補のある記事を NUMERIC_BATCH 件ずつ送る。{"calls", "seconds", "mode", "returned", "passed", "dropped", "fields", "samples", "error"}。"""
     started = time.monotonic()
     out = {"calls": 0, "mode": "", "returned": 0, "passed": 0, "dropped": {}, "unreadable": 0, "error": "", "samples": [], "arts": len(arts),
            "fields": {k: {"rule_only": 0, "llm_added": 0, "both_same": 0, "none": 0} for k in bench.COND_KEYS}}
-    for start in range(0, len(arts), numeric.NUMERIC_BATCH):
-        part = arts[start:start + numeric.NUMERIC_BATCH]
+    queue = [arts[i:i + numeric.NUMERIC_BATCH] for i in range(0, len(arts), numeric.NUMERIC_BATCH)]
+    while queue:
+        part = queue.pop(0)
         messages = [{"role": "system", "content": numeric.SYSTEM}, {"role": "user", "content": numeric.build_prompt(part)}]
+        replay = _replay_path(part)
         try:
-            status, text = await _post(provider, base, model, key, messages, out["mode"] != "plain")
+            if replay and replay.exists():      # 保存した返事を再生（同じ返事で検査の版を比べる）
+                status, text = 200, replay.read_text(encoding="utf-8")
+                out["mode"] = out["mode"] or "replay"
+            else:
+                status, text = await _post(provider, base, model, key, messages, out["mode"] != "plain")
             if status in (400, 422) and out["mode"] != "plain":
                 out["mode"] = "plain"      # 構造化出力を断られた → 普通の JSON で
                 status, text = await _post(provider, base, model, key, messages, False)
@@ -71,8 +98,15 @@ async def try_once(provider: str, base: str, model: str, key: str, arts: list[di
                 out["mode"] = "json_schema"
             if status >= 400:
                 raise llm.LlmUnavailable(llm._error_message(status, text))  # noqa: SLF001
+            if replay and not replay.exists():
+                replay.write_text(text, encoding="utf-8")
             content = llm._content_from(f"gateway:{model}" if provider == "gateway" else model, text)  # noqa: SLF001
         except Exception as exc:  # noqa: BLE001
+            if numeric.is_truncated(exc) and len(part) > 1:      # 本番（numeric.ask）と同じく半分に分けて呼び直す
+                half = len(part) // 2
+                queue[:0] = [part[:half], part[half:]]
+                out["split"] = out.get("split", 0) + 1
+                continue
             msg = str(exc).replace(key, "[鍵]") if key else str(exc)
             out["error"] = msg
             break
@@ -123,7 +157,7 @@ def report(info: dict, result: dict) -> str:
     return "\n".join(lines)
 
 
-def run(provider: str, base: str, model: str, count: int) -> int:
+def run(provider: str, base: str, model: str, count: int, *, bench: bool = False) -> int:
     import asyncio
 
     key = os.environ.get("NEWSHUB_LLM_TRY_KEY", "").strip() or _secret(provider)
@@ -135,7 +169,7 @@ def run(provider: str, base: str, model: str, count: int) -> int:
     elif not key:
         print("OpenRouter の鍵を環境変数 NEWSHUB_LLM_TRY_KEY に入れてください（出力には出しません）")
         return 2
-    arts, info = load_articles(max(1, min(count, 600)))
+    arts, info = load_articles(max(1, min(count, 600)), bench=bench)
     if not arts:
         print(f"候補の文のある記事がありません（読んだ記事 {info['read']} 件）")
         return 2

@@ -44,7 +44,7 @@ def _llm_try(args: argparse.Namespace) -> int:
 def _numeric_try(args: argparse.Namespace) -> int:
     from qnapnewshub import numeric_try
 
-    return numeric_try.run(args.provider, args.base, args.model, args.items)
+    return numeric_try.run(args.provider, args.base, args.model, args.items, bench=args.bench)
 
 
 def _map_layout(args: argparse.Namespace) -> int:
@@ -88,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     nt.add_argument("--base", default="", help="ゲートウェイの基準の URL（省略すると設定の値）")
     nt.add_argument("--model", required=True)
     nt.add_argument("--items", type=int, default=30, help="読む記事の件数（新しい順。候補の文のある記事だけを送る）")
+    nt.add_argument("--bench", action="store_true", help="本文にベンチマーク（tok/s など）が載る記事だけを選ぶ（条件の結び付けの確認用）")
     nt.set_defaults(func=_numeric_try)
     sub.add_parser("map-layout", help="知識の地図の配置（ForceAtlas2）と重要度を今すぐ計算して保存する（夜の仕事と同じ）").set_defaults(func=_map_layout)
     sub.add_parser("run", help="起動する").set_defaults(func=_run)
