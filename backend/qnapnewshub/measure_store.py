@@ -28,8 +28,17 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
         raise ValueError("source too large")
     from qnapnewshub.measure_spans import extract_explicit
     from qnapnewshub.measure_tables import markdown_measurements
-    candidates = (markdown_measurements(source) if draft.block_id.startswith("table:")
-                  else extract_explicit(source, draft.subject.text))
+    matrix = draft.block_id.startswith("matrix:")
+    if matrix:
+        from qnapnewshub.measure_matrix_bridge import verified_matrix_drafts
+        if entity is None or entity.name.casefold() != draft.subject.text.casefold():
+            raise ValueError("matrix subject identity unverified")
+        candidates = verified_matrix_drafts(source)
+        if draft not in candidates:
+            raise ValueError("unverified matrix relation")
+    else:
+        candidates = (markdown_measurements(source) if draft.block_id.startswith("table:")
+                      else extract_explicit(source, draft.subject.text))
     core = (draft.subject, draft.value, draft.unit, draft.metric_id, draft.block_id)
     if not any((d.subject, d.value, d.unit, d.metric_id, d.block_id) == core
                and set(draft.conditions) <= set(d.conditions) for d in candidates):
@@ -39,7 +48,7 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
         raise ValueError("invalid condition keys")
     if not draft.metric_id.startswith("llm."):
         raise ValueError("unsupported metric")
-    value, unit, dimension = normalize_quantity(draft.value.text, draft.unit.text)
+    value, unit, dimension = normalize_quantity(draft.value.text, "tok/s" if matrix else draft.unit.text)
     if not math.isfinite(float(value)) or value < 0 or dimension != "token_rate":
         raise ValueError("invalid token rate")
     digest = hashlib.sha256(source.encode()).hexdigest()
@@ -63,8 +72,8 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
             raise ValueError("stored measurement differs from verified evidence")
         if old.sensitivity != doc.sensitivity or old.ai_use != doc.ai_use:
             raise ValueError("existing measurement is restricted")
-        if (reactivate and old.status == "superseded" and old.extractor in {"rule:c5b", "rule:c6c"}
-                and extractor == "rule:c6c"):
+        if (reactivate and old.status == "superseded" and old.extractor in {"rule:c5b", "rule:c6c", "rule:c7a"}
+                and extractor in {"rule:c6c", "rule:c7a"}):
             # Same fingerprint, current verified source and conditions only.
             old.status = "active"
             db.flush()
