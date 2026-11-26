@@ -60,6 +60,16 @@ def test_authoritative_news_service():
         assert again["ids"] == result["ids"]
         assert db.get(Measurement, result["ids"][0]).status == "active"
         assert db.get(Measurement, new_result["ids"][0]).status == "superseded"
+        cond = db.scalar(select(MeasurementCond).where(MeasurementCond.measurement_id == again["ids"][0]))
+        original_norm = cond.value_norm
+        cond.value_norm = "tampered"
+        db.flush()
+        assert not preview(db, doc.id)["unchanged"]
+        with pytest.raises(ValueError, match="stored measurement"):
+            apply_in_transaction(db, doc.id, reverted["doc_hash"], expected_input_hash=reverted["input_hash"])
+        cond.value_norm = original_norm
+        db.flush()
+        assert preview(db, doc.id)["unchanged"]
         ent.name = "Other"
         db.flush()
         assert apply_in_transaction(db, doc.id, reverted["doc_hash"], expected_input_hash=reverted["input_hash"])["status"] == "changed_or_unavailable"
