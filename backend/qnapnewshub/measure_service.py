@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
+from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 import zstandard
 
-from qnapnewshub.db import ArticleEntity, Document, Entity, NewsBody, NewsDocument, NewsItem
+from qnapnewshub.db import ArticleEntity, Document, Entity, Measurement, MeasurementRun, NewsBody, NewsDocument, NewsItem
 from qnapnewshub.measure_spans import extract_explicit
 from qnapnewshub.measure_tables import markdown_measurements
 from qnapnewshub.measure_store import save_draft
@@ -22,6 +24,8 @@ MAX_BODY = 128 * 1024
 MAX_DOCS = 20
 MAX_SUBJECTS = 10
 MAX_DRAFTS = 20
+EXTRACTOR = "rule:c6c"
+MANAGED = ("rule:c5b", EXTRACTOR)
 
 
 @dataclass(frozen=True)
@@ -71,13 +75,22 @@ def load_source(db, doc_id: int) -> StoredSource | None:
     return StoredSource(doc, aid, text, hashlib.sha256(data).hexdigest())
 
 
-def _drafts(db, src: StoredSource):
+def _entities(db, src: StoredSource):
     entities = db.scalars(select(Entity).join(ArticleEntity, ArticleEntity.entity_id == Entity.id)
                           .where(ArticleEntity.article_id == src.article_id, Entity.type == "model",
                                  Entity.sensitivity == "public", Entity.ai_use == "allowed")
-                          .order_by(Entity.id).limit(MAX_SUBJECTS+1)).all()
-    if len(entities) > MAX_SUBJECTS:
-        return None
+                          .order_by(Entity.id).limit(MAX_SUBJECTS+1).execution_options(populate_existing=True)).all()
+    return entities if len(entities) <= MAX_SUBJECTS else None
+
+
+def _input_hash(src, entities):
+    # Changes to extraction semantics must bump EXTRACTOR.
+    payload = [src.doc.id, src.article_id, src.digest, src.doc.sensitivity, src.doc.ai_use,
+               EXTRACTOR, [(e.id, e.name, e.type, e.sensitivity, e.ai_use) for e in entities]]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
+def _drafts(src: StoredSource, entities):
     table = markdown_measurements(src.text)
     candidates = {}
     for ent in entities:
@@ -92,32 +105,80 @@ def _drafts(db, src: StoredSource):
     return [pairs[0] for pairs in candidates.values() if len(pairs) == 1]
 
 
+def _reusable(db, src, signature, entities):
+    run = db.get(MeasurementRun, src.doc.id, populate_existing=True)
+    if run is None or run.input_hash != signature or run.doc_hash != src.digest or run.extractor != EXTRACTOR:
+        return None
+    try:
+        ids = json.loads(run.ids_json)
+    except (ValueError, TypeError):
+        return None
+    if (not isinstance(ids, list) or len(ids) > MAX_DRAFTS
+            or any(type(i) is not int or i <= 0 for i in ids) or len(set(ids)) != len(ids)):
+        return None
+    valid = set(db.scalars(select(Measurement.id).where(Measurement.id.in_(ids),
+                Measurement.doc_id == src.doc.id, Measurement.doc_hash == src.digest,
+                Measurement.status == "active", Measurement.sensitivity == src.doc.sensitivity,
+                Measurement.ai_use == src.doc.ai_use, Measurement.entity_id.in_([e.id for e in entities]))))
+    active_managed = set(db.scalars(select(Measurement.id).where(Measurement.doc_id == src.doc.id,
+                    Measurement.status == "active", Measurement.extractor.in_(MANAGED)).limit(MAX_DRAFTS+1)))
+    return ids if valid == set(ids) and active_managed <= valid else None
+
+
 def preview(db, doc_id: int) -> dict:
     src = load_source(db, doc_id)
     if src is None:
         return {"status": "unavailable"}
-    drafts = _drafts(db, src)
-    if drafts is None:
+    entities = _entities(db, src)
+    if entities is None:
         return {"status": "limit", "doc_hash": src.digest}
-    return {"status": "preview", "doc_id": doc_id, "doc_hash": src.digest, "count": len(drafts)}
+    signature = _input_hash(src, entities)
+    reused = _reusable(db, src, signature, entities)
+    drafts = None if reused is not None else _drafts(src, entities)
+    if reused is None and drafts is None:
+        return {"status": "limit", "doc_hash": src.digest}
+    return {"status": "preview", "doc_id": doc_id, "doc_hash": src.digest,
+            "input_hash": signature, "count": len(reused if reused is not None else drafts),
+            "unchanged": reused is not None}
 
 
-def apply_in_transaction(db, doc_id: int, expected_hash: str) -> dict:
-    """Call only from the writer transaction. No commit or arbitrary source input."""
+def apply_in_transaction(db, doc_id: int, expected_hash: str, *, expected_input_hash: str) -> dict:
+    """Only the writer transaction. Confirm both source and extraction inputs."""
     src = load_source(db, doc_id)
     if src is None or src.digest != expected_hash:
         return {"status": "changed_or_unavailable"}
-    drafts = _drafts(db, src)
+    entities = _entities(db, src)
+    if entities is None:
+        return {"status": "limit"}
+    signature = _input_hash(src, entities)
+    if signature != expected_input_hash:
+        return {"status": "changed_or_unavailable"}
+    ids = _reusable(db, src, signature, entities)
+    if ids is not None:
+        return {"status": "saved", "doc_id": doc_id, "doc_hash": src.digest, "ids": ids, "reused": True}
+    drafts = _drafts(src, entities)
     if drafts is None:
         return {"status": "limit"}
-    ids = []
-    for entity, draft in drafts:
-        ids.append(save_draft(db, src.doc, src.text, draft, entity=entity, extractor="rule:c5b").id)
-    return {"status": "saved", "doc_id": doc_id, "doc_hash": src.digest, "ids": ids}
+    ids = [save_draft(db, src.doc, src.text, draft, entity=entity, extractor=EXTRACTOR,
+                      reactivate=True).id for entity, draft in drafts]
+    # Only service-owned rows; never delete or mutate legacy claims or manual data.
+    # Do this after successful extraction, in the same transaction.
+    db.execute(update(Measurement).where(Measurement.doc_id == doc_id,
+               Measurement.status == "active", Measurement.extractor.in_(MANAGED),
+               Measurement.id.not_in(ids)).values(status="superseded"))
+    run = db.get(MeasurementRun, doc_id)
+    if run is None:
+        run = MeasurementRun(doc_id=doc_id)
+        db.add(run)
+    run.doc_hash, run.input_hash, run.extractor = src.digest, signature, EXTRACTOR
+    run.ids_json = json.dumps(ids)
+    run.updated_at = datetime.now(timezone.utc)
+    db.flush()
+    return {"status": "saved", "doc_id": doc_id, "doc_hash": src.digest, "ids": ids, "reused": False}
 
 
-def apply_confirmed(doc_id: int, expected_hash: str) -> dict:
-    """Explicit authorized caller only. Use existing writer and honor rest window."""
+def apply_confirmed(doc_id: int, expected_hash: str, *, expected_input_hash: str) -> dict:
+    """Explicit authorized caller only; no scheduler/API is attached."""
     from qnapnewshub import db as news_db, rest, writer
 
     def do():
@@ -125,7 +186,7 @@ def apply_confirmed(doc_id: int, expected_hash: str) -> dict:
             return {"status": "rest"}
         with news_db.session() as db:
             with db.begin():
-                return apply_in_transaction(db, doc_id, expected_hash)
+                return apply_in_transaction(db, doc_id, expected_hash, expected_input_hash=expected_input_hash)
 
     return writer.run("news.measurement.confirmed", do, user=True)
 
