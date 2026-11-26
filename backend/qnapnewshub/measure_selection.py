@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 
-from qnapnewshub.measure_spans import Candidate, MeasurementDraft, blocks, condition_candidates
+from qnapnewshub.measure_spans import Candidate, MeasurementDraft, blocks, eligible_conditions, extract_explicit
 from qnapnewshub.measure_vocab import LLM_KEYS, normalize_condition
 
 MAX_CANDIDATES = 32
@@ -24,7 +24,14 @@ def selection_request(source: str, draft: MeasurementDraft) -> tuple[dict, tuple
     if block is None or block[1] - block[0] > MAX_CONTEXT:
         raise ValueError("no bounded local context")
     start, end = block
-    candidates = condition_candidates(source, start, end)
+    # A forged draft or a negative/comparative clause must not become a prompt.
+    originals = extract_explicit(source, draft.subject.text)
+    core = (draft.subject, draft.value, draft.unit, draft.metric_id, draft.block_id)
+    if not any((d.subject, d.value, d.unit, d.metric_id, d.block_id) == core for d in originals):
+        raise ValueError("unverified measurement relation")
+    candidates = eligible_conditions(source, draft)
+    if not set(draft.conditions) <= set(candidates):
+        raise ValueError("unverified existing conditions")
     if len(candidates) > MAX_CANDIDATES:
         raise ValueError("too many candidates")
     payload = {"context": source[start:end], "measurement": {
