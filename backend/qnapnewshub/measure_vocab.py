@@ -41,6 +41,5 @@ def normalize_condition(key: str, value: str) -> str:
         raw = unicodedata.normalize("NFKC", str(value)).strip().replace("−", "-")
         if re.fullmatch(r"-1|0|[1-9][0-9]{0,7}", raw):
             return raw
-        # Keep unsupported representations distinct rather than folding to a number.
-        return "unknown:" + raw.casefold()
+        raise ValueError("unsupported offload count")
     return cond_key(key, value)
