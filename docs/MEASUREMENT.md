@@ -8,6 +8,26 @@
 
 ---
 
+## 実装 PR の順序（2026-11-26）
+
+各段階の差分を独立してレビューできる積み上げ式の Draft PR。後続 PR の base は直前のブランチ。
+前段を検証・マージした後、後続を最新 main に合わせ、base を main に変更してからレビューする。
+前段を squash/rebase でマージすると祖先関係が変わるため、差分に前段が再出現しないよう後続の rebase を確認する。
+
+| 段 | PR | 実装の状態・詳細 |
+|---|---|---|
+| C1 | [#42](https://github.com/souten-yd/QnapNewsHub/pull/42) | 旧数値処理の修正案・検証待ち |
+| C6a | [#43](https://github.com/souten-yd/QnapNewsHub/pull/43) | 原文注釈評価器。実データ正解未作成 ([詳細](MEASUREMENT-EVAL.md)) |
+| C2 | [#44](https://github.com/souten-yd/QnapNewsHub/pull/44) | 3表と辞書。旧データ移行・衝突処理未完 ([詳細](MEASUREMENT-C2.md)) |
+| C3 | [#45](https://github.com/souten-yd/QnapNewsHub/pull/45) | 単一測定の原文位置・追加保存。共有条件・writer接続未完 ([詳細](MEASUREMENT-C3.md)) |
+| C4 | [#46](https://github.com/souten-yd/QnapNewsHub/pull/46) | Markdown・llama-bench 初期パーサー。HTML・vLLM・取得統合未完 ([詳細](MEASUREMENT-C4.md)) |
+| C5 | [#47](https://github.com/souten-yd/QnapNewsHub/pull/47) | 内部検索。API・LLM context接続未完 ([詳細](MEASUREMENT-C5.md)) |
+| C3b | [#48](https://github.com/souten-yd/QnapNewsHub/pull/48) | 候補番号のプロンプト・検証。LLM呼び出し・自動保存未接続 ([詳細](MEASUREMENT-C3B.md)) |
+| C6b | [#49](https://github.com/souten-yd/QnapNewsHub/pull/49) | 読み取り専用再抽出プレビュー。適用・版管理未完 ([詳細](MEASUREMENT-C6B.md)) |
+
+全段階は実装の土台であり、設計書の全受け入れ条件を満たした状態ではない。テスト・実機評価・R@10・マージは未実施。
+C6a の独立正解作成、既存機能との結合、機密区分の実機試験、移行の再実行・復旧試験を完了するまで本番で新しい保存経路を有効化しない。
+
 ## C1 の実装状況（2026-11-26・レビュー待ち）
 
 - 数値パスを `num2` に更新。数値だけの合流を廃止し、記事・対象・種類・主張文・値（符号を保持）・条件の一致でのみ重複を除く。既存の曖昧な主張は書き換えないため、同一測定の表現違いが残ることがある。原文位置による fingerprint は C2/C3 で対応する。
