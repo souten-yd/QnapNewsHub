@@ -38,20 +38,28 @@ def interval_value(text: str) -> tuple[Decimal, Decimal] | None:
     return low, high
 
 
-def scalar_tokens(text: str):
+def scalar_tokens(text: str, *, allow_qualified: bool = False):
     """Exclude both endpoints of ranges and explicitly qualified quantities.
     Returns matches on the normalized string (not raw-source character offsets).
     """
     s = normalized(text)
-    excluded = [m.span() for m in RANGE.finditer(s)]
+    # 「from X to Y」は範囲ではなく変化（前と後の 2 つの値）なので、どちらの数値も残す（2026-11-26 実データ:
+    # 「cut one block from 2,397 ms to 725 ms」の 725 ms が消えていた）。
+    def is_change(m) -> bool:
+        return bool(re.search(r"\bfrom\s*$", s[max(0, m.start() - 12):m.start()], re.I))
+
+    excluded = [m.span() for m in RANGE.finditer(s) if not is_change(m)]
     # A range may repeat its unit on both endpoints; neither is a scalar.
     repeated_unit = re.compile(r"(" + NUMBER + r")\s*(?:tok/s|tokens/s|tok/min|ms|s|GB|GiB|W|%|USD|円)"
                                r"\s*(?:[–—~〜～±-]|\bto\b)\s*(" + NUMBER + r")", re.I)
-    excluded.extend(m.span() for m in repeated_unit.finditer(s))
+    excluded.extend(m.span() for m in repeated_unit.finditer(s) if not is_change(m))
     for m in TOKEN.finditer(s):
         if any(a < m.end() and m.start() < b for a, b in excluded):
             continue
         prefix = s[max(0, m.start()-32):m.start()]
+        if allow_qualified:      # 「約」「最大」「up to」つきも値として残す（範囲・誤差つきは除く）
+            yield m
+            continue
         if re.search(r"(?:[<>≤≥≈~±]|about\b|around\b|approximately\b|up to\b|at least\b|約|最大|最低)\s*$", prefix, re.I):
             continue
         if re.match(r"\s*(?:tok/s|tokens/s|tok/min|ms|s|GB|GiB|W|%|USD|円)?\s*(?:±|以上|以下|未満|超|程度|前後|くらい)", s[m.end():], re.I):

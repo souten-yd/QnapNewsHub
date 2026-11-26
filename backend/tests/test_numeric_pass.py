@@ -376,3 +376,49 @@ def test_truncated_reply_splits_the_batch_and_keeps_article_numbers(monkeypatch)
     got, stats, _ = asyncio.run(numeric.ask({}, [art(1), art(2), art(3)], "prep"))
     assert stats["passed"] == 3 and {n: got[n][0]["about"] for n in got} == {1: "Foo1", 2: "Foo2", 3: "Foo3"}
     assert calls == [3, 1, 2, 1, 1]      # 3 → 1 と 2 → 2 は 1 と 1
+
+
+
+def test_unknown_names_become_ambiguous_with_values_the_llm_returned():
+    """目的: 規則の辞書に無い機材名（Thor など）でも、その記事で LLM が返した別の値が同じ文にあれば「1 つに決まらない」として付けない。
+    語を 1 つずつ辞書に足し継がない汎用の仕組み（ground_cond の候補 = 規則 ＋ LLM が返した値のうち、その範囲に字句どおり出るもの）。
+    根拠: 2026-11-26 実データ。Jetson の Thor を規則が知らず、同じ文の H100 だけが候補に見えて H100 を条件にした。"""
+    import json
+
+    q = "FlashDrive R1 on H100 took 99 ms, and Prefilling on Thor took 256 ms"
+    art = {"id": 1, "title": "T", "source": f"T {q}", "cand": q, "segments": [q]}
+    rows = [{"n": 1, "quote": q, "about": "FlashDrive R1", "metric": "実行時間", "value": "256", "unit": "ms", "hw": "Thor",
+             **{k: None for k in ("model", "quant", "engine", "ctx", "version", "backend")}},
+            {"n": 1, "quote": q, "about": "FlashDrive R1", "metric": "実行時間", "value": "99", "unit": "ms", "hw": "H100",
+             **{k: None for k in ("model", "quant", "engine", "ctx", "version", "backend")}}]
+    got, _ = numeric.parse(json.dumps({"numbers": rows}), [art])
+    assert all("hw" not in numeric.to_fact(i)["cond"] for i in got[1])
+    one = "Prefilling on Thor took 256 ms"
+    art = {"id": 1, "title": "T", "source": f"T {one}", "cand": one, "segments": [one]}
+    got, _ = numeric.parse(json.dumps({"numbers": [{**rows[0], "quote": one}]}), [art])
+    assert numeric.to_fact(got[1][0])["cond"]["hw"] == "Thor"      # 辞書に無くても、文に 1 つだけなら付く
+
+
+def test_shorter_name_counts_only_where_it_stands_alone():
+    """目的: 「RTX 4070 Ti」の中の「RTX 4070」は候補に数えないが、同じ範囲に「RTX 4070」が単独でも出ていれば数える。
+    根拠: 2026-11-26 汎用の判定（ground_cond）の一番長く当たる決まりを入れたとき、単独の出現まで消す穴があった。"""
+    assert numeric._stands_alone("RTX 4070", ["RTX 4070 Ti"], "on RTX 4070 Ti at Q8_0") is False
+    assert numeric._stands_alone("RTX 4070", ["RTX 4070 Ti"], "on RTX 4070 at Q4_K_M. on RTX 4070 Ti at Q8_0") is True
+
+
+def test_unit_spelling_is_matched_by_canonical_form():
+    """目的: 単位の表記の違い（秒と s・tokens per watt と tok/W・ミリ秒と ms）をそろえて、数値の直後の単位と照合する。隣に無い単位は付けない。
+    根拠: 2026-11-26 実データ。「29.8秒」に LLM の s、「8.6 tokens per watt」に tok/W が付かず、比較に使えなかった。"""
+    assert numeric._unit_in_quote("s", "29.8", "Neon は29.8秒・$1.99、Opus は40.1秒でした。")
+    assert numeric._unit_in_quote("tok/W", "8.6", "and 8.6 tokens per watt, which they put")
+    assert numeric._unit_in_quote("ms", "725", "from 2,397 ms to 725 ms")
+    assert not numeric._unit_in_quote("MiB", "2521", "9 → 99 で 2,521 → 4,527MiB と")      # 隣に単位が無い
+    assert not numeric._unit_in_quote("s", "60", "60 samples")      # s の後に語が続く
+
+
+def test_qualified_values_are_kept_but_ranges_are_not():
+    """目的: 「約 6.3 kW」「up to 20%」のような値は記事が述べた値として残し、「40–60 tok/s」の範囲は単一の値にしない。
+    根拠: 2026-11-26 実データ。Codex #51 の決まりで「約」「最大」つきの値が数値パスで消え、前の main より測定が減っていた。"""
+    assert numeric._number_matches("6.3", "the best run drew about 6.3 kW")
+    assert numeric._number_matches("20", "up to 20% more throughput")
+    assert not numeric._number_matches("40", "40–60 tok/s")

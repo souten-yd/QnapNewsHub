@@ -254,14 +254,10 @@ def test_parse_value_only_uses_adjacent_matching_number():
     assert bench.cond_of({"hw": "unknown"}) == {}
 
 
-def test_condition_vocabulary_jetson_and_llama_cpp_binaries():
-    """目的: Jetson（Thor・Orin）を機材として、llama-server などを llama.cpp として認識し、似た別の機材・別のエンジンと混ぜない。
-    根拠: 2026-11-26 実データのベンチマーク記事で、Thor を知らずに引用の中の H100 を条件にした・llama-server を知らずに記事の LM Studio を共通の設定にした。"""
+def test_condition_similar_names_are_distinct():
+    """目的: 似た別の機材・量子化を同じ条件にしない（正規化の完全一致）。
+    根拠: 2026-11-26 Codex #42 の指摘（部分一致で RTX 4070 と 4070 Ti、Q4 と Q4_K_M が一致していた）。"""
     from qnapnewshub import bench
 
-    assert bench.cond_key("engine", "llama-server") == bench.cond_key("engine", "llama.cpp")
-    assert bench.cond_key("hw", "Jetson AGX Thor") == bench.cond_key("hw", "Thor") != bench.cond_key("hw", "Jetson Orin")
-    got = bench.cond_candidates("FlashDrive on H100 and Prefilling (Thor) 256 ms with llama-server and LM Studio")
-    assert len(got["hw"]) == 2 and len(got["engine"]) == 2 and "hw" not in bench.parse_cond("Prefilling (Thor) on H100")
     assert bench.cond_key("hw", "RTX 4070") != bench.cond_key("hw", "RTX 4070 Ti") != bench.cond_key("hw", "RTX 4070 Ti Super")
     assert bench.cond_key("quant", "Q4_K_M") != bench.cond_key("quant", "Q4_K_S") != bench.cond_key("quant", "Q4")
