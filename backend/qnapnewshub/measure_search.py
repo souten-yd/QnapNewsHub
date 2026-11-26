@@ -53,11 +53,13 @@ def search(db, *, entity_id: int, metric_id: str, filters: dict[str, str],
     mismatches, unknowns, matches = [], [], []
     for key, want in filters.items():
         predicate = (MeasurementCond.measurement_id == Measurement.id, MeasurementCond.key == key)
-        mismatches.append(exists(select(1).where(*predicate,
-            MeasurementCond.value_norm != normalize_condition(key, want))))
+        # Older text folding could collapse "-1" to "1". For offload compare
+        # the literal canonical integer evidence, not the legacy folded value.
+        column = MeasurementCond.value_text if key == "offload" else MeasurementCond.value_norm
+        target = normalize_condition(key, want)
+        mismatches.append(exists(select(1).where(*predicate, column != target)))
         unknowns.append(~exists(select(1).where(*predicate)))
-        matches.append(case((exists(select(1).where(*predicate,
-            MeasurementCond.value_norm == normalize_condition(key, want))), 1), else_=0))
+        matches.append(case((exists(select(1).where(*predicate, column == target)), 1), else_=0))
     priority = case((or_(*mismatches), 2), (or_(*unknowns), 1), else_=0) if filters else Measurement.id * 0
     coverage = sum(matches) if matches else Measurement.id * 0
     query = (select(Measurement, Document).join(Document, Document.id == Measurement.doc_id)
@@ -76,7 +78,7 @@ def search(db, *, entity_id: int, metric_id: str, filters: dict[str, str],
         return []
     conds = defaultdict(dict)
     for c in db.scalars(select(MeasurementCond).where(MeasurementCond.measurement_id.in_(ids))):
-        conds[c.measurement_id][c.key] = c.value_norm
+        conds[c.measurement_id][c.key] = c.value_text if c.key == "offload" else c.value_norm
     out = []
     for m, d in rows:
         cond = conds[m.id]
