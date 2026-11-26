@@ -46,7 +46,7 @@ def scalar_tokens(text: str):
     excluded = [m.span() for m in RANGE.finditer(s)]
     # A range may repeat its unit on both endpoints; neither is a scalar.
     repeated_unit = re.compile(r"(" + NUMBER + r")\s*(?:tok/s|tokens/s|tok/min|ms|s|GB|GiB|W|%|USD|円)"
-                               r"\s*(?:[–—~〜～-]|\bto\b)\s*(" + NUMBER + r")", re.I)
+                               r"\s*(?:[–—~〜～±-]|\bto\b)\s*(" + NUMBER + r")", re.I)
     excluded.extend(m.span() for m in repeated_unit.finditer(s))
     for m in TOKEN.finditer(s):
         if any(a < m.end() and m.start() < b for a, b in excluded):
@@ -54,7 +54,7 @@ def scalar_tokens(text: str):
         prefix = s[max(0, m.start()-32):m.start()]
         if re.search(r"(?:[<>≤≥≈~±]|about\b|around\b|approximately\b|up to\b|at least\b|約|最大|最低)\s*$", prefix, re.I):
             continue
-        if re.match(r"\s*(?:±|(?:tok/s|tokens/s|tok/min|ms|s|GB|GiB|W|%|USD|円)?\s*(?:以上|以下|未満|超|程度|前後|くらい))", s[m.end():], re.I):
+        if re.match(r"\s*(?:tok/s|tokens/s|tok/min|ms|s|GB|GiB|W|%|USD|円)?\s*(?:±|以上|以下|未満|超|程度|前後|くらい)", s[m.end():], re.I):
             continue
         yield m
 
