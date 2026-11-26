@@ -29,3 +29,10 @@
 - 新規26ケース: 26/26（原文抽出11、数量の拒否6、候補選択/ID/偽条件9）。
 - 使用した単独モジュールコピーのGit blob SHA: measure_quantity `0065e56b28c591d1a8538554d042bb03a76996ab`、measure_relation `5ee85b6181b8e4fc8d2f36697bd52a6ed1ca1715`、measure_spans `d57a84f09505adad636d2245c8c336fc9657cd3d`、measure_selection `cc908856c92f972932cd34aaa07eeb2f7d47b379`。bench/measure_vocab は必要関数抜粋。完全なパッケージの import、numeric/DB 統合、既存テスト、実機・実LLM・原文の独立注釈は未確認。直接cloneはDNS解決失敗。既存writer/スケジューラ/公開API/権限/予算は変更なし。
 - 次の関門: 誤結合P/R/F1・保留率（正しい測定を失う率）・文脈にあるが対象と関係ない条件、別の対象に属する条件、否定/推定/引用/脚注、正本hash/区分とDB保存・検索の統合。300測定以上の人手注釈と同一固定質問で採否決定。マージしない。
+
+## C5b 正本・writer・条件検索の内部統合（Draft）
+- measure_service.py: 既存NewsDocument/NewsItem/NewsBodyを使い、public/allowedでユーザー専用でない代表記事が1件のときだけ、保存本文を正本として取得。128KiB/20文書/10モデル/20測定の上限。既知のZstd frame size・raw_len・UTF8を照合。任意本文/hashをHTTPから受けない。本文や秘密をログに出さない。previewは件数/hashのみ、明示applyはhash再照合と休止時間確認、既存writer.run(news.measurement.confirmed)のtransactionで保存。スケジューラ/公開API/CLIに未接続、認可済みの内部呼び出し前提。既存claimは変更しない。
+- measure_search.py: SQLで一致/不明/不一致、同区分内は一致済み条件数、id降順で上限前に順位付け。現行の本文hashをSQLで照合、区分/ai_useがEntity/Document/Measurementで一致する行のみ。既定public/allowed、local_onlyは認可済みの内部利用に限定（サービス自体はpublic限定）。入力上限や不正条件/hashを検証。全件検索ではなく最大20文書の明示候補内検索。
+- measure_store.py: 同じfingerprintで失効済み/区分変更済みの記録を再利用しない。
+- 再評価: measure_search.py blob `dacde88425a5c7abc7e44264d4d591ad70697363` と一致したコピーをSQLAlchemy/SQLiteで実行。最小ORM・条件辞書の代替を使用。1203合成候補で13検査（完全一致の古い候補、3状態順、一致済み条件数、hash、区分・local_only、入力拒否など）成功。初回は部分一致内で新しい無条件行が先になることを発見し修正。30回の単一条件・limit1はp50 3.875ms、p95 5.186ms（コンテナ内のメモリDB、実NASではない）。実DBクラス/全体pytest/Zstd・writer統合は未実行（clone DNS失敗、コンテナにzstandardなし）。test_measure_service.pyに実ORM/Zstdの回帰試験を追加。実機で要検証。
+- 残: API/認可、既存FTSからの候補生成、旧claimとの互換、更新履歴/失効、範囲値、保存バッチ性能、実機writer/休止と競合、本文上限の見直し。自動適用はしない。マージしない。
