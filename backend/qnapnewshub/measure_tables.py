@@ -69,6 +69,12 @@ def markdown_measurements(source: str) -> list[MeasurementDraft]:
                 unit = Span(h.end-5, h.end, h.text[-5:])
                 if unit.text.casefold() != "tok/s":
                     continue
+                try:
+                    number, _, dimension = normalize_quantity(value.text, unit.text)
+                    if number < 0 or dimension != "token_rate":
+                        continue
+                except (ValueError, ArithmeticError):
+                    continue
                 out.append(MeasurementDraft(subject, value, unit, mid, f"table:{header[0].start}:row:{row[0].start}", conds))
                 if len(out) >= _MAX_ROWS:
                     return out
