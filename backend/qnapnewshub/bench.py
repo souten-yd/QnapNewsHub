@@ -3,7 +3,7 @@
 - **条件**: 数値が測られた条件を 6 つの欄で持つ（`COND_KEYS`）: model（測ったモデル）・quant（量子化）・hw（GPU・端末）・engine（エンジン・バックエンド）・ctx（文脈の長さ）・version（版）。
   取り出しは**文からの規則**（`cond_of`）。プロンプトに cond を足しても本物の LLM は書かなかった（2026-11-26・30 件で 0）ので指示は入れない。LLM が cond を書いたときだけ、原文（題・抜粋）にそのまま出る値を残す（`clean_cond`）。
   古い主張（cond の欄が無い）・LLM が書かなかった欄は、主張の文から規則（`parse_cond`）で補う。補えない欄は「不明」のまま（推測しない）。
-- **同じ指標でも条件の違うものを平均しない**: `compare` は（物・単位・条件）ごとの組に分けて、組の中の新しい順の点・最小・最大・最新だけを返す。平均は出さない。
+- **同じ指標でも条件の違うものを平均しない**: `compare` は（物・指標・単位・条件）ごとの組に分けて、組の中の新しい順の点・最小・最大・最新だけを返す。平均は出さない。
   `cond` の指定（例 `hw:R9700,quant:Q4_K_M`）があれば、全部の欄が合う組（matching）・合わない組（other）・指定の欄が不明の組（unspecified）に分ける。
 - 数値の出どころは claims（値のある主張。条件は claims.cond）と metric_points（connector の時系列。条件は metric_points.cond の文字列）。
 """
@@ -23,7 +23,7 @@ COND_MAX_CHARS = 60
 COMPARE_THINGS_MAX = 5
 GROUP_POINTS_MAX = 6
 
-_QUANT = re.compile(r"\b(?:i?q[2-8]_(?:k_)?(?:xxs|xs|s|m|l|0|1)|iq[1-4]_(?:xxs|xs|s|m|nl)|[fb]f?16|fp(?:4|8|16|32)|nvfp4|mxfp4|int[48]|[2-8][- ]?bit)\b|[2-8] ?ビット", re.I)
+_QUANT = re.compile(r"\b(?:(?:ud-)?i?q[2-8]_(?:k_)?(?:xxs|xs|s|m|l|0|1)|iq[1-4]_(?:xxs|xs|s|m|nl)|[fb]f?16|fp(?:4|8|16|32)|nvfp4|mxfp4|int[48]|[2-8][- ]?bit)\b|[2-8] ?ビット", re.I)
 _HW = re.compile(r"\b(?:(?:amd ?)?radeon ?(?:ai ?pro ?)?r9700|rtx ?(?:pro )?\d{4}(?: ?ti)?(?: ?super)?|gtx ?\d{3,4}|rx ?\d{4}(?: ?xt)?|r9700|mi\d{2,3}x?|[hab]\d{2,3}0?|gb\d{2,3}|m[1-9] ?(?:pro|max|ultra)?|a1[0-9] ?pro|snapdragon ?\w*(?: ?elite)?|"
                  r"arc ?[ab]\d{3}|radeon ?(?:pro )?\w+ ?\d*|strix ?halo|dgx ?spark|jetson ?\w+|ryzen ?ai ?\w*)\b|骁龙 ?\w+(?: ?elite)?|スナドラ ?\w*", re.I)
 _ENGINE = re.compile(r"\b(?:llama\.cpp|vllm|sglang|ollama|mlx|tensorrt-?llm|onnx ?runtime|ctranslate2|lm studio|exllama\w*|transformers|rocm|cuda|vulkan|metal|migraphx|openvino|directml|"
@@ -79,7 +79,7 @@ def literal_condition(value: str, text: str) -> bool:
     normalized = unicodedata.normalize("NFKC", text).casefold()
     parts = re.split(r"[\s_-]+", unicodedata.normalize("NFKC", value).casefold())
     pattern = r"[\s_-]*".join(re.escape(p) for p in parts if p)
-    return bool(pattern and re.search(r"(?<![a-z0-9_])" + pattern + r"(?![a-z0-9_])", normalized))
+    return bool(pattern and re.search(r"(?<![a-z0-9_\-])" + pattern + r"(?![a-z0-9_\-])", normalized))
 
 
 def clean_cond(raw: object, source_text: str = "") -> dict[str, str]:
@@ -120,8 +120,11 @@ def cond_of(stored: str | dict | None, text: str = "", *, kind: str = "") -> dic
         except ValueError:
             d = {}
     base = {k: _clip(v) for k, v in d.items() if k in COND_KEYS and _clip(v)}
-    for k, v in parse_cond(text).items():
-        base.setdefault(k, v)
+    for k, values in cond_candidates(text).items():
+        if len(values) != 1 or (k in base and cond_key(k, base[k]) not in values):
+            base.pop(k, None)
+        elif k not in base:
+            base[k] = next(iter(values.values()))
     return base
 
 
@@ -244,7 +247,7 @@ def _claim_rows(db: Session, ent, scopes: list[str], metric: str) -> list[dict]:
         num, unit = parse_value(c.value, c.text)
         if num is None or not _metric_match(metric, c.kind, c.text, unit):
             continue
-        rows.append({"source": "claim", "claim_id": c.id, "kind": c.kind, "text": c.text[:160], "value": num, "raw": c.value, "unit": unit, "cond": cond_of(c.cond, c.text, kind=c.kind),
+        rows.append({"source": "claim", "claim_id": c.id, "kind": c.kind, "text": c.text[:160], "value": num, "raw": c.value, "unit": unit, "metric": metric_id(c.kind, c.text, unit), "cond": cond_of(c.cond, c.text, kind=c.kind),
                      "at": c.stated_at or c.created_at})
     if not rows:
         return rows
@@ -299,7 +302,7 @@ def compare(db: Session, ents: list, scopes: list[str], *, metric: str = "", con
         rows = _claim_rows(db, ent, scopes, metric) + _metric_rows(db, ent, metric)
         groups: dict[tuple, dict] = {}
         for r in rows:
-            mid = r.get("metric") if r["source"] == "metric" else metric_id(r["kind"], r["text"], r["unit"])
+            mid = r["metric"]
             key = (r["source"], r["unit"], mid, _group_key(r["cond"]))
             g = groups.setdefault(key, {"unit": r["unit"], "metric_id": mid, "cond": r["cond"], "cond_label": _label(r["cond"]), "status": cond_status(flt, r["cond"]), "points": []})
             g["points"].append(r)
@@ -317,7 +320,7 @@ def compare(db: Session, ents: list, scopes: list[str], *, metric: str = "", con
         counts = {s: sum(1 for g in out_groups if g["status"] == s) for s in order}
         out_things.append({"id": ent.id, "name": ent.name, "type": ent.type, "groups": out_groups, "counts": counts})
     return {"metric": metric, "cond_filter": flt, "things": out_things,
-            "note": "条件の違う数値は平均・合算しない。組（単位と条件が同じもの）の中だけで並べる。条件が不明の組は、条件が同じとは限らない。"}
+            "note": "条件の違う数値は平均・合算しない。組（指標・単位と条件が同じもの）の中だけで並べる。条件が不明の組は、条件が同じとは限らない。"}
 
 
 def compare_text(c: dict, max_groups: int = 6) -> str:
