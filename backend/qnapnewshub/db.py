@@ -340,6 +340,18 @@ class Measurement(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class MeasurementRun(Base):
+    """明示実行の最新成功結果。本文・条件の正本ではない。旧測定行は保持する。"""
+    __tablename__ = "measurement_runs"
+
+    doc_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True)
+    doc_hash: Mapped[str] = mapped_column(String(64))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    extractor: Mapped[str] = mapped_column(String(40))
+    ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class MeasurementCond(Base):
     __tablename__ = "measurement_conds"
     __table_args__ = (UniqueConstraint("measurement_id", "key"), Index("ix_measure_cond_lookup", "key", "value_norm"))
