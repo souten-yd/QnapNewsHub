@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 import unicodedata
+import re
 from qnapnewshub.bench import cond_key
 from qnapnewshub.measure_quantity import decimal_value
 
@@ -35,4 +36,11 @@ def normalize_quantity(value: str, unit: str) -> tuple[Decimal, str, str]:
 
 
 def normalize_condition(key: str, value: str) -> str:
+    # Generic text folding strips hyphens: -1 (all layers) must not equal 1.
+    if key == "offload":
+        raw = unicodedata.normalize("NFKC", str(value)).strip().replace("−", "-")
+        if re.fullmatch(r"-1|0|[1-9][0-9]{0,7}", raw):
+            return raw
+        # Keep unsupported representations distinct rather than folding to a number.
+        return "unknown:" + raw.casefold()
     return cond_key(key, value)
