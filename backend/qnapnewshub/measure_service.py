@@ -42,7 +42,7 @@ def load_source(db, doc_id: int) -> StoredSource | None:
         .where(Document.id == doc_id, Document.kind == "news",
                Document.sensitivity == "public", Document.ai_use == "allowed",
                NewsItem.kind != "event", NewsItem.user_id.is_(None),
-               NewsItem.dup_of.is_(None)).limit(2)).all()
+               NewsItem.dup_of.is_(None)).limit(2).execution_options(populate_existing=True)).all()
     if len(rows) != 1:
         return None
     doc, aid, size, state = rows[0]
@@ -56,7 +56,8 @@ def load_source(db, doc_id: int) -> StoredSource | None:
     # Known frame size only; zstd max_output_size alone does not bound a frame
     # that declares its decompressed size. Reject extra frames/trailing bytes.
     try:
-        if zstandard.frame_content_size(blob) != size:
+        frame = zstandard.get_frame_parameters(blob)
+        if frame.content_size != size or not 0 < frame.window_size <= MAX_BODY:
             return None
         data = zstandard.ZstdDecompressor(max_window_size=MAX_BODY).decompress(
             blob, max_output_size=MAX_BODY, allow_extra_data=False)
