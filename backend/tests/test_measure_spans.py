@@ -26,3 +26,24 @@ def test_exact_source_spans_and_idempotence():
         assert {c.value_text for c in db.scalars(select(MeasurementCond)).all() if c.key == "hw"} == {"RTX 4070", "RTX 4070 Ti"}
         with pytest.raises(ValueError):
             save_draft(db, doc, source, replace(rows[0], value=Span(0, 3, "60")))
+
+
+@pytest.mark.parametrize("sentence", [
+    "Foo did not reach 60 tok/s on RTX 4070.",
+    "Foo could reach 60 tok/s on RTX 4070.",
+    "Foo decode 40 tok/s–60 tok/s on RTX 4070.",
+    "Foo decode 1,2 tok/s on RTX 4070.",
+    "Foo decode 60 tok/s以上 on RTX 4070.",
+    "Foo decode 60 tok/s or more.",
+])
+def test_ambiguous_or_qualified_assertions_are_not_measurements(sentence):
+    assert extract_explicit(sentence, "Foo") == []
+
+
+def test_condition_from_other_clause_does_not_attach():
+    src = "Foo decode 60 tok/s; RTX 4070 Q4_K_M is a different configuration."
+    draft = extract_explicit(src, "Foo")[0]
+    assert not draft.conditions
+    src = "Foo-Q4 decode 60 tok/s on RTX 4070."
+    draft = extract_explicit(src, "Foo-Q4")[0]
+    assert {c.key for c in draft.conditions} == {"hw"}
