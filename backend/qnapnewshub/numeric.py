@@ -146,7 +146,12 @@ def candidates_for(title: str, text: str) -> dict | None:
     cand = " ｜ ".join(w["text"] for w in wins)
     cand = extract.clean_text(cand, MAX_CHARS + 400)
     t = extract.clean_text(title, 300)
-    return {"cand": cand, "source": f"{t} {cand}", "known": bench.parse_cond(cand), "windows": len(wins)}
+    # 候補を連結した文字列の一致だけでは別の表行・段落をまたげる。
+    # LLM に渡した候補と元の単位の双方に含まれる引用だけを認める。
+    segments = [piece for u in split_units(text) if u["kind"] != "head"
+                if (piece := _clip_around(u["t"])) and extract.quote_grounded(piece, cand)]
+    return {"cand": cand, "source": f"{t} {cand}", "known": bench.parse_cond(cand),
+            "windows": len(wins), "segments": segments}
 
 
 # ---- 呼び出し ----
@@ -257,7 +262,12 @@ def check_item(raw: object, art: dict) -> tuple[dict | None, str]:
     value = _clean_str(raw.get("value"), 30)
     if not quote or not about or not metric or not value:
         return None, "form"
-    if not extract.quote_grounded(quote, source) or len(_SENT_SPLIT.split(quote)) != 1 or "｜" in quote:
+    if not extract.quote_grounded(quote, source) or "｜" in quote:
+        return None, "quote"
+    segments = art.get("segments")
+    if segments is None:
+        segments = [p.strip() for line in source.splitlines() for p in _SENT_SPLIT.split(line) if p.strip()]
+    if not any(extract.quote_grounded(quote, segment) for segment in segments):
         return None, "quote"
     if not bench.literal_condition(about, quote):
         return None, "subject"
@@ -270,6 +280,13 @@ def check_item(raw: object, art: dict) -> tuple[dict | None, str]:
     unit = _UNIT_MAP.get(unit.lower(), unit)[:16]      # 長い書き方（tokens per second）は切る前に短い形へ
     if unit and not _unit_in_quote(unit, value, quote):
         unit = ""      # 数値と結び付かない単位は捨てる
+    if unit:
+        # 同じ単位の値が複数ある節は、条件・値の対応が一意とは限らない。
+        # C3/C4 で位置と節を解決するまでは無理に採用しない。
+        matches = [m for m in _VALUE_TOKEN.finditer(_norm(quote))
+                   if _unit_in_quote(unit, m.group(), quote)]
+        if len(matches) != 1:
+            return None, "ambiguous_value"
     llm_cond = {} if _kind(unit, metric, quote) == "price" else bench.clean_cond({k: raw.get(k) for k in bench.COND_KEYS}, quote)
     asked = {k: _clean_str(raw.get(k), 60) for k in bench.COND_KEYS if _clean_str(raw.get(k), 60) and bench.fold(_clean_str(raw.get(k), 60)) not in {"null", "none"}}
     exact = wanted <= extract.numbers_in(quote)
