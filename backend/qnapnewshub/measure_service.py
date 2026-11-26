@@ -18,6 +18,7 @@ from qnapnewshub.db import ArticleEntity, Document, Entity, Measurement, Measure
 from qnapnewshub.measure_spans import extract_explicit
 from qnapnewshub.measure_tables import markdown_measurements
 from qnapnewshub.measure_store import save_draft
+from qnapnewshub.measure_matrix_bridge import verified_matrix_drafts
 from qnapnewshub.measure_search import search
 from qnapnewshub.measure_vocab import LLM_KEYS
 
@@ -25,8 +26,8 @@ MAX_BODY = 128 * 1024
 MAX_DOCS = 20
 MAX_SUBJECTS = 10
 MAX_DRAFTS = 20
-EXTRACTOR = "rule:c6c"
-MANAGED = ("rule:c5b", EXTRACTOR)
+EXTRACTOR = "rule:c7a"
+MANAGED = ("rule:c5b", "rule:c6c", EXTRACTOR)
 
 
 @dataclass(frozen=True)
@@ -92,14 +93,16 @@ def _input_hash(src, entities):
 
 
 def _drafts(src: StoredSource, entities):
-    table = markdown_measurements(src.text)
+    table = markdown_measurements(src.text) + verified_matrix_drafts(src.text)
     candidates = {}
     for ent in entities:
         drafts = extract_explicit(src.text, ent.name)
         drafts += [d for d in table if d.subject.text.casefold() == ent.name.casefold()]
         for d in drafts:
             key = (d.value.start, d.value.end, d.metric_id)
-            candidates.setdefault(key, []).append((ent, d))
+            pairs = candidates.setdefault(key, [])
+            if not any(e.id == ent.id and prior == d for e, prior in pairs):
+                pairs.append((ent, d))
             if len(candidates) > MAX_DRAFTS:
                 return None
     # If several article entities could own the same value, don't choose one.
@@ -113,7 +116,8 @@ def _result_hash(db, ids):
         Measurement.metric_id, Measurement.value, Measurement.value_text, Measurement.unit,
         Measurement.unit_text, Measurement.span_start, Measurement.span_end, Measurement.block_id,
         Measurement.doc_hash, Measurement.sensitivity, Measurement.ai_use, Measurement.status,
-        Measurement.extractor).where(Measurement.id.in_(ids)).order_by(Measurement.id)).all()
+        Measurement.extractor, Measurement.stat, Measurement.confidence,
+        Measurement.value_min, Measurement.value_max).where(Measurement.id.in_(ids)).order_by(Measurement.id)).all()
     conditions = db.execute(select(
         MeasurementCond.measurement_id, MeasurementCond.key, MeasurementCond.value_text,
         MeasurementCond.value_norm, MeasurementCond.scope, MeasurementCond.span_start,
@@ -148,8 +152,9 @@ def _reusable(db, src, signature, entities):
                 Measurement.ai_use == src.doc.ai_use, Measurement.entity_id.in_([e.id for e in entities]))))
     active_managed = set(db.scalars(select(Measurement.id).where(Measurement.doc_id == src.doc.id,
                     Measurement.status == "active", Measurement.extractor.in_(MANAGED)).limit(MAX_DRAFTS+1)))
+    actual_hash = _result_hash(db, ids)
     return ids if (valid == set(ids) and active_managed <= valid
-                   and run.result_hash == _result_hash(db, ids)) else None
+                   and actual_hash is not None and run.result_hash == actual_hash) else None
 
 
 def preview(db, doc_id: int) -> dict:
