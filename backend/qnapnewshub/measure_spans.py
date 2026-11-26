@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from qnapnewshub import bench, measure_quantity as mq
 from qnapnewshub.measure_vocab import normalize_condition
+from qnapnewshub.measure_relation import safe_clause, overlaps
 
 @dataclass(frozen=True)
 class Span:
@@ -33,7 +34,7 @@ class MeasurementDraft:
 
 
 _NUM_UNIT = re.compile(r"(?<![A-Za-z0-9_.+-])(?P<value>" + mq.NUMBER + r")[ \t]*(?P<unit>tokens/s|tok/s|tok/min|ms|s|GiB|GB|MiB|MB|kW|mW|W|MHz|GHz|%|USD|JPY|円)(?![A-Za-z0-9_/])")
-_BOUNDARY = re.compile(r"\n+|(?<=[。！？!?])\s*|(?<=\.)\s+(?=[A-Z])")
+_BOUNDARY = re.compile(r"\n+|[;；]+|(?<=[。！？!?])\s*|(?<=\.)\s+(?=[A-Z])")
 
 
 def blocks(source: str):
@@ -75,14 +76,10 @@ def extract_explicit(source: str, subject: str) -> list[MeasurementDraft]:
     for start, end in blocks(source):
         text = source[start:end]
         names, nums = list(pattern.finditer(text)), list(_NUM_UNIT.finditer(text))
-        if len(names) != 1 or len(nums) != 1 or text.lstrip().startswith("|"):
+        if len(names) != 1 or len(nums) != 1 or text.lstrip().startswith("|") or not safe_clause(text):
             continue
         name, num = names[0], nums[0]
-        # 原文のオフセットを壊さず、正規化後の数値字句の検証結果も使う。
-        if mq.RANGE.search(mq.normalized(text)) or "±" in text:
-            continue
-        prefix = text[:num.start("value")].rstrip()
-        if re.search(r"(?:[<>≤≥≈~]|\babout|\baround|\bapproximately|\bup to|\bat least|約|最大|最低)$", prefix, re.I):
+        if not mq.is_scalar_occurrence(text, num.start("value"), num.end("value")):
             continue
         try:
             mq.decimal_value(num.group("value"))
@@ -95,7 +92,30 @@ def extract_explicit(source: str, subject: str) -> list[MeasurementDraft]:
         mid = bench.metric_id("benchmark", text, canonical_unit)
         if mid not in ("llm.decode_tps", "llm.prefill_tps", "llm.throughput_total_tps", "llm.throughput_per_user_tps", "llm.throughput_per_request_tps", "llm.tps_unspecified"):
             continue
-        out.append(MeasurementDraft(span(name), span(num, "value"), unit, mid, f"block:{start}",
-                                    unambiguous(condition_candidates(source, start, end))))
+        draft = MeasurementDraft(span(name), span(num, "value"), unit, mid, f"block:{start}")
+        out.append(MeasurementDraft(draft.subject, draft.value, draft.unit, mid, draft.block_id,
+                                    eligible_conditions(source, draft)))
     return out
 
+
+
+def eligible_conditions(source: str, draft: MeasurementDraft) -> tuple[Candidate, ...]:
+    """Only unique original candidates in this measurement's bounded prose clause.
+    Multiple distinct values for ANY key leave the entire condition set unknown.
+    A subject name containing a quantization-like suffix is not a separate condition.
+    """
+    core = (draft.subject, draft.value, draft.unit)
+    if not all(s.valid(source) for s in core):
+        return ()
+    for start, end in blocks(source):
+        if not all(start <= s.start < s.end <= end for s in core):
+            continue
+        if not safe_clause(source[start:end]) or draft.block_id != f"block:{start}":
+            return ()
+        candidates = tuple(c for c in condition_candidates(source, start, end)
+                           if not any(overlaps(c.span.start, c.span.end, s.start, s.end) for s in core))
+        selected = unambiguous(candidates)
+        if len(selected) != len({c.key for c in candidates}):
+            return ()
+        return selected
+    return ()
