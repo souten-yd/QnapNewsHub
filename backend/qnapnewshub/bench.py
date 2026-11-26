@@ -1,6 +1,6 @@
 """条件つきの数値の比較（ベンチマークの DB。ARCHITECTURE 12 章・v0.7 の続き）。
 
-- **条件**: 数値が測られた条件を 6 つの欄で持つ（`COND_KEYS`）: model（測ったモデル）・quant（量子化）・hw（GPU・端末）・engine（エンジン・バックエンド）・ctx（文脈の長さ）・version（版）。
+- **条件**: 数値が測られた条件を 7 つの欄で持つ（`COND_KEYS`）: model（測ったモデル）・quant（量子化）・hw（GPU・端末）・engine（エンジン）・backend（実行バックエンド）・ctx（文脈の長さ）・version（版）。
   取り出しは**文からの規則**（`cond_of`）。プロンプトに cond を足しても本物の LLM は書かなかった（2026-11-26・30 件で 0）ので指示は入れない。LLM が cond を書いたときだけ、原文（題・抜粋）にそのまま出る値を残す（`clean_cond`）。
   古い主張（cond の欄が無い）・LLM が書かなかった欄は、主張の文から規則（`parse_cond`）で補う。補えない欄は「不明」のまま（推測しない）。
 - **同じ指標でも条件の違うものを平均しない**: `compare` は（物・指標・単位・条件）ごとの組に分けて、組の中の新しい順の点・最小・最大・最新だけを返す。平均は出さない。
@@ -242,7 +242,10 @@ def metric_id(kind: str, text: str, unit: str) -> str:
     def matches(value: str) -> list[str]:
         return [key for key, pattern in patterns.items() if re.search(pattern, value, re.I)]
     found = matches(text)
-    per_user = bool(re.search(r"\bper[- ](?:user|request)\b|/\s*(?:user|request)\b|ユーザー(?:1人|一人)?あたり|1人当たり", text, re.I))
+    per_user = bool(re.search(r"\bper[- ]user\b|/\s*user\b|ユーザー(?:1人|一人)?あたり|1人当たり", text, re.I))
+    per_request = bool(re.search(r"\bper[- ]request\b|/\s*request\b|リクエスト(?:ごと|あたり)", text, re.I))
+    if per_request:
+        return "llm.tps_unspecified" if per_user or any(m != "llm.decode_tps" for m in found) else "llm.throughput_per_request_tps"
     if per_user:
         return "llm.throughput_per_user_tps" if not found or found == ["llm.decode_tps"] else "llm.tps_unspecified"
     return found[0] if len(found) == 1 else "llm.tps_unspecified"
