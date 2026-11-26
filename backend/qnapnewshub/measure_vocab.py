@@ -28,7 +28,9 @@ UNITS = {
 
 def normalize_quantity(value: str, unit: str) -> tuple[Decimal, str, str]:
     number = decimal_value(value)
-    dim, canonical, factor = UNITS.get(unit, ("unknown:" + unit, unit, "1"))
+    # Token-rate aliases are case-insensitive; physical units remain case-sensitive.
+    key = unit.casefold() if unit.casefold() in {"tok/s", "tokens/s", "tok/min"} else unit
+    dim, canonical, factor = UNITS.get(key, ("unknown:" + unit, unit, "1"))
     return number * Decimal(factor), canonical, dim
 
 
