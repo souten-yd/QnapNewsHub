@@ -49,9 +49,6 @@ def search(db, *, entity_id: int, metric_id: str, filters: dict[str, str],
     uses = {"allowed", "local_only"} if local_only else {"allowed"}
     if not visible or not current_hashes:
         return []
-    entity = db.get(Entity, entity_id)
-    if entity is None or entity.sensitivity not in visible or entity.ai_use not in uses:
-        return []
     # Same conditions as the Python classification; EXISTS avoids row multiplication.
     mismatches, unknowns, matches = [], [], []
     for key, want in filters.items():
@@ -64,13 +61,15 @@ def search(db, *, entity_id: int, metric_id: str, filters: dict[str, str],
     priority = case((or_(*mismatches), 2), (or_(*unknowns), 1), else_=0) if filters else Measurement.id * 0
     coverage = sum(matches) if matches else Measurement.id * 0
     query = (select(Measurement, Document).join(Document, Document.id == Measurement.doc_id)
+             .join(Entity, Entity.id == Measurement.entity_id)
              .where(Measurement.entity_id == entity_id, Measurement.metric_id == metric_id,
                     Measurement.status == "active", Document.sensitivity.in_(visible),
                     Document.ai_use.in_(uses), Measurement.sensitivity == Document.sensitivity,
-                    Measurement.ai_use == Document.ai_use, Document.sensitivity == entity.sensitivity,
-                    Document.ai_use == entity.ai_use,
+                    Measurement.ai_use == Document.ai_use, Document.sensitivity == Entity.sensitivity,
+                    Document.ai_use == Entity.ai_use,
                     tuple_(Measurement.doc_id, Measurement.doc_hash).in_(list(current_hashes.items())))
-             .order_by(priority, coverage.desc(), Measurement.id.desc()).limit(limit))
+             .order_by(priority, coverage.desc(), Measurement.id.desc()).limit(limit)
+             .execution_options(populate_existing=True))
     rows = list(db.execute(query))
     ids = [m.id for m, _ in rows]
     if not ids:
