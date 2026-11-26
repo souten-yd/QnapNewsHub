@@ -78,11 +78,16 @@ def extract_explicit(source: str, subject: str) -> list[MeasurementDraft]:
         if len(names) != 1 or len(nums) != 1 or text.lstrip().startswith("|"):
             continue
         name, num = names[0], nums[0]
-        # 原文 span を維持したまま、範囲・近似・上下限は保留。
-        if mq.RANGE.search(text) or mq.QUALIFIED.match(text[:num.start('value')].split(':')[-1]) or '±' in text:
+        # 原文のオフセットを壊さず、正規化後の数値字句の検証結果も使う。
+        if mq.RANGE.search(mq.normalized(text)) or "±" in text:
             continue
-        prefix = text[:num.start('value')].rstrip()
-        if re.search(r'(?:[<>≤≥≈~]|\babout|\baround|\bapproximately|\bup to|\bat least|約|最大|最低)
+        prefix = text[:num.start("value")].rstrip()
+        if re.search(r"(?:[<>≤≥≈~]|\babout|\baround|\bapproximately|\bup to|\bat least|約|最大|最低)$", prefix, re.I):
+            continue
+        try:
+            mq.decimal_value(num.group("value"))
+        except ValueError:
+            continue
         def span(m, group=0):
             return Span(start+m.start(group), start+m.end(group), m.group(group))
         unit = span(num, "unit")
@@ -93,15 +98,4 @@ def extract_explicit(source: str, subject: str) -> list[MeasurementDraft]:
         out.append(MeasurementDraft(span(name), span(num, "value"), unit, mid, f"block:{start}",
                                     unambiguous(condition_candidates(source, start, end))))
     return out
-, prefix, re.I):
-            continue
-        def span(m, group=0):
-            return Span(start+m.start(group), start+m.end(group), m.group(group))
-        unit = span(num, "unit")
-        canonical_unit = "tok/s" if unit.text in ("tokens/s", "tok/min") else unit.text
-        mid = bench.metric_id("benchmark", text, canonical_unit)
-        if mid not in ("llm.decode_tps", "llm.prefill_tps", "llm.throughput_total_tps", "llm.tps_unspecified"):
-            continue
-        out.append(MeasurementDraft(span(name), span(num, "value"), unit, mid, f"block:{start}",
-                                    unambiguous(condition_candidates(source, start, end))))
-    return out
+
