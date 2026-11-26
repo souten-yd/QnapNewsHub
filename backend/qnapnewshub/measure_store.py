@@ -70,6 +70,8 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
         if (actual != expected or actual_conds != expected_conds
                 or old.doc_id != doc.id or old.doc_hash != digest or old.confidence != "exact"):
             raise ValueError("stored measurement differs from verified evidence")
+        if matrix and (old.stat != "unknown" or old.value_min is not None or old.value_max is not None):
+            raise ValueError("stored matrix statistics differ from verified evidence")
         if old.sensitivity != doc.sensitivity or old.ai_use != doc.ai_use:
             raise ValueError("existing measurement is restricted")
         if (reactivate and old.status == "superseded" and old.extractor in {"rule:c5b", "rule:c6c", "rule:c7a"}
