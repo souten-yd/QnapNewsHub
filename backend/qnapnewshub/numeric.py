@@ -29,6 +29,7 @@ from sqlalchemy import select
 from qnapnewshub import bench, extract, llm, llm_task, rest, settings, writer
 from qnapnewshub import db as news_db
 from qnapnewshub import measure_quantity as mq
+from qnapnewshub.measure_relation import safe_clause
 from qnapnewshub.db import Claim, NewsBody, NewsItem
 
 logger = logging.getLogger("qnapnewshub.numeric")
@@ -149,7 +150,7 @@ def candidates_for(title: str, text: str) -> dict | None:
     t = extract.clean_text(title, 300)
     # 候補を連結した文字列の一致だけでは別の表行・段落をまたげる。
     # LLM に渡した候補と元の単位の双方に含まれる引用だけを認める。
-    segments = [piece for u in split_units(text) if u["kind"] != "head"
+    segments = [u["t"] for u in split_units(text) if u["kind"] != "head"
                 if (piece := _clip_around(u["t"])) and extract.quote_grounded(piece, cand)]
     return {"cand": cand, "source": f"{t} {cand}", "known": bench.parse_cond(cand),
             "windows": len(wins), "segments": segments}
@@ -277,26 +278,34 @@ def check_item(raw: object, art: dict) -> tuple[dict | None, str]:
     segments = art.get("segments")
     if segments is None:
         segments = [p.strip() for line in source.splitlines() for p in _SENT_SPLIT.split(line) if p.strip()]
-    if not any(extract.quote_grounded(quote, segment) for segment in segments):
+    matched = [segment for segment in segments if extract.quote_grounded(quote, segment)]
+    if not matched:
         return None, "quote"
+    # The complete original clause, not an LLM-selected substring, must support
+    # the assertion. Refuse ambiguous repeated quotes and clipped negations.
+    if len(set(matched)) != 1 or not all(safe_clause(segment) for segment in matched):
+        return None, "ambiguous_relation"
+    original = matched[0]
     if not bench.literal_condition(about, quote):
         return None, "subject"
     wanted = extract.numbers_in(value)
     if not wanted or not wanted <= extract.numbers_in(quote):
         return None, "value"
-    if _kind("", metric, quote) != "release" and not _number_matches(value, quote):
+    if _kind("", metric, quote) != "release" and (not _number_matches(value, quote) or not _number_matches(value, original)):
         return None, "value"
     unit = _clean_str(raw.get("unit"), 40)
     unit = _UNIT_MAP.get(unit.lower(), unit)[:16]      # 長い書き方（tokens per second）は切る前に短い形へ
     if unit and not _unit_in_quote(unit, value, quote):
         unit = ""      # 数値と結び付かない単位は捨てる
     if unit:
-        # 同じ単位の値が複数ある節は、条件・値の対応が一意とは限らない。
-        # C3/C4 で位置と節を解決するまでは無理に採用しない。
-        matches = [m for m in mq.scalar_tokens(quote)
-                   if _unit_in_quote(unit, m.group(), quote)]
+        # Inspect the complete original clause so a shortened quote cannot
+        # hide the other measurement. Structured tables use the C4 parser.
+        matches = [m for m in mq.scalar_tokens(original)
+                   if _unit_in_quote(unit, m.group(), original)]
         if len(matches) != 1:
             return None, "ambiguous_value"
+    if any(len(values) > 1 for values in bench.cond_candidates(original).values()):
+        return None, "ambiguous_relation"
     llm_cond = {} if _kind(unit, metric, quote) == "price" else bench.clean_cond({k: raw.get(k) for k in bench.COND_KEYS}, quote)
     asked = {k: _clean_str(raw.get(k), 60) for k in bench.COND_KEYS if _clean_str(raw.get(k), 60) and bench.fold(_clean_str(raw.get(k), 60)) not in {"null", "none"}}
     exact = wanted <= extract.numbers_in(quote)
