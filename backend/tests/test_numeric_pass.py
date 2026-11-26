@@ -312,3 +312,13 @@ def test_numeric_apply_retains_same_value_different_conditions_and_is_idempotent
         claims = list(db.scalars(select(Claim).where(Claim.article_id == aid, Claim.value != "")))
         assert len(claims) == 2
         assert {bench.cond_of(c.cond)["hw"] for c in claims} == {"RTX 4070", "RTX 4070 Ti"}
+
+
+def test_original_segments_prevent_cross_row_or_cross_paragraph_quote():
+    """目的・根拠: C1レビュー 2026-11-26。連結した候補に存在しても別の原文単位をまたぐ引用は拒否。"""
+    first = "Foo-7B reached 60 tok/s"
+    second = "RTX 4070 uses Q4_K_M"
+    article = {"source": first + " " + second, "segments": [first, second]}
+    assert numeric.check_item(_row(quote=first + " " + second, value="60"), article)[1] == "quote"
+    quote = "Foo-7B reached 60 tok/s and 80 tok/s on RTX 4070"
+    assert numeric.check_item(_row(quote=quote, value="60"), {"source": quote})[1] == "ambiguous_value"
