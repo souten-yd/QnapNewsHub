@@ -38,3 +38,10 @@
 - 残: API/認可、既存FTSからの候補生成、旧claimとの互換、更新履歴/失効、範囲値、保存バッチ性能、実機writer/休止と競合、本文上限の見直し。自動適用はしない。マージしない。
 
 - 追加確認: [python-zstandard decompression API](https://python-zstandard.readthedocs.io/en/0.20.0/decompressor.html) のwindow上限の単位とextra dataの動作を確認。frame.content_sizeとframe.window_sizeをバイト単位で別検査し、古いORMのEntity属性に依存せずSQL joinで現行の区分を照合。最終版measure_search.py blob `ee7c2b4286e3cbed1977fafd4c92bfb011310a38` の一致コピーで、古いORM権限の1ケースも含め14検査成功。1203件の合成SQLite、30回 p50 3.862ms/p95 5.213ms。Zstd/実ORM/実機writerは未実行。#54はこのPRの途中のheadから作ったので、レビュー時にbaseの最新差分を反映して統合試験する（今回はマージしない）。
+
+## C6c 測定の変更検知・再抽出省略・失効管理（Draft）
+- MeasurementRunを加算的な表として追加。既存Base.metadata.create_allを使い、旧claims/測定行の削除や書き換えは行わない。最新の明示実行のsource hash、対象モデルID/名前/区分、抽出版を含むinput hash、結果ID、保存値/条件のresult hashを記録。既存の正本・権限・writer経路を維持。
+- previewのinput_hashとdoc_hashの両方を明示applyで照合。全入力と保存結果が一致するときのみ抽出を省略（空結果も対象）。本文/モデル/抽出版が変わった場合は再抽出。抽出・保存の成功後、サービス管理下(rule:c5b/c6c)の旧行のみ同じtransactionでsuperseded。削除なし。完全に同じ原文が復帰した場合は、原文と保存条件・fingerprint・区分を再照合して管理下のsuperseded行だけ再有効化。手動/旧claimは変更しない。既存fingerprintに値や条件が食い違う場合は拒否し、上書きしない。
+- 負のtok/sと過大な指数を候補段階で除外、token-rateの単位表記を正規化。物理単位の大文字小文字は維持。
+- 評価: 2026-11-26、SQLiteの合成ORMを用いて26検査に合格。実サービス/保存/表/原文抽出モジュールのコピーのblob SHAはそれぞれ `3fb77d23228f5fa411939d83c1f07b179cec6388` / `4baad164c1ff7457a8cf89423755f4efc9d9d49a` / `49d57416f6d35a72cc246ce2264f8c37f5751914` / `12e63a0f6da60b66217e46d8390541896e14ca8d` と一致。benchは必要関数の抜粋、vocabはローカルコピー、正本取得は模擬。実SQLiteの保存・検索・再利用・本文変更・復帰・改変拒否・ロールバック・対象変更・空結果・不正値を試験。初回の自動flushでresult_hash未設定の不具合を発見し修正後に全26検査成功。実ORM/Zstd/writer/全体pytest、実機性能は未確認。既存テストに回帰試験を追加。
+- 未実装: 文書内ブロック単位の再抽出（共有見出し/文脈/表の依存関係を扱うまで文書全体の再抽出を維持）、完全な状態遷移履歴、認可済みAPI/既存FTSへの接続、表座標の永続保存。#54とは#53の並行後続。統合時は両方の差分をレビューし、マージは行わない。
