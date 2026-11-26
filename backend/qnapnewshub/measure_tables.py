@@ -10,12 +10,13 @@ import json
 import re
 from qnapnewshub.measure_spans import Span, Candidate, MeasurementDraft
 from qnapnewshub.measure_vocab import normalize_quantity
+from qnapnewshub.measure_quantity import NUMBER
 
 _METRICS = {"decode tok/s": "llm.decode_tps", "prefill tok/s": "llm.prefill_tps",
-            "total tok/s": "llm.throughput_total_tps", "tok/s": "llm.tps_unspecified"}
+            "total tok/s": "llm.throughput_total_tps", "per user tok/s": "llm.throughput_per_user_tps", "tok/s": "llm.tps_unspecified"}
 _CONDS = {"gpu": "hw", "quant": "quant", "engine": "engine", "backend": "backend",
           "concurrency": "concurrency"}
-_NUMBER = re.compile(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
+_NUMBER = re.compile(NUMBER)
 _MAX_INPUT = 2_000_000
 _MAX_ROWS = 10000
 
