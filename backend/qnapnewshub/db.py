@@ -303,6 +303,72 @@ class DocumentLink(Base):
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Measurement(Base):
+    """原文の特定の数値。既存 claims は変更しない。"""
+    __tablename__ = "measurements"
+    __table_args__ = (Index("ix_measure_entity_metric", "entity_id", "metric_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    doc_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    doc_hash: Mapped[str] = mapped_column(String(64))
+    # claims は旧版の移行で表を作り直すため外部キーを張らない
+    claim_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    entity_id: Mapped[int | None] = mapped_column(ForeignKey("entities.id", ondelete="SET NULL"), nullable=True)
+    subject_text: Mapped[str] = mapped_column(Text)
+    metric_id: Mapped[str] = mapped_column(String(80))
+    metric_text: Mapped[str] = mapped_column(Text, default="")
+    value: Mapped[float] = mapped_column(Float)
+    value_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_max: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_text: Mapped[str] = mapped_column(Text)
+    unit: Mapped[str] = mapped_column(String(40))
+    unit_text: Mapped[str] = mapped_column(String(80))
+    stat: Mapped[str] = mapped_column(String(20), default="unknown")
+    method: Mapped[str] = mapped_column(String(20), default="unknown")
+    scenario: Mapped[str] = mapped_column(String(20), default="unknown")
+    measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sensitivity: Mapped[str] = mapped_column(String(12), index=True)
+    ai_use: Mapped[str] = mapped_column(String(12))
+    span_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    span_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    block_id: Mapped[str] = mapped_column(String(80), default="")
+    extractor: Mapped[str] = mapped_column(String(40))
+    confidence: Mapped[str] = mapped_column(String(12), default="none")
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MeasurementCond(Base):
+    __tablename__ = "measurement_conds"
+    __table_args__ = (UniqueConstraint("measurement_id", "key"), Index("ix_measure_cond_lookup", "key", "value_norm"))
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    measurement_id: Mapped[int] = mapped_column(ForeignKey("measurements.id", ondelete="CASCADE"), index=True)
+    key: Mapped[str] = mapped_column(String(40))
+    value_text: Mapped[str] = mapped_column(Text)
+    value_norm: Mapped[str] = mapped_column(String(200))
+    scope: Mapped[str] = mapped_column(String(20))
+    span_start: Mapped[int] = mapped_column(Integer)
+    span_end: Mapped[int] = mapped_column(Integer)
+    extractor: Mapped[str] = mapped_column(String(40))
+    confidence: Mapped[str] = mapped_column(String(12))
+
+
+class MeasurementConflict(Base):
+    __tablename__ = "measurement_conflicts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    measurement_id: Mapped[int] = mapped_column(ForeignKey("measurements.id", ondelete="CASCADE"), index=True)
+    key: Mapped[str] = mapped_column(String(40))
+    value_a: Mapped[str] = mapped_column(Text)
+    value_b: Mapped[str] = mapped_column(Text)
+    extractor_a: Mapped[str] = mapped_column(String(40))
+    extractor_b: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class MetricPoint(Base):
     """数値の時系列（Metric）。物（subject: 例 repo:owner/name）・指標・値・単位・時刻・出どころ・条件。同じ（物・指標・時刻・出どころ・条件）は 1 点。"""
 
