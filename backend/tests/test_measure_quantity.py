@@ -32,3 +32,10 @@ def test_per_request_is_not_per_user_or_aggregate():
                                   "60 tok/s程度", "60 tok/s±5 tok/s", "60±5 tok/s"])
 def test_extended_scalar_occurrence_rejects_non_scalar(text):
     assert list(mq.scalar_tokens(text)) == []
+
+
+def test_from_x_to_y_is_a_change_not_a_range():
+    """目的: 「from X to Y」は前と後の 2 つの値（変化）として両方残し、「X to Y」「X–Y」は範囲として単一の値にしない。
+    根拠: 2026-11-26 実データ。「cut one block from 2,397 ms to 725 ms」の 725 ms が範囲とみなされて消えていた。"""
+    assert [m.group() for m in mq.scalar_tokens("cut one block from 2,397 ms to 725 ms")] == ["2,397", "725"]
+    assert list(mq.scalar_tokens("40 to 60 tok/s")) == []

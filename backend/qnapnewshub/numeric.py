@@ -123,7 +123,7 @@ def candidate_windows(text: str) -> list[dict]:
         joined = " ".join(_clip_around(u["t"]) for u in body)
         n_hit = sum(len(_NUM_UNIT.findall(_norm(u["t"]))) for u in body)
         score = n_hit + 2 * len(bench.parse_cond(joined)) + (1 if head else 0)
-        wins.append({"text": (f"[見出し] {head[:HEADING_MAX]} " if head else "") + joined, "score": score, "start": lo})
+        wins.append({"text": (f"[見出し] {head[:HEADING_MAX]} " if head else "") + joined, "score": score, "start": lo, "units": [u["t"] for u in body]})
     kept: list[dict] = []
     used = 0
     for w in sorted(wins, key=lambda w: (-w["score"], w["start"])):
@@ -147,10 +147,9 @@ def candidates_for(title: str, text: str) -> dict | None:
     cand = " ｜ ".join(w["text"] for w in wins)
     cand = extract.clean_text(cand, MAX_CHARS + 400)
     t = extract.clean_text(title, 300)
-    # 候補を連結した文字列の一致だけでは別の表行・段落をまたげる。
-    # LLM に渡した候補と元の単位の双方に含まれる引用だけを認める。
-    segments = [u["t"] for u in split_units(text) if u["kind"] != "head"
-                if (piece := _clip_around(u["t"])) and extract.quote_grounded(piece, cand)]
+    # 引用は元の文（候補に入れた文）の 1 つの中に収まること（別の表の行・段落をまたがない）。候補を作ったときの文をそのまま使う
+    # （2026-11-26: 本文を分け直して全文と照合する作りは、候補の選び出しが 14.5 → 113 ms〔7 記事〕と 8 倍遅かった）。
+    segments = [s for w in wins for s in w["units"]]
     return {"cand": cand, "source": f"{t} {cand}", "known": bench.parse_cond(cand),
             "windows": len(wins), "segments": segments}
 
@@ -238,7 +237,7 @@ def _number_matches(value: str, quote: str):
     except ValueError:
         return []
     out = []
-    for m in mq.scalar_tokens(quote):
+    for m in mq.scalar_tokens(quote, allow_qualified=True):      # 「約 6.3 kW」「up to 20%」も記事が述べた値として残す（範囲は除く）
         try:
             if mq.decimal_value(m.group()) == target:
                 out.append(m)
@@ -247,8 +246,29 @@ def _number_matches(value: str, quote: str):
     return out
 
 
+# 単位の表記をそろえる決まり（単位は種類が限られるので、製品名のような語の足し継ぎにはならない）。順に当てる
+_UNIT_CANON = [(r"ミリ秒|milliseconds?|msecs?", "ms"), (r"マイクロ秒|microseconds?|µs|μs", "us"), (r"秒|seconds?|secs?", "s"), (r"分|minutes?|mins?", "min"),
+               (r"時間|hours?|hrs?", "h"), (r"tokens?|トークン", "tok"), (r"\s*(?:per|毎)\s*", "/"), (r"watts?|ワット", "w"),
+               (r"ドル|us\$|dollars?", "usd"), (r"円", "jpy"), (r"[\s・]", "")]
+
+
+def _canon_unit(s: str) -> str:
+    s = mq.normalized(s).casefold()
+    for pat, rep in _UNIT_CANON:
+        s = re.sub(pat, rep, s)
+    return s
+
+
 def _unit_in_quote(unit: str, value: str, quote: str) -> bool:
-    """数値に隣接する単位のみ。通貨記号と既知の別表記も許す。"""
+    """数値に隣接する単位のみ。通貨記号と既知の別表記も許す。
+    表記の違い（秒と s・tokens per watt と tok/W）は _canon_unit でそろえ、数値の直後の文字列の頭と比べる（2026-11-26 実データ: 「29.8秒」に s、「8.6 tokens per watt」に tok/W が付かなかった）。"""
+    canon = _canon_unit(unit)
+    if canon:
+        text_c = mq.normalized(quote)
+        for m in _number_matches(value, quote):
+            tail = _canon_unit(text_c[m.end():m.end() + 40])
+            if tail.startswith(canon) and not re.match(r"[a-z0-9_]", tail[len(canon):len(canon) + 1]):
+                return True
     u = _norm(unit).casefold()
     aliases = {u, *(k for k, v in _UNIT_MAP.items() if v.casefold() == u)}
     if u == "usd":
@@ -274,29 +294,39 @@ def _window_of(quote: str, art: dict) -> str:
     return art["source"]
 
 
-def ground_cond(raw: dict, clause: str, window: str, source: str) -> dict[str, str]:
-    """LLM が書いた条件を、根拠の範囲で確かめて残す（2026-11-26 実データで決めた・DESIGN 28）。
-    1. 引用の元の文にあり、その文でその欄の候補が 1 つ（明示） 2. 引用を含む候補の塊にあり、塊でその欄の候補が 1 つ（近く）
-    3. 記事全体でその欄の候補が 1 つ（共通の設定）。規則で候補を拾えない欄（model など）は、塊の中に字句どおり出れば残す。
-    近くに同じ欄の別の値があり、引用の文に無いものは付けない（別の測定の条件を借りる誤りを防ぐ）。"""
-    cands = {name: bench.cond_candidates(text) for name, text in (("clause", clause), ("window", window), ("source", source))}
+def _stands_alone(x: str, longer: list[str], text: str) -> bool:
+    """x が、x を含む長い候補（longer）の出現を除いても、まだ字句どおり出るか。"""
+    if not longer:
+        return True
+    rest = unicodedata.normalize("NFKC", text)
+    for y in sorted(longer, key=len, reverse=True):
+        rest = re.sub(re.escape(unicodedata.normalize("NFKC", y)), " ", rest, flags=re.I)
+    return bench.literal_condition(x, rest)
+
+
+def ground_cond(raw: dict, clause: str, window: str, source: str, seen: dict[str, set[str]] | None = None) -> dict[str, str]:
+    """LLM が書いた条件を、根拠の範囲で確かめて残す（汎用・語の辞書の足し継ぎに頼らない。DESIGN 28）。
+    範囲は近い順に 引用の元の文 → 引用を含む候補の塊 → 記事全体。各範囲の候補 = 規則の正規表現で拾えた値 ＋
+    その記事で LLM が返したその欄の値（seen）のうち、その範囲に字句どおり出るもの。
+    候補のある一番近い範囲で、候補が 1 つだけでそれが LLM の値なら付ける。複数・別の値なら付けない（別の測定の条件を借りない）。
+    どの範囲にも字句どおり出ない値は付けない。"""
     out: dict[str, str] = {}
     for key, v in bench.clean_cond(raw).items():
         ck = bench.cond_key(key, v)
-        known = [cands[s].get(key) for s in ("clause", "window", "source")]
-        if not any(known):
-            if bench.literal_condition(v, window):
-                out[key] = v
-            continue
-        for scope_vals in known:
-            if scope_vals:
-                if ck in scope_vals and len(scope_vals) == 1:
+        extra = (seen or {}).get(key, set()) | {v}
+        for text in (clause, window, source):
+            raws = {*bench.cond_candidates(text).get(key, {}).values(), *(x for x in extra if bench.literal_condition(x, text))}
+            # 一番長く当たるものを取る: 「RTX 4070 Ti」の中の「RTX 4070」のように、別の候補の一部として当たっているだけの候補は数えない
+            raws = {x for x in raws if _stands_alone(x, [y for y in raws if y != x and bench.fold(x) in bench.fold(y)], text)}
+            found = {bench.cond_key(key, x) for x in raws}
+            if found:
+                if found == {ck}:
                     out[key] = v
-                break      # 一番近い範囲に候補があるのに、1 つに決まらない・別の値 → 付けない
+                break
     return out
 
 
-def check_item(raw: object, art: dict) -> tuple[dict | None, str]:
+def check_item(raw: object, art: dict, seen: dict[str, set[str]] | None = None) -> tuple[dict | None, str]:
     """LLM の数値 1 件を、渡した文（art["source"]）に照らして検査する。(整えた物, 落とした理由。通れば ""）。
     引用が渡した文に出る・値と条件はその引用内に限定する（C1）。"""
     if not isinstance(raw, dict):
@@ -326,11 +356,17 @@ def check_item(raw: object, art: dict) -> tuple[dict | None, str]:
     unit = _UNIT_MAP.get(unit.lower(), unit)[:16]      # 長い書き方（tokens per second）は切る前に短い形へ
     if unit and not _unit_in_quote(unit, value, quote):
         unit = ""      # 数値と結び付かない単位は捨てる
-    llm_cond = {} if _kind(unit, metric, quote) == "price" else ground_cond({k: raw.get(k) for k in bench.COND_KEYS}, original, _window_of(quote, art), source)
+    if _kind(unit, metric, quote) == "price":
+        llm_cond, rule_cond = {}, {}
+    else:
+        window = _window_of(quote, art)
+        llm_cond = ground_cond({k: raw.get(k) for k in bench.COND_KEYS}, original, window, source, seen)
+        # 規則で引用の文から拾った値も同じ判定を通す（規則が知らない別の値が文にあれば付けない）
+        rule_cond = ground_cond(bench.parse_cond(original), original, window, source, seen)
     asked = {k: _clean_str(raw.get(k), 60) for k in bench.COND_KEYS if _clean_str(raw.get(k), 60) and bench.fold(_clean_str(raw.get(k), 60)) not in {"null", "none"}}
     exact = wanted <= extract.numbers_in(quote)
     return ({"about": about, "metric": metric, "value": value, "unit": unit, "quote": quote, "tier": "exact" if exact else "paraphrase",
-             "llm_cond": llm_cond, "dropped_cond": sorted(set(asked) - set(llm_cond))}, "")
+             "llm_cond": llm_cond, "rule_cond": rule_cond, "dropped_cond": sorted(set(asked) - set(llm_cond))}, "")
 
 
 def merge_cond(rule: dict[str, str], llm_cond: dict[str, str]) -> dict[str, str]:
@@ -345,10 +381,10 @@ def to_fact(item: dict) -> dict:
     unit, value = item["unit"], item["value"].replace(",", "")
     shown = f"{value}{unit}" if unit in ("%", "x", "×") or len(unit) <= 1 else (f"{value} {unit}" if unit else value)
     kind = _kind(unit, item["metric"], item["quote"])
-    cond = {} if kind == "price" else merge_cond(bench.parse_cond(item["quote"]), item["llm_cond"])
+    cond = {} if kind == "price" else merge_cond(item.get("rule_cond", {}), item["llm_cond"])
     text = f"{item['metric']}: {shown}（{item['quote']}）"
     return {"about": item["about"], "kind": kind, "text": extract.clean_text(text, 400), "value": shown[:40], "quote": item["quote"][:60] if item["tier"] == "exact" else "",
-            "tier": item["tier"], "cond": cond, "full_quote": item["quote"]}
+            "tier": item["tier"], "cond": cond, "full_quote": item["quote"], "cond_final": True}
 
 
 def parse(text: str, arts: list[dict]) -> tuple[dict[int, list[dict]], dict]:
@@ -360,6 +396,12 @@ def parse(text: str, arts: list[dict]) -> tuple[dict[int, list[dict]], dict]:
     out: dict[int, list[dict]] = {}
     seen: set[tuple] = set()
     stats = {"returned": 0, "passed": 0, "dropped": {}}
+    # その記事で LLM が返した条件の値（欄ごと）。ground_cond が「1 つに決まるか」を見る候補に加える（辞書に無い機材名でも曖昧さが分かる）
+    seen_vals: dict[int, dict[str, set[str]]] = {}
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("n", "")).strip().isdigit():
+            for k, v in bench.clean_cond({k: row.get(k) for k in bench.COND_KEYS}).items():
+                seen_vals.setdefault(int(str(row["n"]).strip()), {}).setdefault(k, set()).add(v)
     for row in rows:
         stats["returned"] += 1
         try:
@@ -369,7 +411,7 @@ def parse(text: str, arts: list[dict]) -> tuple[dict[int, list[dict]], dict]:
         if not 1 <= n <= len(arts):
             stats["dropped"]["n"] = stats["dropped"].get("n", 0) + 1
             continue
-        item, why = check_item(row, arts[n - 1])
+        item, why = check_item(row, arts[n - 1], seen_vals.get(n))
         if item is None:
             stats["dropped"][why] = stats["dropped"].get(why, 0) + 1
             continue
@@ -379,7 +421,7 @@ def parse(text: str, arts: list[dict]) -> tuple[dict[int, list[dict]], dict]:
         if key in seen or len(out.get(n, [])) >= MAX_NUMBERS:
             continue
         seen.add(key)
-        out.setdefault(n, []).append({**item, "rule_cond": {} if fact["kind"] == "price" else bench.parse_cond(item["quote"])})
+        out.setdefault(n, []).append(item)
         stats["passed"] += 1
     return out, stats
 
@@ -436,7 +478,7 @@ def apply_numeric(db, staged: dict[int, dict]) -> dict:
         existing = db.execute(select(Claim, Entity.key).outerjoin(Entity, Entity.id == Claim.entity_id)
                               .where(Claim.article_id == article_id, Claim.ai_extracted.is_(True), Claim.value != "")).all()
         seen = {(key, c.kind, extract.fold(c.text), _value_key(c.value),
-                 bench._group_key(bench.cond_of(c.cond, c.text, kind=c.kind)))
+                 bench._group_key(bench.clean_cond(bench.cond_of(c.cond))))
                 for c, key in existing if key}
         fresh: list[dict] = []
         for fact in rec["facts"]:

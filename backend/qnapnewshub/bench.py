@@ -27,8 +27,8 @@ GROUP_POINTS_MAX = 6
 
 _QUANT = re.compile(r"\b(?:(?:ud-)?i?q[2-8]_(?:k_)?(?:xxs|xs|s|m|l|0|1)|iq[1-4]_(?:xxs|xs|s|m|nl)|[fb]f?16|fp(?:4|8|16|32)|nvfp4|mxfp4|int[48]|[2-8][- ]?bit|q[2-8](?![_-]))\b|[2-8] ?ビット", re.I)
 _HW = re.compile(r"\b(?:(?:amd ?)?radeon ?(?:ai ?pro ?)?r9700|rtx ?(?:pro )?\d{4}(?: ?ti)?(?: ?super)?|gtx ?\d{3,4}|rx ?\d{4}(?: ?xt)?|r9700|mi\d{2,3}x?|[hab]\d{2,3}0?|gb\d{2,3}|m[1-9] ?(?:pro|max|ultra)?|a1[0-9] ?pro|snapdragon ?\w*(?: ?elite)?|"
-                 r"arc ?[ab]\d{3}|radeon ?(?:pro )?\w+ ?\d*|strix ?halo|dgx ?spark|(?:jetson ?)?(?:agx ?)?(?:thor|orin(?: ?nano| ?nx)?)|jetson ?\w+|ryzen ?ai ?\w*)\b|骁龙 ?\w+(?: ?elite)?|スナドラ ?\w*", re.I)
-_ENGINE = re.compile(r"\b(?:llama\.cpp|llama-(?:server|cli|bench)|vllm|sglang|ollama|mlx|tensorrt-?llm|onnx ?runtime|ctranslate2|lm studio|exllama\w*|transformers|openvino|candle|burn|mistral\.rs|strata|radiance)\b", re.I)
+                 r"arc ?[ab]\d{3}|radeon ?(?:pro )?\w+ ?\d*|strix ?halo|dgx ?spark|jetson ?\w+|ryzen ?ai ?\w*)\b|骁龙 ?\w+(?: ?elite)?|スナドラ ?\w*", re.I)
+_ENGINE = re.compile(r"\b(?:llama\.cpp|vllm|sglang|ollama|mlx|tensorrt-?llm|onnx ?runtime|ctranslate2|lm studio|exllama\w*|transformers|openvino|candle|burn|mistral\.rs|strata|radiance)\b", re.I)
 _BACKEND = re.compile(r"\b(?:rocm|cuda|vulkan|metal|migraphx|directml|hexagon|coreml|webgpu)\b", re.I)
 _CTX = re.compile(r"(?:\b(\d{1,4}(?:\.\d)?) ?([km]) ?(?:tokens? )?(?:ctx|context|コンテキスト)|(?:ctx|context(?: length| window)?|コンテキスト(?:長|窓|ウィンドウ)?|文脈(?:の)?長さ?)[ :=は]*(\d{1,4}(?:\.\d)?) ?([km])\b)", re.I)
 _VERSION = re.compile(r"\bv?(\d+\.\d+(?:\.\d+){0,2})\b(?= ?(?:版|release|で|にて|時点|以降|以上))|\bb(\d{4,5})\b")
@@ -47,17 +47,12 @@ def _clip(value: object) -> str:
 
 # 明示の別名だけを同じ機材と扱う。部分一致で別の SKU を寄せない。
 _HW_ALIASES = {"amdradeonr9700": "r9700", "radeonr9700": "r9700",
-               "amdradeonaipror9700": "r9700", "radeonaipror9700": "r9700",
-               "jetsonthor": "thor", "jetsonagxthor": "thor", "agxthor": "thor", "jetsonorin": "orin", "jetsonagxorin": "orin", "agxorin": "orin"}
-# llama.cpp の実行ファイルは llama.cpp と同じエンジン（2026-11-26 実データ: llama-server を知らず、記事の LM Studio を共通の設定と誤った）
-_ENGINE_ALIASES = {"llamaserver": "llama.cpp", "llamacli": "llama.cpp", "llamabench": "llama.cpp"}
+               "amdradeonaipror9700": "r9700", "radeonaipror9700": "r9700"}
 
 
 def cond_key(key: str, value: object) -> str:
     norm = fold(value)
-    if key == "hw":
-        return _HW_ALIASES.get(norm, norm)
-    return _ENGINE_ALIASES.get(norm, norm) if key == "engine" else norm
+    return _HW_ALIASES.get(norm, norm) if key == "hw" else norm
 
 
 def cond_candidates(text: str) -> dict[str, dict[str, str]]:

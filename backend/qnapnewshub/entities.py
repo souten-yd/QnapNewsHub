@@ -128,7 +128,7 @@ def apply_extractions(db: Session, staged: dict[int, dict]) -> int:
                           source_article_id=article_id, model=str(data.get("model", ""))[:200], prompt_version=str(data.get("version", ""))[:16],
                           created_at=data.get("at") or datetime.now(_UTC), ai_extracted=True, document_id=doc[0] if doc else None, sensitivity=sens, ai_use=use,
                           stated_at=when,      # 主張の日付の既定は記事の公開日
-                          cond=bench.cond_json(bench.cond_of(fact.get("cond"), fact["text"], kind=fact["kind"])) if fact.get("value") else "")      # 測定の条件（LLM の欄＋文からの規則）
+                          cond=bench.cond_json(bench.clean_cond(fact.get("cond")) if fact.get("cond_final") else bench.cond_of(fact.get("cond"), fact["text"], kind=fact["kind"])) if fact.get("value") else "")      # 測定の条件（数値パスは根拠の範囲で確かめ済み・それ以外は LLM の欄＋文からの規則）
             db.add(claim)
             new_claims.append((claim, doc[0] if doc else None, fact))
         for rel in data.get("relations", []):
