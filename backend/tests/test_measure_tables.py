@@ -19,3 +19,9 @@ def test_llama_bench_does_not_mix_pp_and_tg():
     out = llama_bench_records(json.dumps(rows))
     assert [r["metric_id"] for r in out] == ["llm.prefill_tps", "llm.decode_tps"]
     assert out[1]["source_path"] == "row:1/avg_ts"
+
+
+def test_table_skips_negative_and_unbounded_rate():
+    src = "| Model | Decode TOK/S |\n| --- | --- |\n| Foo | -60 |\n| Foo | 1e999 |\n| Foo | 60 |"
+    rows = markdown_measurements(src)
+    assert len(rows) == 1 and rows[0].value.text == "60"
