@@ -10,24 +10,26 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import unicodedata
 from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from qnapnewshub import measure_quantity as mq
 
-COND_KEYS = ("model", "quant", "hw", "engine", "ctx", "version")
-COND_LABEL = {"model": "モデル", "quant": "量子化", "hw": "GPU・端末", "engine": "エンジン", "ctx": "文脈の長さ", "version": "版"}
+COND_KEYS = ("model", "quant", "hw", "engine", "ctx", "version", "backend")
+COND_LABEL = {"model": "モデル", "quant": "量子化", "hw": "GPU・端末", "engine": "エンジン", "backend": "バックエンド", "ctx": "文脈の長さ", "version": "版"}
 COND_MAX_CHARS = 60
 COMPARE_THINGS_MAX = 5
 GROUP_POINTS_MAX = 6
 
-_QUANT = re.compile(r"\b(?:(?:ud-)?i?q[2-8]_(?:k_)?(?:xxs|xs|s|m|l|0|1)|iq[1-4]_(?:xxs|xs|s|m|nl)|[fb]f?16|fp(?:4|8|16|32)|nvfp4|mxfp4|int[48]|[2-8][- ]?bit)\b|[2-8] ?ビット", re.I)
+_QUANT = re.compile(r"\b(?:(?:ud-)?i?q[2-8]_(?:k_)?(?:xxs|xs|s|m|l|0|1)|iq[1-4]_(?:xxs|xs|s|m|nl)|[fb]f?16|fp(?:4|8|16|32)|nvfp4|mxfp4|int[48]|[2-8][- ]?bit|q[2-8](?![_-]))\b|[2-8] ?ビット", re.I)
 _HW = re.compile(r"\b(?:(?:amd ?)?radeon ?(?:ai ?pro ?)?r9700|rtx ?(?:pro )?\d{4}(?: ?ti)?(?: ?super)?|gtx ?\d{3,4}|rx ?\d{4}(?: ?xt)?|r9700|mi\d{2,3}x?|[hab]\d{2,3}0?|gb\d{2,3}|m[1-9] ?(?:pro|max|ultra)?|a1[0-9] ?pro|snapdragon ?\w*(?: ?elite)?|"
                  r"arc ?[ab]\d{3}|radeon ?(?:pro )?\w+ ?\d*|strix ?halo|dgx ?spark|jetson ?\w+|ryzen ?ai ?\w*)\b|骁龙 ?\w+(?: ?elite)?|スナドラ ?\w*", re.I)
-_ENGINE = re.compile(r"\b(?:llama\.cpp|vllm|sglang|ollama|mlx|tensorrt-?llm|onnx ?runtime|ctranslate2|lm studio|exllama\w*|transformers|rocm|cuda|vulkan|metal|migraphx|openvino|directml|"
-                     r"hexagon|coreml|webgpu|candle|burn|mistral\.rs|strata|radiance)\b", re.I)
+_ENGINE = re.compile(r"\b(?:llama\.cpp|vllm|sglang|ollama|mlx|tensorrt-?llm|onnx ?runtime|ctranslate2|lm studio|exllama\w*|transformers|openvino|candle|burn|mistral\.rs|strata|radiance)\b", re.I)
+_BACKEND = re.compile(r"\b(?:rocm|cuda|vulkan|metal|migraphx|directml|hexagon|coreml|webgpu)\b", re.I)
 _CTX = re.compile(r"(?:\b(\d{1,4}(?:\.\d)?) ?([km]) ?(?:tokens? )?(?:ctx|context|コンテキスト)|(?:ctx|context(?: length| window)?|コンテキスト(?:長|窓|ウィンドウ)?|文脈(?:の)?長さ?)[ :=は]*(\d{1,4}(?:\.\d)?) ?([km])\b)", re.I)
 _VERSION = re.compile(r"\bv?(\d+\.\d+(?:\.\d+){0,2})\b(?= ?(?:版|release|で|にて|時点|以降|以上))|\bb(\d{4,5})\b")
 # 単位は数値の直後だけで認識する。別の数値や "with" の w を拾わない。
@@ -57,7 +59,7 @@ def cond_candidates(text: str) -> dict[str, dict[str, str]]:
     """欄ごとに全候補を保持する。同じ表記の繰り返しだけを寄せる。"""
     s = unicodedata.normalize("NFKC", str(text or ""))
     out: dict[str, dict[str, str]] = {}
-    for key, pat in (("quant", _QUANT), ("hw", _HW), ("engine", _ENGINE), ("ctx", _CTX), ("version", _VERSION)):
+    for key, pat in (("quant", _QUANT), ("hw", _HW), ("engine", _ENGINE), ("backend", _BACKEND), ("ctx", _CTX), ("version", _VERSION)):
         for m in pat.finditer(s):
             if key == "ctx":
                 num, unit = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
@@ -176,12 +178,21 @@ def cond_status(filter_: dict[str, str], cond: dict[str, str]) -> str:
 
 def parse_value(value: str, text: str = "") -> tuple[float | None, str]:
     """値の文字列（"383.7"・"91%"・"5x"）と文から (数, 単位)。数が読めなければ (None, "")。"""
-    s = unicodedata.normalize("NFKC", str(value or ""))
-    m = _NUM.search(s)
-    if not m:
+    s = mq.normalized(value).strip()
+    if mq.QUALIFIED.match(s) or mq.RANGE.search(s) or "±" in s:
+        return None, ""
+    tokens = list(mq.scalar_tokens(s))
+    if len(tokens) != 1:
+        return None, ""
+    m = tokens[0]
+    # 値の欄に複数の数・自由文を許さない。単位と通貨記号のみ。
+    if s[:m.start()].strip() not in ("", "$", "€", "¥") or (s[m.end():].strip() and not _UNIT.fullmatch(s[m.end():])):
         return None, ""
     try:
-        num = float(m.group(0).replace(",", ""))
+        decimal = mq.decimal_value(m.group())
+        num = float(decimal)
+        if not math.isfinite(num):
+            return None, ""
     except ValueError:
         return None, ""
     def adjacent_unit(src: str, match) -> str:
@@ -196,10 +207,15 @@ def parse_value(value: str, text: str = "") -> tuple[float | None, str]:
 
     unit = adjacent_unit(s, m)
     if not unit:
-        raw = unicodedata.normalize("NFKC", str(text or ""))
+        raw = mq.normalized(text)
         # 同じ符号・数値の出現だけ。異なる単位が複数なら不明。
-        candidates = {adjacent_unit(raw, n) for n in _NUM.finditer(raw)
-                      if n.group().replace(",", "") == m.group().replace(",", "")}
+        candidates = set()
+        for n in mq.scalar_tokens(raw):
+            try:
+                if mq.decimal_value(n.group()) == decimal:
+                    candidates.add(adjacent_unit(raw, n))
+            except ValueError:
+                continue
         candidates.discard("")
         if len(candidates) == 1:
             unit = next(iter(candidates))
@@ -226,6 +242,9 @@ def metric_id(kind: str, text: str, unit: str) -> str:
     def matches(value: str) -> list[str]:
         return [key for key, pattern in patterns.items() if re.search(pattern, value, re.I)]
     found = matches(text)
+    per_user = bool(re.search(r"\bper[- ](?:user|request)\b|/\s*(?:user|request)\b|ユーザー(?:1人|一人)?あたり|1人当たり", text, re.I))
+    if per_user:
+        return "llm.throughput_per_user_tps" if not found or found == ["llm.decode_tps"] else "llm.tps_unspecified"
     return found[0] if len(found) == 1 else "llm.tps_unspecified"
 
 
