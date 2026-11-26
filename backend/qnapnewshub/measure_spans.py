@@ -93,7 +93,7 @@ def extract_explicit(source: str, subject: str) -> list[MeasurementDraft]:
         unit = span(num, "unit")
         canonical_unit = "tok/s" if unit.text in ("tokens/s", "tok/min") else unit.text
         mid = bench.metric_id("benchmark", text, canonical_unit)
-        if mid not in ("llm.decode_tps", "llm.prefill_tps", "llm.throughput_total_tps", "llm.throughput_per_user_tps", "llm.tps_unspecified"):
+        if mid not in ("llm.decode_tps", "llm.prefill_tps", "llm.throughput_total_tps", "llm.throughput_per_user_tps", "llm.throughput_per_request_tps", "llm.tps_unspecified"):
             continue
         out.append(MeasurementDraft(span(name), span(num, "value"), unit, mid, f"block:{start}",
                                     unambiguous(condition_candidates(source, start, end))))
