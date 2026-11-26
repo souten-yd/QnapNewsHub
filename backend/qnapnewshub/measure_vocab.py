@@ -4,6 +4,7 @@ from __future__ import annotations
 from decimal import Decimal
 import unicodedata
 from qnapnewshub.bench import cond_key
+from qnapnewshub.measure_quantity import decimal_value
 
 LLM_KEYS = frozenset("model model_params quant quant_variant hw hw_count vram cpu cpu_threads ram mem_bw engine backend engine_version version prompt_tokens gen_tokens ctx concurrency batch ubatch offload speculative flash_attn kv_type power power_limit benchmark".split())
 PRICE_KEYS = frozenset("currency region edition channel tax period".split())
@@ -26,10 +27,7 @@ UNITS = {
 
 
 def normalize_quantity(value: str, unit: str) -> tuple[Decimal, str, str]:
-    raw = unicodedata.normalize("NFKC", value).replace(",", "")
-    number = Decimal(raw)
-    if not number.is_finite():
-        raise ValueError("nonfinite measurement")
+    number = decimal_value(value)
     dim, canonical, factor = UNITS.get(unit, ("unknown:" + unit, unit, "1"))
     return number * Decimal(factor), canonical, dim
 
