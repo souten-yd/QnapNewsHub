@@ -1,7 +1,7 @@
 """目的: 数値パス（numeric.py。記事の数値と測定の条件を取り出す第 2 パス）の試験。外へ通信しない・LLM は模擬。
   ①候補の文の選び方（規則）: 数字＋単位を含む文を前後 1 文・見出し・表の行と一緒に取る・上限・数字の無い記事は候補なし・本文の途中も拾う
   ②検査: 引用が渡した文に無い・値が渡した文に無い・条件の値が渡した文に無いものを捨てる。null の欄は通る・単位が文に無ければ単位だけ捨てる
-  ③合流: 規則が先・LLM の条件は検査を通ったときだけ優先・同じ数字の既存の主張には cond の足りない欄だけ足す（新しい主張を作らない）
+  ③合流: C1（MEASUREMENT.md）に従い、数値だけでは統合せず、条件の衝突を上書きしない。
   ④実行: 候補のある記事だけ数件まとめて 1 回・構造化出力（response_format）を付ける・断られたら付けずにやり直す・済みの印・1 日の上限・設定が切・取り出し前の記事は対象にしない
   ⑤夜の埋め戻し: 夜だけ・古い記事だけ・用途 backfill  ⑥numeric-try の集計（何も書かない）。
 根拠: 2026-11-26 の調査（下ごしらえの 1 回の呼び出しに cond の指示を足しても、本物の LLM は 30 件で 1 度も書かなかった。20 記事を一度に・任意の入れ子の欄・渡した文に条件が無い・facts が題と頭の数字に偏る）。
@@ -55,7 +55,7 @@ def _art(**kw) -> dict:
 
 
 def _row(**over) -> dict:
-    base = {"n": 1, "quote": "Foo-7B reached 120.5 tok/s on an RTX 9999", "about": "Foo-7B", "metric": "生成速度", "value": "120.5", "unit": "tok/s",
+    base = {"n": 1, "quote": "Foo-7B reached 120.5 tok/s on an RTX 9999 using ExampleCpp at Q4_K_M", "about": "Foo-7B", "metric": "生成速度", "value": "120.5", "unit": "tok/s",
             "model": "Foo-7B", "quant": "Q4_K_M", "hw": "RTX 9999", "engine": None, "ctx": None, "version": None}
     return {**base, **over}
 
@@ -73,13 +73,13 @@ def test_check_item_drops_what_is_not_in_the_given_text():
     assert price["unit"] == "USD" and price["llm_cond"] == {}      # USD は渡した文に無いが既知の単位
 
 
-def test_merge_prefers_checked_llm_cond_and_parse_dedupes():
-    """目的: 条件の合流は規則が先・LLM（検査済み）が規則より優先。同じ数値の重複は 1 つ・番号が範囲外の行は捨てる・読めない返事は ValueError。"""
-    assert numeric.merge_cond({"hw": "RTX 9999", "quant": "Q8"}, {"quant": "Q4_K_M"}) == {"hw": "RTX 9999", "quant": "Q4_K_M"}
+def test_merge_drops_conflicting_cond_and_parse_dedupes():
+    """目的: 食い違う条件は確定しない。同じ引用・測定の重複は 1 つ・番号が範囲外の行は捨てる・読めない返事は ValueError。"""
+    assert numeric.merge_cond({"hw": "RTX 9999", "quant": "Q8"}, {"quant": "Q4_K_M"}) == {"hw": "RTX 9999"}
     text = json.dumps({"numbers": [_row(), _row(), _row(n=7), {"n": 1, "quote": "x"}]})
     got, stats = numeric.parse(text, [_art()])
     assert len(got[1]) == 1 and stats == {"returned": 4, "passed": 1, "dropped": {"n": 1, "form": 1}}
-    assert got[1][0]["rule_cond"] == {"hw": "RTX 9999"}
+    assert got[1][0]["rule_cond"] == {"hw": "RTX 9999", "quant": "Q4_K_M"}
     with pytest.raises(ValueError):
         numeric.parse("not json at all", [_art()])
 
@@ -115,7 +115,7 @@ SUMMARY = "Foo-7B reached 120.5 tok/s on an RTX 9999 using ExampleCpp at Q4_K_M.
 
 def test_run_sends_only_candidate_articles_in_one_call_and_stores_cond(monkeypatch, keyed):
     """目的: 候補の文のある記事だけを 1 回にまとめて送り（数字の無い記事は送らず印だけ）、構造化出力を付け、検査を通った数値を cond つきの claims に入れる。
-    既に同じ数字の主張がある記事には新しい主張を作らず cond を足す。済みの印が付き、2 度目は呼ばない。"""
+    既存の同じ数字だけの主張には条件を上書きしない。済みの印が付き、2 度目は呼ばない。"""
     a = _seed("Foo-7B speed test", SUMMARY)
     b = _seed("Plain article", "Nothing numeric here at all, just words.")
     with news_db.session() as db:      # a には、下ごしらえが取った同じ数字の主張（条件なし）が既にある
@@ -132,8 +132,11 @@ def test_run_sends_only_candidate_articles_in_one_call_and_stores_cond(monkeypat
     writer.flush("t")
     with news_db.session() as db:
         claims = list(db.scalars(select(Claim).where(Claim.article_id == a, Claim.value != "")))
-        assert len(claims) == 1      # 同じ数字の主張に足しただけ
-        assert bench.cond_of(claims[0].cond, "") == {"model": "Foo-7B", "quant": "Q4_K_M", "hw": "RTX 9999"}
+        assert len(claims) == 2
+        old = next(c for c in claims if c.text == "速度 120.5 tok/s")
+        new = next(c for c in claims if c.id != old.id)
+        assert old.cond == ""
+        assert bench.cond_of(new.cond, "") == {"model": "Foo-7B", "quant": "Q4_K_M", "hw": "RTX 9999"}
         assert db.get(NewsItem, a).num_v == numeric.NUM_DONE_EXCERPT and db.get(NewsItem, b).num_v == numeric.NUM_DONE_EXCERPT      # 候補の無い記事にも印
     assert run(numeric.run())["calls"] == 0 and len(server.calls) == 1
 
@@ -250,7 +253,7 @@ def test_numeric_try_counts_fields_and_writes_nothing(monkeypatch):
     result = run(numeric_try.try_once("openrouter", "", "m/x:free", secret, arts))
     assert result["calls"] == 1 and result["returned"] == 1 and result["passed"] == 1 and result["mode"] == "json_schema"
     f = result["fields"]
-    assert f["hw"]["both_same"] == 1 and f["quant"]["llm_added"] == 1 and f["engine"]["none"] == 1
+    assert f["hw"]["both_same"] == 1 and f["quant"]["both_same"] == 1 and f["engine"]["none"] == 1
     text = numeric_try.report(info, result)
     assert "候補の文のある記事 1 件" in text and secret not in text
     writer.flush("t")
@@ -264,3 +267,112 @@ def test_long_unit_spelling_is_normalized_before_clipping():
     from qnapnewshub import numeric
 
     assert numeric._UNIT_MAP["tokens per second"] == "tok/s"
+
+
+def test_numeric_conditions_are_local_and_distinct_measurements_survive():
+    """目的・根拠: C1（2026-11-26 MEASUREMENT.md P1/P3/P4/P9）。同じ数値でも別の GPU の測定を残し、他の文の条件・値・単位を採用しない。"""
+    q1 = "Foo-7B reached 60 tok/s on RTX 4070 at Q4_K_M"
+    q2 = "Foo-7B reached 60 tok/s on RTX 4070 Ti at Q8_0"
+    art = {"source": q1 + ". " + q2 + ". It used 128 GB RAM."}
+    first = _row(quote=q1, value="60", hw="RTX 4070 Ti", quant="Q8_0")
+    checked, why = numeric.check_item(first, art)
+    assert why == "" and checked["llm_cond"] == {"model": "Foo-7B"}
+    assert numeric.to_fact(checked)["cond"] == {"model": "Foo-7B", "hw": "RTX 4070", "quant": "Q4_K_M"}
+    assert numeric.check_item(_row(quote=q1, value="128"), art)[1] == "value"
+    checked, _ = numeric.check_item(_row(quote=q1, value="60", unit="GB"), art)
+    assert checked["unit"] == ""
+    rows = [_row(quote=q1, value="60", hw="RTX 4070", quant="Q4_K_M"),
+            _row(quote=q2, value="60", hw="RTX 4070 Ti", quant="Q8_0")]
+    got, stats = numeric.parse(json.dumps({"numbers": rows}), [art])
+    assert stats["passed"] == 2 and len(got[1]) == 2
+
+
+def test_numeric_price_does_not_inherit_hardware_spec():
+    """目的・根拠: C1（2026-11-26 MEASUREMENT.md §2.3）。価格に製品仕様を測定条件として付けない。"""
+    quote = "Foo-7B with RTX 4070 costs $1,299"
+    item, why = numeric.check_item(_row(quote=quote, metric="価格", value="1299", unit="USD", hw="RTX 4070"),
+                                   {"source": quote})
+    assert why == "" and item["unit"] == "USD"
+    assert numeric.to_fact(item)["cond"] == {}
+
+
+def test_numeric_apply_retains_same_value_different_conditions_and_is_idempotent(keyed):
+    """目的・根拠: C1（2026-11-26 MEASUREMENT.md P1）。同一記事の別条件の測定を DB で失わず、同じ入力の再適用で増やさない。"""
+    q1 = "Foo-7B reached 60 tok/s on RTX 4070 at Q4_K_M"
+    q2 = "Foo-7B reached 60 tok/s on RTX 4070 Ti at Q8_0"
+    aid = _seed("Foo-7B benchmark", q1 + ". " + q2)
+    raw = [_row(quote=q1, value="60", hw="RTX 4070", quant="Q4_K_M"),
+           _row(quote=q2, value="60", hw="RTX 4070 Ti", quant="Q8_0")]
+    parsed, _ = numeric.parse(json.dumps({"numbers": raw}), [{"source": q1 + ". " + q2}])
+    staged = {aid: {"facts": [numeric.to_fact(x) for x in parsed[1]], "model": "test"}}
+    with news_db.session() as db:
+        assert numeric.apply_numeric(db, staged)["added"] == 2
+        db.commit()
+        assert numeric.apply_numeric(db, staged)["added"] == 0
+        claims = list(db.scalars(select(Claim).where(Claim.article_id == aid, Claim.value != "")))
+        assert len(claims) == 2
+        assert {bench.cond_of(c.cond)["hw"] for c in claims} == {"RTX 4070", "RTX 4070 Ti"}
+
+
+def test_original_segments_prevent_cross_row_or_cross_paragraph_quote():
+    """目的・根拠: C1レビュー 2026-11-26。連結した候補に存在しても別の原文単位をまたぐ引用は拒否。"""
+    first = "Foo-7B reached 60 tok/s"
+    second = "RTX 4070 uses Q4_K_M"
+    article = {"source": first + " " + second, "segments": [first, second]}
+    assert numeric.check_item(_row(quote=first + " " + second, value="60"), article)[1] == "quote"
+    # 同じ文に数値が 2 つ・GPU が 1 つ: 両方とも同じ GPU の測定なので、条件は付けてよい
+    quote = "Foo-7B reached 60 tok/s and 80 tok/s on RTX 4070"
+    item, why = numeric.check_item(_row(quote=quote, value="60", hw="RTX 4070"), {"source": quote})
+    assert why == "" and numeric.to_fact(item)["cond"]["hw"] == "RTX 4070"
+
+
+def test_condition_scope_clause_window_article():
+    """目的: 条件の根拠の範囲（引用の文 → 候補の塊 → 記事全体）で、一番近い範囲に候補が 1 つだけのときに付ける。近くに別の値があれば付けない。
+    根拠: 2026-11-26 実データのベンチマーク 7 記事で、引用の中だけに限る版（Codex #52）は条件が 32 → 2 に減った。
+    共通の設定（測定の環境の段落）と、測定ごとに違う GPU（vLLM の記事）は、範囲を見れば両方とも正しく付く。"""
+    quote = "Foo-7B reached 60 tok/s"
+    setup = "All runs used an RTX 4070 Ti Super with llama.cpp."
+    art = {"source": f"T {quote} ｜ {setup}", "cand": f"{quote} ｜ {setup}", "segments": [quote, setup]}
+    item, why = numeric.check_item(_row(quote=quote, value="60", hw="RTX 4070 Ti Super", quant=None, model=None, engine="llama.cpp"), art)
+    assert why == "" and item["llm_cond"] == {"hw": "RTX 4070 Ti Super", "engine": "llama.cpp"}      # 記事全体で 1 つ（共通の設定）
+    segs = ["Bar ran on an RTX 4090.", "Foo-7B reached 60 tok/s.", "Baz ran on an RTX 4070."]
+    art = {"source": "T " + " ".join(segs), "cand": " ".join(segs), "segments": segs}
+    item, why = numeric.check_item(_row(quote="Foo-7B reached 60 tok/s", value="60", hw="RTX 4090", quant=None, model=None), art)
+    assert why == "" and "hw" not in item["llm_cond"]      # 近くに 2 つ・引用の文に無い → 付けない
+    segs = ["Bar ran on an RTX 4090.", "Foo-7B reached 60 tok/s on an RTX 4070."]
+    art = {"source": "T " + " ".join(segs), "cand": " ".join(segs), "segments": segs}
+    item, why = numeric.check_item(_row(quote="Foo-7B reached 60 tok/s on an RTX 4070", value="60", hw="RTX 4070", quant=None, model=None), art)
+    assert why == "" and item["llm_cond"]["hw"] == "RTX 4070"      # 引用の文に 1 つ（明示）は、記事に別の値があっても付く
+    item, why = numeric.check_item(_row(quote="Foo-7B reached 60 tok/s on an RTX 4070", value="60", hw="RTX 4070 Ti", quant=None, model=None), art)
+    assert why == "" and "hw" not in item["llm_cond"]      # 似た別の SKU は完全一致で弾く
+
+
+def test_truncated_reply_splits_the_batch_and_keeps_article_numbers(monkeypatch):
+    """目的: 返事が出力の上限で切れたら（finish_reason=length）、記事を半分に分けて呼び直し、後半の記事の番号を元の並びに戻す。
+    根拠: 2026-11-26 実データのベンチマーク 7 記事で、5 記事まとめた呼び出しがゲートウェイの 502（finish_reason=length）で丸ごと失敗した。"""
+    import asyncio
+    import json
+
+    from qnapnewshub import llm, llm_task
+
+    def art(i):
+        q = f"Foo{i} reached {i}0 tok/s"
+        return {"id": i, "title": f"T{i}", "source": f"T{i} {q}", "cand": q, "segments": [q], "known": {}}
+
+    calls = []
+
+    async def fake_ask(cfg, purpose, system, prompt, **kw):
+        import re
+        titles = re.findall(r"^\d+\. 題: T(\d+)", prompt, re.M)
+        n = len(titles)
+        calls.append(n)
+        if n > 1:
+            raise llm.LlmUnavailable("HTTP 502: structured output was incomplete (finish_reason=length)")
+        i = int(titles[0])
+        return json.dumps({"numbers": [{"n": 1, "quote": f"Foo{i} reached {i}0 tok/s", "about": f"Foo{i}", "metric": "生成速度", "value": f"{i}0", "unit": "tok/s",
+                                        **{k: None for k in ("model", "quant", "hw", "engine", "ctx", "version", "backend")}}]}), "m"
+
+    monkeypatch.setattr(llm_task, "ask", fake_ask)
+    got, stats, _ = asyncio.run(numeric.ask({}, [art(1), art(2), art(3)], "prep"))
+    assert stats["passed"] == 3 and {n: got[n][0]["about"] for n in got} == {1: "Foo1", 2: "Foo2", 3: "Foo3"}
+    assert calls == [3, 1, 2, 1, 1]      # 3 → 1 と 2 → 2 は 1 と 1
