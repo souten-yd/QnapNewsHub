@@ -14,11 +14,12 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, update
 import zstandard
 
-from qnapnewshub.db import ArticleEntity, Document, Entity, Measurement, MeasurementRun, NewsBody, NewsDocument, NewsItem
+from qnapnewshub.db import ArticleEntity, Document, Entity, Measurement, MeasurementCond, MeasurementRun, NewsBody, NewsDocument, NewsItem
 from qnapnewshub.measure_spans import extract_explicit
 from qnapnewshub.measure_tables import markdown_measurements
 from qnapnewshub.measure_store import save_draft
 from qnapnewshub.measure_search import search
+from qnapnewshub.measure_vocab import LLM_KEYS
 
 MAX_BODY = 128 * 1024
 MAX_DOCS = 20
@@ -105,6 +106,31 @@ def _drafts(src: StoredSource, entities):
     return [pairs[0] for pairs in candidates.values() if len(pairs) == 1]
 
 
+def _result_hash(db, ids):
+    """Detect missing or changed rows/conditions; the ledger is not authority."""
+    measurements = db.execute(select(
+        Measurement.id, Measurement.fingerprint, Measurement.entity_id, Measurement.subject_text,
+        Measurement.metric_id, Measurement.value, Measurement.value_text, Measurement.unit,
+        Measurement.unit_text, Measurement.span_start, Measurement.span_end, Measurement.block_id,
+        Measurement.doc_hash, Measurement.sensitivity, Measurement.ai_use, Measurement.status,
+        Measurement.extractor).where(Measurement.id.in_(ids)).order_by(Measurement.id)).all()
+    conditions = db.execute(select(
+        MeasurementCond.measurement_id, MeasurementCond.key, MeasurementCond.value_text,
+        MeasurementCond.value_norm, MeasurementCond.scope, MeasurementCond.span_start,
+        MeasurementCond.span_end, MeasurementCond.extractor, MeasurementCond.confidence)
+        .where(MeasurementCond.measurement_id.in_(ids))
+        .order_by(MeasurementCond.measurement_id, MeasurementCond.key)
+        .limit(MAX_DRAFTS * len(LLM_KEYS) + 1)).all()
+    if len(measurements) != len(ids) or len(conditions) > MAX_DRAFTS * len(LLM_KEYS):
+        return None
+    try:
+        payload = json.dumps([[list(r) for r in measurements], [list(r) for r in conditions]],
+                             ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def _reusable(db, src, signature, entities):
     run = db.get(MeasurementRun, src.doc.id, populate_existing=True)
     if run is None or run.input_hash != signature or run.doc_hash != src.digest or run.extractor != EXTRACTOR:
@@ -122,7 +148,8 @@ def _reusable(db, src, signature, entities):
                 Measurement.ai_use == src.doc.ai_use, Measurement.entity_id.in_([e.id for e in entities]))))
     active_managed = set(db.scalars(select(Measurement.id).where(Measurement.doc_id == src.doc.id,
                     Measurement.status == "active", Measurement.extractor.in_(MANAGED)).limit(MAX_DRAFTS+1)))
-    return ids if valid == set(ids) and active_managed <= valid else None
+    return ids if (valid == set(ids) and active_managed <= valid
+                   and run.result_hash == _result_hash(db, ids)) else None
 
 
 def preview(db, doc_id: int) -> dict:
@@ -172,6 +199,10 @@ def apply_in_transaction(db, doc_id: int, expected_hash: str, *, expected_input_
         db.add(run)
     run.doc_hash, run.input_hash, run.extractor = src.digest, signature, EXTRACTOR
     run.ids_json = json.dumps(ids)
+    result_hash = _result_hash(db, ids)
+    if result_hash is None:
+        raise ValueError("inconsistent measurement result")
+    run.result_hash = result_hash
     run.updated_at = datetime.now(timezone.utc)
     db.flush()
     return {"status": "saved", "doc_id": doc_id, "doc_hash": src.digest, "ids": ids, "reused": False}
