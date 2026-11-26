@@ -75,3 +75,27 @@ def test_real_excerpt_confirm_search_revise_and_reject():
         assert search_saved_news(db,**args)["items"][0]["value"]==105.9
         doc.ai_use="local_only";db.flush()
         assert not search_saved_news(db,**args)["items"]
+
+
+def test_legacy_offload_fold_is_not_a_match():
+    from qnapnewshub.db import MeasurementCond
+    from qnapnewshub.measure_search import search
+    engine=create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    digest="a"*64
+    with Session(engine) as db:
+        doc=Document(kind="news",ident="url:legacy-offload",sensitivity="public",ai_use="allowed")
+        ent=Entity(key="legacy",name="Legacy",type="model",sensitivity="public",ai_use="allowed")
+        db.add_all([doc,ent]);db.flush()
+        m=Measurement(doc_id=doc.id,doc_hash=digest,entity_id=ent.id,subject_text="Legacy",
+                      metric_id="llm.decode_tps",value=42,value_text="42",unit="tok/s",unit_text="tok/s",
+                      sensitivity="public",ai_use="allowed",extractor="test",fingerprint="b"*64)
+        db.add(m);db.flush()
+        db.add(MeasurementCond(measurement_id=m.id,key="offload",value_text="-1",value_norm="1",
+                               scope="explicit",span_start=0,span_end=2,extractor="test",confidence="exact"))
+        db.flush()
+        args=dict(entity_id=ent.id,metric_id=m.metric_id,scopes={"public"},current_hashes={doc.id:digest})
+        assert search(db,**args,filters={"offload":"1"})[0]["status"]=="other"
+        assert search(db,**args,filters={"offload":"-1"})[0]["status"]=="matching"
+        with pytest.raises(ValueError):
+            search(db,**args,filters={"offload":"all"})
