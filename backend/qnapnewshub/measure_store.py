@@ -48,7 +48,7 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
     identity = (doc.id, digest, entity.id if entity else None, draft.subject.text, draft.metric_id,
                 str(value.normalize()), unit, draft.value.start, draft.value.end, conds)
     fp = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
-    old = db.scalar(select(Measurement).where(Measurement.fingerprint == fp))
+    old = db.scalar(select(Measurement).where(Measurement.fingerprint == fp).execution_options(populate_existing=True))
     if old is not None:
         expected = (entity.id if entity else None, draft.subject.text, draft.metric_id, float(value),
                     draft.value.text, unit, draft.unit.text, draft.value.start, draft.value.end, draft.block_id)
@@ -58,7 +58,8 @@ def save_draft(db, doc: Document, source: str, draft: MeasurementDraft, *, entit
                               for c in db.scalars(select(MeasurementCond).where(MeasurementCond.measurement_id == old.id)))
         expected_conds = sorted((c.key, normalize_condition(c.key, c.span.text), c.span.start, c.span.end, c.span.text)
                                 for c in draft.conditions)
-        if actual != expected or actual_conds != expected_conds:
+        if (actual != expected or actual_conds != expected_conds
+                or old.doc_id != doc.id or old.doc_hash != digest or old.confidence != "exact"):
             raise ValueError("stored measurement differs from verified evidence")
         if old.sensitivity != doc.sensitivity or old.ai_use != doc.ai_use:
             raise ValueError("existing measurement is restricted")
