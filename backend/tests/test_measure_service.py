@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import create_engine, select, func, update
 from sqlalchemy.orm import Session
 from qnapnewshub import ztext
-from qnapnewshub.db import Base, ArticleEntity, Document, Entity, NewsBody, NewsDocument, NewsItem, Measurement, MeasurementCond
+from qnapnewshub.db import Base, ArticleEntity, Document, Entity, NewsBody, NewsDocument, NewsItem, Measurement, MeasurementCond, MeasurementRun
 from qnapnewshub.measure_service import preview, apply_in_transaction, search_saved_news, load_source
 from qnapnewshub.measure_search import search
 
@@ -29,17 +29,42 @@ def test_authoritative_news_service():
         assert p["status"] == "preview" and p["count"] == 1
         assert p["doc_hash"] == hashlib.sha256(source.encode()).hexdigest()
         assert db.scalar(select(func.count()).select_from(Measurement)) == 0
-        assert apply_in_transaction(db, doc.id, "0"*64)["status"] == "changed_or_unavailable"
-        result = apply_in_transaction(db, doc.id, p["doc_hash"])
+        assert apply_in_transaction(db, doc.id, "0"*64, expected_input_hash=p["input_hash"])["status"] == "changed_or_unavailable"
+        result = apply_in_transaction(db, doc.id, p["doc_hash"], expected_input_hash=p["input_hash"])
         assert len(result["ids"]) == 1
-        assert apply_in_transaction(db, doc.id, p["doc_hash"]) == result
+        assert not result["reused"]
+        assert preview(db, doc.id)["unchanged"]
+        repeat = apply_in_transaction(db, doc.id, p["doc_hash"], expected_input_hash=p["input_hash"])
+        assert repeat["ids"] == result["ids"] and repeat["reused"]
+        assert apply_in_transaction(db, doc.id, p["doc_hash"], expected_input_hash="0"*64)["status"] == "changed_or_unavailable"
         args = dict(document_ids=[doc.id], entity_id=ent.id, metric_id="llm.decode_tps",
                     filters={"hw":"RTX 4070"})
         assert search_saved_news(db, **args)["items"][0]["status"] == "matching"
         body.body = ztext.pack(source.replace("60", "80"))
         db.flush()
         assert search_saved_news(db, **args)["items"] == []
-        assert apply_in_transaction(db, doc.id, p["doc_hash"])["status"] == "changed_or_unavailable"
+        assert apply_in_transaction(db, doc.id, p["doc_hash"], expected_input_hash=p["input_hash"])["status"] == "changed_or_unavailable"
+        new_plan = preview(db, doc.id)
+        assert not new_plan["unchanged"] and new_plan["count"] == 1
+        new_result = apply_in_transaction(db, doc.id, new_plan["doc_hash"], expected_input_hash=new_plan["input_hash"])
+        assert new_result["ids"] != result["ids"]
+        assert db.get(Measurement, result["ids"][0]).status == "superseded"
+        assert db.get(Measurement, new_result["ids"][0]).status == "active"
+        assert search_saved_news(db, **args)["items"][0]["value"] == 80
+        assert db.get(MeasurementRun, doc.id).doc_hash == new_plan["doc_hash"]
+        # Exact source reversion is permitted only after new preview/confirmation.
+        body.body = ztext.pack(source)
+        db.flush()
+        reverted = preview(db, doc.id)
+        again = apply_in_transaction(db, doc.id, reverted["doc_hash"], expected_input_hash=reverted["input_hash"])
+        assert again["ids"] == result["ids"]
+        assert db.get(Measurement, result["ids"][0]).status == "active"
+        assert db.get(Measurement, new_result["ids"][0]).status == "superseded"
+        ent.name = "Other"
+        db.flush()
+        assert apply_in_transaction(db, doc.id, reverted["doc_hash"], expected_input_hash=reverted["input_hash"])["status"] == "changed_or_unavailable"
+        ent.name = "Foo"
+        db.flush()
         body.raw_len = 1
         db.flush()
         assert load_source(db, doc.id) is None
