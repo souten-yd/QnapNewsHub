@@ -58,7 +58,8 @@ def benchmark_markdown_records(raw: str) -> list[dict]:
                 or len(sep) != len(keys) or not all(_SEP.fullmatch(x) for x in sep)):
             i += 1
             continue
-        native = {"model", "size", "params", "backend", "ngl", "test", "t/s"} <= set(keys)
+        native = ({"model", "size", "params", "backend", "test", "t/s"} <= set(keys)
+                  and ("ngl" in keys or "threads" in keys))
         columns = [(c, m) for c,h in enumerate(header) if (m := _MATRIX.fullmatch(h))]
         if not native and (not columns or len({(m[1].casefold(),m[2].casefold(),m[3]) for _,m in columns}) != len(columns)):
             i += 1
@@ -71,7 +72,7 @@ def benchmark_markdown_records(raw: str) -> list[dict]:
                     and all(_SEP.fullmatch(x) for x in _cells(lines[i+1]))):
                 break
             subject = cells[keys.index("model")]
-            base = {k: cells[keys.index(k)] for k in ("ngl", "size", "params", "file") if k in keys}
+            base = {k: cells[keys.index(k)] for k in ("ngl", "size", "params", "file", "n_batch", "threads") if k in keys}
             if subject:
                 if native:
                     test = _TEST.fullmatch(cells[keys.index("test")])
