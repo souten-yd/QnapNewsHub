@@ -530,8 +530,8 @@ def export_zip(db: Session, entities: list[Entity], scopes: list[str], *, includ
                 body += ["## 変化と矛盾"]
                 for g in c["history"]["series"]:
                     for en in g["entries"]:
-                        mark = {"change": "変化", "contradiction": "矛盾", "first": "最初", "same": "同じ"}.get(en["mark"], "")
-                        body.append(f"- {en['t'][:10]} {g['kind']}: {en['value']}（{mark}{'・前は ' + en['from'] if en.get('from') else ''}）" + (f" [{en['title']}]({en['url']})" if en["url"] else ""))
+                        mark = {"change": "変化", "contradiction": "矛盾", "cond_diff": "条件違い", "first": "最初", "same": "同じ"}.get(en["mark"], "")
+                        body.append(f"- {en['t'][:10]} {g.get('metric') or g['kind']}: {en['value']}（{mark}{'・前は ' + en['from'] if en.get('from') else ''}）" + (f" [{en['title']}]({en['url']})" if en["url"] else ""))
                 body.append("")
             if c["claims"]:
                 body += ["## 主張と根拠"]

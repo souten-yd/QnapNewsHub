@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import delete, func, insert, select, text
 from sqlalchemy.orm import Session
 
-from qnapnewshub import extract
+from qnapnewshub import bench, extract
 from qnapnewshub.db import Claim, Document, Entity, Evidence, NewsDocument, NewsItem, NewsMeta, Relationship
 
 _UTC = timezone.utc
@@ -420,25 +420,47 @@ def _norm_value(value: str) -> str:
     return re.sub(r"^v(?=\d)", "", v)
 
 
+SAME_REL = 0.03      # 数として読めた値は、これ以下の相対差（丸めの違い）なら同じ値
+
+
+def _same_value(a: dict, b: dict) -> bool:
+    if a.get("num") is not None and b.get("num") is not None and a.get("dim") == b.get("dim"):
+        return abs(a["num"] - b["num"]) <= a.get("tol", SAME_REL) * max(abs(a["num"]), abs(b["num"]))
+    return a["_v"] == b["_v"]
+
+
 def mark_series(entries: list[dict]) -> list[dict]:
-    """同じ物・同じ種類の主張（value を持つもの）を時系列に並べ、印を付ける（元の主張は変えない）。
-    mark: first（最初の値）・same（直前の確定した値と同じ）・change（時間を置いて値が変わった。from に前の値）・contradiction（CONTRADICT_DAYS 日以内に別の文書が別の値を述べている）。
-    entries は {"t": datetime, "value", "doc_id", ...}。t の昇順に並べて返す。"""
+    """同じ物・同じ指標の主張（value を持つもの）を時系列に並べ、印を付ける（元の主張は変えない）。
+    mark: first（最初の値）・same（直前の確定した値と同じ）・change（時間を置いて値が変わった。from に前の値）・contradiction（CONTRADICT_DAYS 日以内に別の文書が別の値を述べている）・
+    cond_diff（値は違うが測った条件が違う。矛盾でも変化でもない）。
+    entries は {"t": datetime, "value", "doc_id", ...}。数として比べるときは "num"（単位をそろえた数）・"dim"（次元）・"tol"（許す相対差）を付ける（無ければ文字列の比べ方）。
+    "cond" があれば、両方に書かれた欄が違うものは cond_diff（片方だけの欄は比べる）。t の昇順に並べて返す。"""
     rows = sorted((dict(e) for e in entries), key=lambda e: (e["t"], e.get("claim_id", 0)))
     window = timedelta(days=CONTRADICT_DAYS)
     for e in rows:
         e["_v"] = _norm_value(e["value"])
     for e in rows:
         e["mark"] = ""
-        if any(o["_v"] != e["_v"] and o["doc_id"] != e["doc_id"] and abs(o["t"] - e["t"]) <= window for o in rows):
+        # 版（release）は次々に出るもの。別の記事が近い時期に別の版を述べても食い違いではなく、版の移り変わり
+        # （変化）として扱う（2026-11-27: 矛盾の大半が llama.cpp の b12651・b12667 のような連続リリースだった）。
+        if e.get("kind") == "release":
+            continue
+        others = [o for o in rows if o["doc_id"] != e["doc_id"] and abs(o["t"] - e["t"]) <= window and not _same_value(o, e)
+                  and o.get("kind") != "release"]
+        if any(not bench.cond_conflict(o.get("cond") or {}, e.get("cond") or {}) for o in others):
             e["mark"] = "contradiction"
+        elif others:
+            e["mark"] = "cond_diff"
     cur = None
     for e in rows:
-        if e["mark"] == "contradiction":
+        if e["mark"] in ("contradiction", "cond_diff"):
             continue
         if cur is None:
             e["mark"] = "first"
-        elif e["_v"] == cur["_v"]:
+        elif bench.cond_conflict(cur.get("cond") or {}, e.get("cond") or {}):
+            e["mark"] = "cond_diff"
+            continue
+        elif _same_value(e, cur):
             e["mark"] = "same"
         else:
             e["mark"], e["from"] = "change", cur["value"]
@@ -448,27 +470,49 @@ def mark_series(entries: list[dict]) -> list[dict]:
     return rows
 
 
+def _group_of(c: Claim) -> tuple[tuple, dict]:
+    """主張 → (束ねる鍵, 比べるための情報)。鍵は「何を測ったか」（単位の次元。速さは指標の種類まで）。
+    次元の分からない値（単位なしの数・数として読めない値）だけ、種類（kind）で分ける。"""
+    q = bench.quantity(c.value, c.text, c.kind)
+    cond = bench.cond_of(c.cond, c.text, kind=c.kind)
+    if q is None:
+        return (c.kind, "text"), {"dim": "text", "num": None, "cond": cond, "metric": ""}
+    dim, num, label = q
+    if dim == "number":      # 単位の無い数は、主張の文の「指標: 値」の指標（あれば）で分ける
+        m = re.match(r"\s*([^:：（(]{1,40}?)\s*[:：]\s*\S", c.text or "")
+        label = m.group(1) if m else ""
+    info = {"dim": dim, "num": None if (c.kind == "release" and dim == "number") else num, "tol": 0.0 if c.kind == "price" else SAME_REL, "cond": cond, "metric": label}
+    return ((c.kind, dim, bench.fold(label)) if dim == "number" else (dim,)), info
+
+
 def history(db: Session, entity_id: int, scopes: list[str] | None = None) -> dict:
-    """物の主張の履歴: 種類（kind）ごとの時系列と、変化・矛盾の数。value の無い主張は比べられないので入れない。
+    """物の主張の履歴: 指標（何を測ったか。単位の次元）ごとの時系列と、変化・矛盾・条件違いの数。value の無い主張は比べられないので入れない。
+    数値は単位をそろえて比べ（GB と MB・B と M）、±3% の違いは同じ値。測った条件（量子化・機材など）が両方に書かれて違えば「条件違い」で矛盾にしない。
+    条件・指標は主張の文と保存した cond から読むときに出す（DB は書き換えない。だから規則を直せば既存の主張もそのまま新しい判定になる）。
     時刻は記事の発表日時（ニュース以外は文書の日時、無ければ主張を作った時刻）。scopes に無い区分の主張は読まない。"""
     scopes = scopes or ["public"]
     rows = db.execute(select(Claim, NewsItem.published_at, NewsItem.title, NewsItem.url, Document.id, Document.title, Document.url, Document.published_at)
                       .outerjoin(NewsItem, NewsItem.id == Claim.article_id).outerjoin(NewsDocument, NewsDocument.news_item_id == Claim.article_id)
                       .outerjoin(Document, Document.id == func.coalesce(Claim.document_id, NewsDocument.document_id))
                       .where(Claim.entity_id == entity_id, Claim.value != "", Claim.sensitivity.in_(scopes)).order_by(Claim.id.desc()).limit(MAX_HISTORY_CLAIMS)).all()
-    groups: dict[str, list[dict]] = {}
+    groups: dict[tuple, list[dict]] = {}
     for c, n_pub, n_title, n_url, d_id, d_title, d_url, d_pub in rows:
         when = _naive(n_pub or d_pub or c.created_at)
-        groups.setdefault(c.kind, []).append({"claim_id": c.id, "t": when, "value": c.value, "text": c.text, "doc_id": d_id or -(c.article_id or 0), "title": n_title or d_title or "",
-                                              "url": n_url or d_url or "", "ai_extracted": bool(c.ai_extracted)})
-    out, changes, contradictions = [], 0, 0
-    for kind, entries in groups.items():
+        key, info = _group_of(c)
+        groups.setdefault(key, []).append({"claim_id": c.id, "t": when, "value": c.value, "text": c.text, "doc_id": d_id or -(c.article_id or 0), "title": n_title or d_title or "",
+                                           "url": n_url or d_url or "", "ai_extracted": bool(c.ai_extracted), "kind": c.kind, **info})
+    out, changes, contradictions, cond_diffs = [], 0, 0, 0
+    for key, entries in groups.items():
         series = mark_series(entries)
         changes += sum(1 for e in series if e["mark"] == "change")
         contradictions += sum(1 for e in series if e["mark"] == "contradiction")
-        out.append({"kind": kind, "entries": [{**e, "t": iso(e["t"])} for e in series]})
-    out.sort(key=lambda g: g["kind"])
-    return {"series": out, "changes": changes, "contradictions": contradictions}
+        cond_diffs += sum(1 for e in series if e["mark"] == "cond_diff")
+        kinds = Counter(e["kind"] for e in series)
+        metric = next((e["metric"] for e in series if e["metric"]), "")
+        out.append({"kind": kinds.most_common(1)[0][0], "metric": metric, "dim": series[0]["dim"],
+                    "entries": [{**{k: v for k, v in e.items() if k not in ("num", "tol", "dim", "metric", "kind")}, "t": iso(e["t"])} for e in series]})
+    out.sort(key=lambda g: (g["kind"], g["dim"]))
+    return {"series": out, "changes": changes, "contradictions": contradictions, "cond_diffs": cond_diffs}
 
 
 def sweep_relations(db: Session, limit: int = 2000) -> dict:

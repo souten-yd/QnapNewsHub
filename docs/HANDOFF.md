@@ -2,7 +2,7 @@
 
 開発を途中から引き継ぐ人（人でも AI でも）が、最初に読む文書。**新しい段を終えるたびに、この文書の「今の状態」と「次にやること」を更新する**。
 
-最終更新: 2026-11-26（数値パス〔feat/numeric-pass〕の後。その前は ウォッチリストと変化・条件つきの数値の比較・変化点〔feat/watch-changes〕の後。その前は 名寄せの自動化〔feat/auto-resolve〕の後。その前は 取得元の名前の漏れ・物差しの作り直し〔fix/source-leak-yardstick〕の後。その前は 2026-11-25 の Things の取り出しの精度〔feat/extract-quality〕の後。その前は LAN での発見の応答〔feat/lan-discovery〕・軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
+最終更新: 2026-11-27（「変化と矛盾」を指標・条件で判定し直した後〔fix/history-metric-cond〕。その前は 2026-11-26（数値パス〔feat/numeric-pass〕の後。その前は ウォッチリストと変化・条件つきの数値の比較・変化点〔feat/watch-changes〕の後。その前は 名寄せの自動化〔feat/auto-resolve〕の後。その前は 取得元の名前の漏れ・物差しの作り直し〔fix/source-leak-yardstick〕の後。その前は 2026-11-25 の Things の取り出しの精度〔feat/extract-quality〕の後。その前は LAN での発見の応答〔feat/lan-discovery〕・軽い翻訳〔feat/translate〕の後。その前はつながりの精度〔feat/link-precision〕・検索の評価の物差し〔feat/retrieval-eval〕）
 
 ## 1. 読む順番
 1. `AGENTS.md`: 開発の決まり（ControlDeck と同じ。迷ったら ControlDeck の AGENTS.md を正とする）
@@ -65,6 +65,7 @@
 **利用者の決定（2026-11-24）: QNAP の QPKG への変換は、計画したもの（v1.0 まで）をすべて Linux で完成させてから。それまで Linux（この PC の systemd のユーザーのサービス）で評価する。**
 
 **最優先（2026-11-26）: 測定の記録（Cond 2.0）。計画と詳細設計は `docs/MEASUREMENT.md`。** C1（☑ 2026-11-26・fix/cond-c1-balanced。Codex の #42〜#61 の評価と採否は MEASUREMENT §7・DESIGN 28）→ C6a（独立した物差し）→ C2（形）→ C3（結び付け）→ C4（表）→ C5（検索）→ C3b（LLM の結び付け）→ C6b（取り出し直し）。
+0a. （済み 2026-11-27）**「変化と矛盾」の判定を直した**（利用者の画面: Inkling 2 Mini で 26.4B・16 GB・122 tok/s・0.59 ドルが全部「性能」で並び互いに矛盾）。`kg.history` は種類（kind）ではなく**指標（単位の次元。`bench.quantity`: パラメータ数・メモリ GB/MB・速さ〔`metric_id` の種類〕・倍率・割合・費用〔通貨別〕・時間・電力・無次元）**で束ね、数値は単位をそろえて比べ（±3% は同じ値。価格は厳密・版は文字列）、`cond`（保存済み＋文からの規則）が**両方に書かれて違えば矛盾でなく `cond_diff`（条件違い）**。片方だけの欄は比べ、画面は各行に条件を出す。読むたびの計算なので**既存の主張もそのまま新しい判定**（作り直しの Job は不要・DB は書き換えない）。`run_backfill` で足された条件も次に開いたときから効く。残る課題: 版（release の b12651 と b12652 など）の連続リリースを矛盾と数える・単位の無い数（「3 人」「135 件」）は指標が分からず同じ列に入る・別の物（SKU・場面）の同じ指標の値は区別できない。
 0. （済み 2026-11-26）数値パスの本物の LLM での歩留まりを測る（評価の DB のコピーを `NEWSHUB_DATA` に指して `./hub.sh numeric-try ...`）。通った数値・条件の欄の埋まり方が低ければ、候補の選び方（`numeric.candidate_windows`）か 1 回の件数（`NUMERIC_BATCH`）を見直す。表のベンチマークは本文の取り出しが表を落とすので拾えない（`bodies.extract_text` の `include_tables` を試す余地）。
 1. 開発の PC で動かす（利用者「24 時間も待たなくて良い」〔2026-11-24〕。長時間の運転は並行して、結果を待たずに次へ進む）（`./hub.sh install-service` か `./hub.sh run`、目録から 50〜100 件を有効に）。取得の実績・失敗・書き込みの量・メモリを診断の画面で見る。
 2. QPKG を利用者の QNAP に入れてもらう（`./hub.sh qpkg` の .qpkg を渡す。手順は docs/QPKG.md。型番と CPU も QTS の画面で確認してもらう）。動いたら v0.1 を Release（.qpkg を Release の添付に）。
