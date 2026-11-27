@@ -210,11 +210,14 @@ const EDGE = (id: number, source: number, target: number, type: string, confiden
   ({ id, source, target, type, directed, confidence, status, evidence_count: n, first_at: ago(900), last_at: last, sensitivity: "public" });
 export const KG_EDGES = [EDGE(1, 2, 3, "part_of", 0.7, "extracted", true, 2), EDGE(2, 1, 2, "supports", 0.8, "extracted", true, 3), EDGE(3, 1, 5, "co_occurs", 0.5, "statistical", false, 12),
   EDGE(4, 2, 9, "uses", 0.3, "inferred", true, 1, ago(24 * 200)), EDGE(5, 1, 10, "competes", 0.6, "extracted", false, 2), EDGE(6, 10, 9, "supports", 0.4, "extracted", true, 1), EDGE(7, 1, 11, "uses", 0.6, "extracted", true, 1)];
-const KG_HISTORY = { changes: 1, contradictions: 2, series: [{ kind: "price", entries: [
+const KG_HISTORY = { changes: 1, contradictions: 2, cond_diffs: 2, series: [{ kind: "price", entries: [
   { claim_id: 1, t: ago(24 * 40), value: "1000", text: "価格", title: "古い記事", url: "https://news.example.test/a/1", mark: "first", ai_extracted: true },
   { claim_id: 2, t: ago(24 * 20), value: "1200", text: "価格", title: "値上げの記事", url: "https://news.example.test/a/2", mark: "change", from: "1000", ai_extracted: true },
   { claim_id: 3, t: ago(24 * 2), value: "1500", text: "価格", title: "A 社の報道", url: "https://news.example.test/a/3", mark: "contradiction", ai_extracted: true },
-  { claim_id: 4, t: ago(24 * 2 - 5), value: "1300", text: "価格", title: "B 社の報道", url: "https://news.example.test/a/4", mark: "contradiction", ai_extracted: true }] }] };
+  { claim_id: 4, t: ago(24 * 2 - 5), value: "1300", text: "価格", title: "B 社の報道", url: "https://news.example.test/a/4", mark: "contradiction", ai_extracted: true }] },
+  { kind: "benchmark", metric: "速さ（tok/s）", dim: "speed:llm.tps_unspecified", entries: [
+  { claim_id: 5, t: ago(24 * 3), value: "122 tok/s", text: "Q4_K_M で 122 tok/s", title: "速度の記事", url: "https://news.example.test/a/5", mark: "cond_diff", cond: { quant: "Q4_K_M", hw: "R9700" }, ai_extracted: true },
+  { claim_id: 6, t: ago(24 * 3 - 2), value: "80 tok/s", text: "Q8_0 で 80 tok/s", title: "別の速度の記事", url: "https://news.example.test/a/6", mark: "cond_diff", cond: { quant: "Q8_0" }, ai_extracted: true }] }] };
 
 const DEGREE = (id: number) => KG_EDGES.filter((e) => e.source === id || e.target === id).length;
 const GROUP_OF = (type: string, dir: string) => type === "part_of" ? (dir === "out" ? "upper" : dir === "in" ? "lower" : "peers") : type === "competes" || type === "co_occurs" ? "peers"

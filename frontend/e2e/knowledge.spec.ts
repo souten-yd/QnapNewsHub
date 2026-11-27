@@ -46,7 +46,13 @@ for (const vp of SIZES) {
         await expect(page.getByTestId("card-metrics")).toContainText("25 tok/s");
         await expect(page.getByTestId("card-metrics")).toContainText("Metric");
         await expect(page.getByTestId("card-history").locator('li[data-mark="change"]')).toContainText("前は 1000");
-        await expect(page.getByRole("heading", { name: /変化 1 · 矛盾 2/ })).toBeVisible();
+        await expect(page.getByRole("heading", { name: /変化 1 · 矛盾 2 · 条件違い 2/ })).toBeVisible();
+        // 指標ごとの列（見出しに指標の名前）・条件違いの印・各行の条件
+        await expect(page.getByTestId("history-metric")).toHaveText(["価格", "速さ（tok/s）"]);
+        const cd = page.getByTestId("card-history").locator('li[data-mark="cond_diff"]');
+        await expect(cd).toHaveCount(2);
+        await expect(cd.first()).toContainText("条件違い");
+        await expect(cd.first().getByTestId("history-cond")).toContainText("量子化 Q4_K_M");
         const claim = page.getByTestId("card-claims").locator("li").first();
         await claim.locator("summary").click();
         await expect(claim).toContainText("p.3");

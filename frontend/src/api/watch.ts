@@ -17,7 +17,7 @@ export interface WatchChange {
 export interface WatchChanges { generated_at: string; watched: boolean; items: WatchChange[]; changed: number; llm: boolean }
 
 /** 条件の欄の日本語（backend/qnapnewshub/bench.py の COND_LABEL と同じ）。 */
-export const COND_LABEL: Record<string, string> = { model: "モデル", quant: "量子化", hw: "GPU・端末", engine: "エンジン", ctx: "文脈の長さ", version: "版" };
+export const COND_LABEL: Record<string, string> = { model: "モデル", quant: "量子化", hw: "GPU・端末", engine: "エンジン", backend: "バックエンド", ctx: "文脈の長さ", version: "版" };
 
 const KEY = ["watch"] as const;
 export const useWatch = () => useQuery({ queryKey: [...KEY, "list"], queryFn: () => api<{ items: WatchRow[] }>("/watch"), retry: false });

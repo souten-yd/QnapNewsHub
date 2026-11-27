@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import create_engine, func, select, text
 
 from qnapnewshub import db as news_db
-from qnapnewshub import extract, kg, kg_job, kg_view, llm, settings, sources, store, writer
+from qnapnewshub import bench, extract, kg, kg_job, kg_view, llm, settings, sources, store, writer
 from qnapnewshub.auth import AuthUser
 from qnapnewshub.db import Claim, Document, Entity, EntityCard, EntityNote, Evidence, NewsDocument, NewsItem, Relationship
 from tests.test_events import Srv, run
@@ -291,6 +291,52 @@ def test_history_marks_change_and_contradiction(client):
     # 同じ文書が値を言い換えても矛盾にしない
     e = [{"t": datetime(2026, 1, 1), "value": "v1.0", "doc_id": 1, "claim_id": 1}, {"t": datetime(2026, 1, 1, 1), "value": "1.0", "doc_id": 2, "claim_id": 2}]
     assert [x["mark"] for x in kg.mark_series(e)] == ["first", "same"]
+
+
+def test_history_groups_by_metric_and_compares_numbers_with_conditions(client):
+    """目的: 「変化と矛盾」は種類（benchmark など）ではなく「何を測ったか」（単位の次元）で束ね、数値は単位をそろえて比べ、測定条件（量子化・機材）が両方に書かれて違えば矛盾でなく cond_diff にする。
+    読むたびに計算するので、保存済みの主張（DB は書き換えない）も新しい規則でそのまま判定し直される。
+    根拠: 2026-11-27 利用者の画面（Inkling 2 Mini の「変化と矛盾」で 26.4B・16 GB・122 tok/s・0.59 ドル・1.9x が全部「性能」で並んで互いに矛盾になった）・AGENTS.md（辞書の足し継ぎをしない）。"""
+    f = lambda text, v: {"about": "Inkx", "kind": "benchmark", "text": text, "value": v}  # noqa: E731
+    art(24 * 5, [("Inkx", "model")], facts=[f("パラメータ数: 26.4B", "26.4B"), f("メモリ使用量: 16 GB", "16 GB"), f("M5 Max 上で 122 tok/s を達成", "122 tok/s"), f("1 タスク 0.59 ドル", "0.59 ドル")])
+    art(24 * 5 - 3, [("Inkx", "model")], facts=[f("26.4B のモデル", "26B"), f("メモリ 16.0GB で動く", "16.0GB")])
+    with news_db.session() as db:
+        h = kg.history(db, ent_id("Inkx"))
+        by = {g["dim"]: g for g in h["series"]}
+        assert {"params", "memory", "speed:llm.tps_unspecified", "money:usd"} <= set(by)      # 指標ごとに別の列
+        assert h["contradictions"] == 0                                         # 26.4B と 26B・16 GB と 16.0GB は丸めの違い（同じ）
+    art(24 * 5 - 4, [("Inkx", "model")], facts=[f("メモリ 20 GB が必要", "20 GB")])
+    with news_db.session() as db:
+        h = kg.history(db, ent_id("Inkx"))
+        mem = [g for g in h["series"] if g["dim"] == "memory"][0]
+        assert mem["metric"].startswith("メモリ")
+        assert {e["value"] for e in mem["entries"] if e["mark"] == "contradiction"} >= {"20 GB", "16 GB"}      # 同じ指標で 16 と 20 は矛盾
+    # 条件の違い: 量子化が両方に書かれて違えば cond_diff（矛盾でも変化でもない）。片方だけに書かれていれば比べる
+    art(24 * 3, [("Inkq", "model")], facts=[{"about": "Inkq", "kind": "benchmark", "text": "Q4_K_M で 122 tok/s", "value": "122 tok/s"}])
+    art(24 * 3 - 2, [("Inkq", "model")], facts=[{"about": "Inkq", "kind": "benchmark", "text": "Q8_0 で 80 tok/s", "value": "80 tok/s"}])
+    art(24 * 3 - 4, [("Inkq", "model")], facts=[{"about": "Inkq", "kind": "benchmark", "text": "decode 60 tok/s", "value": "60 tok/s"}])
+    with news_db.session() as db:
+        h = kg.history(db, ent_id("Inkq"))
+        marks = {e["value"]: e["mark"] for g in h["series"] for e in g["entries"]}
+        assert marks["122 tok/s"] == "cond_diff" and marks["80 tok/s"] == "cond_diff" and h["cond_diffs"] >= 2
+        assert next(e for g in h["series"] for e in g["entries"] if e["value"] == "122 tok/s")["cond"]["quant"]      # 画面が条件を出せる
+
+
+def test_quantity_units_and_tolerance():
+    """目的: 値を (次元, 基準単位の数) にそろえる。GB と MB・B と M、速さの種類。±3% の違いは同じ、v1.0 と 1.0 は矛盾にしない。
+    根拠: 2026-11-27 の画面（種類だけで束ねて文字列で比べていた不具合）。"""
+    q = bench.quantity
+    assert q("26.4B")[:2] == ("params", 26.4) and q("500M")[:2] == ("params", 0.5)
+    assert q("16 GB")[:2] == ("memory", 16.0) and q("2048 MB")[:2] == ("memory", 2.048)
+    assert q("122 tok/s")[0].startswith("speed:") and q("0.59 ドル")[0] == "money:usd" and q("1.9x")[0] == "ratio" and q("32855")[0] == "number"
+    assert q("26.4B, 3.4B") is None
+    t = datetime(2026, 1, 1)
+    e = lambda i, v, **k: {"t": t + timedelta(hours=i), "value": v, "doc_id": i, "claim_id": i, **k}  # noqa: E731
+    near = [e(1, "16 GB", dim="memory", num=16.0, tol=0.03), e(2, "16.2GB", dim="memory", num=16.2, tol=0.03)]
+    assert [x["mark"] for x in kg.mark_series(near)] == ["first", "same"]
+    far = [e(1, "16 GB", dim="memory", num=16.0, tol=0.03), e(2, "20 GB", dim="memory", num=20.0, tol=0.03)]
+    assert [x["mark"] for x in kg.mark_series(far)] == ["contradiction", "contradiction"]
+    assert [x["mark"] for x in kg.mark_series([e(1, "v1.0"), e(2, "1.0")])] == ["first", "same"]
 
 
 # ---- ⑦ メモ ----

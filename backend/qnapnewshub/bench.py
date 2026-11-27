@@ -222,6 +222,49 @@ def parse_value(value: str, text: str = "") -> tuple[float | None, str]:
     return num, unit
 
 
+# ---- 次元と単位（「変化と矛盾」の判定: 何を測った数かを単位の次元で分け、単位をそろえて比べる） ----
+# 単位の辞書は単位のように種類が限られるものだけ（語の辞書ではない）。(次元, 基準の単位への倍率)
+_UNIT_DIM = {
+    "gb": ("memory", 1.0), "gib": ("memory", 1.0), "mb": ("memory", 1e-3), "mib": ("memory", 1e-3),
+    "tok/s": ("speed", 1.0), "tok/min": ("speed", 1 / 60), "倍": ("ratio", 1.0), "%": ("percent", 1.0),
+    "usd": ("money:usd", 1.0), "ドル": ("money:usd", 1.0), "jpy": ("money:jpy", 1.0), "円": ("money:jpy", 1.0), "eur": ("money:eur", 1.0),
+    "ms": ("time", 1e-3), "秒": ("time", 1.0), "s": ("time", 1.0), "w": ("power", 1.0), "kw": ("power", 1e3), "mw": ("power", 1e6), "fps": ("fps", 1.0),
+}
+_PARAM = re.compile(r"\s*([+-]?\d+(?:\.\d+)?)\s*([KMT]|[Bb])\s*(?:パラメータ|params?)?\s*")
+_PARAM_MUL = {"K": 1e-6, "M": 1e-3, "T": 1e3, "B": 1.0, "b": 1.0}
+DIM_LABEL = {"params": "パラメータ数（B）", "memory": "メモリ・容量（GB）", "speed": "速さ（tok/s）", "ratio": "倍率", "percent": "割合（%）", "time": "時間（秒）", "power": "電力（W）", "fps": "fps",
+             "money:usd": "費用（USD）", "money:jpy": "費用（円）", "money:eur": "費用（EUR）", "number": ""}
+SPEED_LABEL = {"llm.prefill_tps": "速さ・prefill（tok/s）", "llm.decode_tps": "速さ・decode（tok/s）", "llm.throughput_total_tps": "速さ・合計（tok/s）",
+               "llm.throughput_per_user_tps": "速さ・ユーザーあたり（tok/s）", "llm.throughput_per_request_tps": "速さ・リクエストあたり（tok/s）", "llm.tps_unspecified": "速さ（tok/s）"}
+
+
+def quantity(value: str, text: str = "", kind: str = "") -> tuple[str, float, str] | None:
+    """値 → (次元, 基準の単位にそろえた数, 指標の名前)。数として読めなければ None（文字列で比べる）。
+    パラメータ数（26.4B・3B・500M）・単位つきの数（GB と MB・tok/s の種類）・単位なしの数（次元 number）を区別する。"""
+    s = mq.normalized(str(value or "")).strip()
+    m = _PARAM.fullmatch(s)
+    if m:
+        return "params", float(m.group(1)) * _PARAM_MUL[m.group(2)], DIM_LABEL["params"]
+    num, unit = parse_value(s, text)
+    if num is None:
+        return None
+    if not unit:
+        return "number", num, ""
+    hit = _UNIT_DIM.get(unit.lower()) or _UNIT_DIM.get(unit)
+    if not hit:
+        return "unit:" + unit, num, unit
+    dim, mul = hit
+    if dim == "speed":
+        mid = metric_id(kind or "benchmark", text, "tok/s")
+        return f"speed:{mid}", num * mul, SPEED_LABEL.get(mid, DIM_LABEL["speed"])
+    return dim, num * mul, DIM_LABEL.get(dim, dim)
+
+
+def cond_conflict(a: dict[str, str], b: dict[str, str]) -> bool:
+    """両方に書かれた条件の欄のどれかが違う（量子化・機材・エンジンなど）。片方だけの欄は食い違いとしない。"""
+    return any(a.get(k) and b.get(k) and cond_key(k, a[k]) != cond_key(k, b[k]) for k in COND_KEYS)
+
+
 def _label(cond: dict[str, str]) -> str:
     return " / ".join(f"{COND_LABEL[k]} {cond[k]}" for k in COND_KEYS if cond.get(k)) or "条件の記載なし"
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { REL_LABEL, STATUS_LABEL, useCard, useSaveNote, type CardClaim, type CardRelation, type HistoryEntry, type KnowledgeCardData, type RelType, type RelationGroup, type ThingState } from "../../api/kg";
+import { COND_LABEL } from "../../api/watch";
 import { useDecideMention } from "../../api/things";
 import { ENTITY_TYPE_LABEL } from "../../api/news";
 import { Card, field } from "../news/settingsUi";
@@ -13,6 +14,7 @@ const day = (iso: string) => (iso ? new Date(iso).toLocaleDateString("ja-JP", { 
 const MARK: Record<HistoryEntry["mark"], [string, string]> = {
   first: ["最初", "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"], same: ["同じ", "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"],
   change: ["変化", "bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-200"], contradiction: ["矛盾", "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200"],
+  cond_diff: ["条件違い", "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200"],
 };
 const KIND: Record<string, string> = { release: "公開・版", benchmark: "性能", price: "価格", date: "日付", claim: "主張", other: "その他" };
 
@@ -224,17 +226,17 @@ export default function KnowledgeCard({ id }: { id: number }) {
         </Card>
       )}
 
-      <Card id="card-history" title={`変化と矛盾（変化 ${hist.changes} · 矛盾 ${hist.contradictions}）`} hint="同じ種類の主張の値を時系列に並べます。値が変われば「変化」、同じ時期に別の記事が別の値を述べていれば「矛盾」。元の主張は上書きしません。">
+      <Card id="card-history" title={`変化と矛盾（変化 ${hist.changes} · 矛盾 ${hist.contradictions}${hist.cond_diffs ? ` · 条件違い ${hist.cond_diffs}` : ""}）`} hint="同じ指標（測ったもの）の値を時系列に並べます。単位をそろえ、数％の違いは同じ値です。値が変われば「変化」、同じ時期に別の記事が別の値を述べていれば「矛盾」。量子化・機材などの条件が違うものは矛盾にせず「条件違い」。元の主張は上書きしません。">
         {hist.series.length === 0 ? <p className="text-xs text-zinc-500" data-testid="card-no-history">比べられる値の入った主張はまだありません。</p> : (
           <div className="space-y-3" data-testid="card-history">
             {hist.series.map((g) => (
-              <div key={g.kind}>
-                <h3 className="mb-1 text-xs font-semibold text-zinc-500">{KIND[g.kind] ?? g.kind}</h3>
+              <div key={`${g.kind}/${g.dim ?? ""}/${g.metric ?? ""}`} data-testid="history-group">
+                <h3 className="mb-1 text-xs font-semibold text-zinc-500" data-testid="history-metric">{g.metric || KIND[g.kind] || g.kind}</h3>
                 <ol className="space-y-1">
                   {g.entries.map((e) => (
                     <li key={e.claim_id} data-mark={e.mark} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-l-2 border-zinc-300 pl-3 text-sm dark:border-zinc-700">
                       <span className="num text-[11px] text-zinc-500">{day(e.t)}</span><span className="num font-medium">{e.value}</span>
-                      <Badge tone={MARK[e.mark][1]}>{MARK[e.mark][0]}</Badge>{e.from && <span className="text-[11px] text-zinc-500">前は {e.from}</span>}
+                      <Badge tone={MARK[e.mark][1]}>{MARK[e.mark][0]}</Badge>{e.from && <span className="text-[11px] text-zinc-500">前は {e.from}</span>}{e.cond && Object.keys(e.cond).length > 0 && <span data-testid="history-cond" className="text-[11px] text-zinc-500">（{Object.entries(e.cond).map(([k, v]) => `${COND_LABEL[k] ?? k} ${v}`).join("・")}）</span>}
                       {e.url && <a href={e.url} target="_blank" rel="noopener noreferrer" className="min-w-0 max-w-full truncate text-[11px] text-accent-700 underline dark:text-accent-300">{e.title}</a>}
                     </li>
                   ))}

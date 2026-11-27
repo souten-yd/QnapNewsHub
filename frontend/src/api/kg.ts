@@ -31,7 +31,7 @@ export const useSeeds = () => useQuery({ queryKey: ["graph", "seeds"], queryFn: 
 export interface CardEvidence { document: { id: number; kind: string; title: string; url: string }; quote: string; start: number | null; end: number | null; page: number | null; quote_hash: string; grounded: boolean }
 export interface CardClaim { id: number; kind: string; text: string; value: string; ai_extracted: boolean; model: string; sensitivity: string; evidences: CardEvidence[] }
 export interface CardRelation extends GraphEdge { direction: "out" | "in" | "both"; other: { id: number; name: string; type: EntityType }; status_label: string }
-export interface HistoryEntry { claim_id: number; t: string; value: string; text: string; title: string; url: string; mark: "first" | "same" | "change" | "contradiction"; from?: string; ai_extracted: boolean }
+export interface HistoryEntry { claim_id: number; t: string; value: string; text: string; title: string; url: string; mark: "first" | "same" | "change" | "contradiction" | "cond_diff"; from?: string; cond?: Record<string, string>; ai_extracted: boolean }
 export type ThingState = "official" | "experimental" | "deprecated" | "unknown";
 /** カードの先頭の帯（things.brief）。確かさは根拠の文書の数だけで決まる（1 件 0.5・2 件 0.75…）。 */
 export interface ThingBrief {
@@ -49,7 +49,7 @@ export interface KnowledgeCardData {
   elements: { aliases: string[]; first_seen: string; last_seen: string; article_count: number; topics: string[] };
   timeline: { id: number; title: string; url: string | null; source: string; published_at: string }[];
   claims: CardClaim[]; relations: CardRelation[];
-  history: { series: { kind: string; entries: HistoryEntry[] }[]; changes: number; contradictions: number };
+  history: { series: { kind: string; metric?: string; dim?: string; entries: HistoryEntry[] }[]; changes: number; contradictions: number; cond_diffs?: number };
   note: { body: string; updated_at: string };
 }
 export const useCard = (id: number) => useQuery({ queryKey: ["kg", "card", id], queryFn: () => api<KnowledgeCardData>(`/things/${id}/card`), enabled: Number.isFinite(id), staleTime: 30_000, retry: false });
