@@ -523,3 +523,23 @@ def test_card_endpoint_shape(client):
     assert c["relations"][0]["type"] == "uses" and c["relations"][0]["status"] == "inferred" and c["relations"][0]["other"]["name"] == "Other"
     assert c["timeline"][0]["id"] == aid and client.get("/api/v1/kg/entities/99999/card").status_code == 404
     assert client.get("/api/v1/kg/stats").json()["documents"] == 1
+
+
+
+def test_release_versions_are_changes_not_contradictions():
+    """版（release）の連続リリースは、近い時期に別の記事が別の版を述べても矛盾にせず、変化として並べる。
+
+    根拠: 2026-11-27 の実データの数え直しで、文字列で比べる矛盾 287 件の大半が llama.cpp の b12651・b12667 のような
+    連続リリースだった（食い違いではなく版の移り変わり）。
+    """
+    from datetime import datetime, timedelta
+
+    from qnapnewshub import kg
+
+    t0 = datetime(2026, 11, 25, 9, 0)
+    rows = kg.mark_series([
+        {"t": t0, "value": "b12651", "doc_id": 1, "kind": "release"},
+        {"t": t0 + timedelta(hours=6), "value": "b12667", "doc_id": 2, "kind": "release"},
+        {"t": t0 + timedelta(hours=12), "value": "b12701", "doc_id": 3, "kind": "release"},
+    ])
+    assert [r["mark"] for r in rows] == ["first", "change", "change"]

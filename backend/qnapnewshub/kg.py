@@ -441,7 +441,12 @@ def mark_series(entries: list[dict]) -> list[dict]:
         e["_v"] = _norm_value(e["value"])
     for e in rows:
         e["mark"] = ""
-        others = [o for o in rows if o["doc_id"] != e["doc_id"] and abs(o["t"] - e["t"]) <= window and not _same_value(o, e)]
+        # 版（release）は次々に出るもの。別の記事が近い時期に別の版を述べても食い違いではなく、版の移り変わり
+        # （変化）として扱う（2026-11-27: 矛盾の大半が llama.cpp の b12651・b12667 のような連続リリースだった）。
+        if e.get("kind") == "release":
+            continue
+        others = [o for o in rows if o["doc_id"] != e["doc_id"] and abs(o["t"] - e["t"]) <= window and not _same_value(o, e)
+                  and o.get("kind") != "release"]
         if any(not bench.cond_conflict(o.get("cond") or {}, e.get("cond") or {}) for o in others):
             e["mark"] = "contradiction"
         elif others:
